@@ -1,0 +1,532 @@
+/* Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+@import "tailwindcss";
+
+/* CSS Variables - SaaS Dashboard Palette */
+:root {
+    --font-inter: 'Inter', sans-serif;
+    --font-lora: 'Lora', serif;
+    
+    /* SaaS Dashboard Palette */
+    --accent-blue: #2563eb;
+    --accent-blue-soft: #eff6ff;
+    --bg-neutral: #f9fafb;
+    --card-bg: #ffffff;
+    --border-soft: #f1f5f9;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --header-bg: #ffffff;
+    --sidebar-bg: #ffffff;
+    --tab-inactive: #94a3b8;
+    --entity-highlight-bg: rgba(91, 141, 239, 0.12);
+
+    /* Entity Color Palette */
+    --color-chemical: #5B8DEF;
+    --color-chemical-activity: #3A6FD8;
+    --color-chemical-ligand: #7C4DFF;
+    --color-location: #9AA5B1;
+    --color-species: #2EAD7D;
+    --color-plant-part: #6BBF59;
+    --color-extraction: #F2A65A;
+    --color-isolation: #E07A5F;
+    --color-drug: #D66BA0;
+    --color-disease: #D64545;
+    
+    /* Typography & Sizing Tokens (design-system-friendly) */
+    --heading-h2-size: 1.75rem;
+    --heading-h3-size: 1.35rem;
+    --heading-weight-bold: 700;
+    --heading-weight-semibold: 600;
+    --section-gap: 2rem;
+}
+
+
+/* Base Styles */
+body {
+    background-color: var(--bg-neutral);
+    color: var(--text-primary);
+    font-family: var(--font-inter);
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Typography */
+.title-font {
+    font-family: var(--font-lora);
+}
+
+.font-display {
+    font-family: var(--font-inter) !important;
+    letter-spacing: -0.01em;
+}
+
+/* SaaS Card & Layout Elements */
+.saas-card {
+    background: var(--card-bg);
+    border-radius: 1rem;
+    --border-soft: 1px solid var(--border-color);
+}
+
+@keyframes slide-up {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-slide-up {
+    animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Tab Styles */
+.saas-tab-active {
+    color: var(--accent-blue) !important;
+    background-color: var(--accent-blue-soft) !important;
+    border-radius: 0.75rem;
+}
+
+.saas-tab-inactive {
+    color: var(--tab-inactive) !important;
+}
+
+/* Layout Overrides */
+aside {
+    background-color: var(--sidebar-bg) !important;
+    border-right: 1px solid var(--border-soft) !important;
+}
+
+main {
+    background-color: var(--bg-neutral) !important;
+}
+
+header {
+    background-color: var(--header-bg) !important;
+}
+
+#main-content {
+    background-color: transparent;
+    margin: 0 auto;
+    width: 100%;
+    max-width: 1400px;
+    min-height: calc(100vh - 4rem);
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #e2e8f0;
+    border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #cbd5e1;
+}
+
+/* JATS Table Styling */
+.jats-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-inter);
+    font-size: 13px;
+    color: #334155;
+    table-layout: fixed;
+}
+
+.jats-table th {
+    background: #f8fafc;
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 2px solid #e2e8f0;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+    white-space: nowrap;
+    max-width: 300px;
+}
+
+.jats-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f1f5f9;
+    line-height: 1.5;
+    max-width: 300px;
+    white-space: normal;
+    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.jats-table tr:hover {
+    background: #fdfdfd;
+}
+
+/* Removed dark-mode table styling */
+
+/* Table Overflow Container */
+.table-scroll-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+}
+
+.table-scroll-container::before,
+.table-scroll-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.table-scroll-container::before {
+    left: 0;
+    background: linear-gradient(to right, rgba(255,255,255,0.9), transparent);
+}
+
+.table-scroll-container::after {
+    right: 0;
+    background: linear-gradient(to left, rgba(255,255,255,0.9), transparent);
+}
+
+.table-scroll-container.is-scrolled::before { opacity: 0; }
+
+/* Removed dark-mode table scroll shadows */
+
+/* Entity Highlight Classes */
+.ent-chemical { color: var(--color-chemical); background: rgba(91, 141, 239, 0.12) !important; font-weight: 600; }
+.ent-chemical-activity { color: var(--color-chemical-activity); background: rgba(58, 111, 216, 0.12) !important; font-weight: 600; }
+.ent-chemical-ligand { color: var(--color-chemical-ligand); background: rgba(124, 77, 255, 0.12) !important; font-weight: 600; }
+.ent-location { color: var(--color-location); background: rgba(154, 165, 177, 0.12) !important; font-weight: 600; }
+.ent-species { color: var(--color-species); background: rgba(46, 173, 125, 0.12) !important; font-weight: 600; }
+.ent-plant-part { color: var(--color-plant-part); background: rgba(107, 191, 89, 0.12) !important; font-weight: 600; }
+.ent-extraction-method { color: var(--color-extraction); background: rgba(242, 166, 90, 0.12) !important; font-weight: 600; }
+.ent-isolation-method { color: var(--color-isolation); background: rgba(224, 122, 95, 0.12) !important; font-weight: 600; }
+.ent-drug { color: var(--color-drug); background: rgba(214, 107, 160, 0.12) !important; font-weight: 600; }
+.ent-disease { color: var(--color-disease); background: rgba(214, 69, 69, 0.12) !important; font-weight: 600; }
+
+/* NER Highlighting in Paper Content (mark tags) */
+mark.ner-chemical { all: unset; color: var(--color-chemical); background: rgba(91, 141, 239, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-chemical-activity { all: unset; color: var(--color-chemical-activity); background: rgba(58, 111, 216, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-chemical-ligand { all: unset; color: var(--color-chemical-ligand); background: rgba(124, 77, 255, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-location { all: unset; color: var(--color-location); background: rgba(154, 165, 177, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-species { all: unset; color: var(--color-species); background: rgba(46, 173, 125, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-plant-part { all: unset; color: var(--color-plant-part); background: rgba(107, 191, 89, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-extraction-method { all: unset; color: var(--color-extraction); background: rgba(242, 166, 90, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-isolation-method { all: unset; color: var(--color-isolation); background: rgba(224, 122, 95, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-drug { all: unset; color: var(--color-drug); background: rgba(214, 107, 160, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-disease { all: unset; color: var(--color-disease); background: rgba(214, 69, 69, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+mark.ner-default { all: unset; color: #374151; background: rgba(156, 163, 175, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+
+/* Legend Colors */
+.legend-chemical { color: var(--color-chemical) !important; }
+.legend-chemical-activity { color: var(--color-chemical-activity) !important; }
+.legend-chemical-ligand { color: var(--color-chemical-ligand) !important; }
+.legend-location { color: var(--color-location) !important; }
+.legend-species { color: var(--color-species) !important; }
+.legend-plant-part { color: var(--color-plant-part) !important; }
+.legend-extraction-method { color: var(--color-extraction) !important; }
+.legend-isolation-method { color: var(--color-isolation) !important; }
+.legend-drug { color: var(--color-drug) !important; }
+.legend-disease { color: var(--color-disease) !important; }
+
+/* Reading Progress Bar */
+.progress-bar-fill {
+    background-color: #2563eb;
+    height: 2px;
+    transition: width 0.15s ease-out;
+}
+
+/* Removed dark-mode progress bar color override */
+
+/* TOC Heading Anchors - scroll target only */
+.toc-anchor {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    position: absolute;
+    visibility: hidden;
+}
+
+/* Small Caps & Underline */
+.small-caps {
+    font-variant: small-caps;
+    text-transform: lowercase;
+}
+
+.underline {
+    text-decoration: underline;
+}
+
+/* ============================================
+   ARTICLE READER STYLES (PubTator3-Inspired)
+   ============================================ */
+
+/* Article prose container */
+.article-prose {
+    font-family: var(--font-lora);
+    font-size: 17px;
+    line-height: 1.85;
+    color: var(--text-primary);
+    max-width: 720px;
+}
+
+/* Spacing rhythm for paper sections: provide clear separation between top-level sections in the article blob */
+.article-prose > section {
+  margin-bottom: var(--section-gap);
+}
+
+/* Heading styles inside the article prose to establish visual hierarchy */
+.article-prose h2 {
+    font-family: var(--font-lora);
+    font-size: var(--heading-h2-size);
+    font-weight: var(--heading-weight-bold);
+    line-height: 1.25;
+    margin: 1.75em 0 0.75em;
+    border-bottom: 1px solid var(--border-soft);
+    padding-bottom: 0.5rem;
+}
+
+.article-prose h2:first-child {
+    margin-top: 0;
+}
+
+.article-prose h3 {
+    font-family: var(--font-inter);
+    font-size: var(--heading-h3-size);
+    font-weight: var(--heading-weight-semibold);
+    line-height: 1.4;
+    color: var(--text-primary);
+    margin: 1em 0 0.5em;
+}
+
+/* Removed dark-mode robustness rules */
+.article-prose p {
+    margin-bottom: 1.25em;
+    orphans: 3;
+    widows: 3;
+}
+
+.article-prose p:last-child {
+    margin-bottom: 0;
+}
+
+/* Section sub-headers (h3) - PubTator3 style */
+.article-prose .article-h3 {
+    font-family: var(--font-inter);
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-top: 2.5em;
+    margin-bottom: 0.75em;
+    padding-bottom: 0.4em;
+    border-bottom: 1px solid var(--border-soft);
+    letter-spacing: -0.01em;
+    line-height: 1.4;
+    scroll-margin-top: 100px;
+}
+
+.article-prose .article-h3:first-child {
+    margin-top: 0;
+}
+
+/* Citations */
+.article-prose .citation {
+    color: var(--accent-blue);
+    cursor: help;
+    border-bottom: 1px dotted var(--accent-blue);
+    text-decoration: none;
+    font-weight: 600;
+    transition: all 0.15s ease;
+}
+
+.article-prose .citation:hover {
+    background-color: var(--accent-blue-soft);
+}
+
+/* Cross-references */
+.article-prose .xref-link {
+    color: var(--accent-blue);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.article-prose .xref-link:hover {
+    text-decoration: underline;
+}
+
+/* Tables */
+.article-table-wrap {
+    margin: 2em 0;
+    padding: 1.25rem;
+    background: #f8fafc;
+    border: 1px solid var(--border-soft);
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.article-table-wrap .table-label {
+    display: block;
+    font-family: var(--font-inter);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 0.75rem;
+}
+
+.article-table-wrap .table-caption {
+    font-family: var(--font-inter);
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-style: italic;
+    margin-top: 0.75rem;
+    line-height: 1.5;
+}
+
+/* Figures */
+.article-figure {
+    margin: 2.5em 0;
+    text-align: center;
+}
+
+.article-figure img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-soft);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.article-figure figcaption {
+    font-family: var(--font-inter);
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 0.75rem;
+    text-align: left;
+    line-height: 1.6;
+}
+
+.article-figure .fig-label {
+    font-weight: 700;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+}
+
+/* Lists */
+.article-prose ul,
+.article-prose ol {
+    margin: 1em 0;
+    padding-left: 1.75em;
+}
+
+.article-prose ul li,
+.article-prose ol li {
+    margin-bottom: 0.5em;
+    line-height: 1.7;
+}
+
+.article-prose ul {
+    list-style-type: disc;
+}
+
+/* Respect HTML type attribute for ordered lists (a, A, i, I from Europe PMC) */
+.article-prose ol {
+    list-style-type: decimal;
+}
+
+.article-prose ol[type="a" s] {
+    list-style-type: lower-alpha !important;
+}
+
+.article-prose ol[type="A" s] {
+    list-style-type: upper-alpha !important;
+}
+
+.article-prose ol[type="i" s] {
+    list-style-type: lower-roman !important;
+}
+
+.article-prose ol[type="I" s] {
+    list-style-type: upper-roman !important;
+}
+
+/* Verbatim list labels from source XML (a., b., c., etc.) */
+.article-prose .list-label {
+    display: inline-block;
+    min-width: 1.5em;
+    font-weight: 400;
+    color: var(--text-primary);
+}
+
+/* Blockquotes */
+.article-prose blockquote {
+    border-left: 3px solid var(--accent-blue);
+    padding: 0.75em 1.25em;
+    margin: 1.5em 0;
+    background: var(--accent-blue-soft);
+    border-radius: 0 0.5rem 0.5rem 0;
+    font-style: italic;
+}
+
+/* Inline formatting */
+.article-prose em {
+    font-style: italic;
+}
+
+.article-prose strong {
+    font-weight: 700;
+}
+
+.article-prose code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.88em;
+    background: #f1f5f9;
+    padding: 0.15em 0.35em;
+    border-radius: 0.25rem;
+}
+
+/* External links */
+.article-prose a[target="_blank"] {
+    color: var(--accent-blue);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+}
+
+.article-prose a[target="_blank"]:hover {
+    border-bottom-color: var(--accent-blue);
+}
+
+/* Removed dark-mode article styles */
+
+/* NotebookLM specific palette */
+.bg-notebook-blue {
+    background-color: #f0f4f9 !important;
+}
+
+.hover\:bg-notebook-blue-hover:hover {
+    background-color: #e1e9f1 !important;
+}
+
+/* Removed dark mode overrides */
