@@ -1,0 +1,73 @@
+term,aliases
+# === CHROMATOGRAPHY - GAS ===,
+gas chromatography,glc
+gas chromatography-mass spectrometry,gcms
+gas chromatography-flame ionization detector,gcfid
+gas chromatography-isotope ratio mass spectrometry,gc-irms
+gas chromatography-time of flight mass spectrometry,gc-tof-ms
+# === CHROMATOGRAPHY - LIQUID ===,
+high performance liquid chromatography,hplc
+ultra high performance liquid chromatography,uhplc
+liquid chromatography-mass spectrometry,lc-ms
+liquid chromatography-nuclear magnetic resonance,lc-nmr
+flash column chromatography,flash chromatography
+column chromatography,column chromatography
+thin layer chromatography,tlc
+high performance thin layer chromatography,hptlc
+# === CHROMATOGRAPHY - COUNTER CURRENT ===,
+high speed counter current chromatography,hsccc
+# === CHROMATOGRAPHY - ION/OTHER ===,
+ion exchange chromatography,iec
+ion chromatography,
+gel permeation chromatography,gpc
+gel filtration chromatography,gfc
+size exclusion chromatography,
+# === SPECTROSCOPY - NMR ===,
+nuclear magnetic resonance,nmr
+correlation spectroscopy,cosy
+nuclear overhauser effect spectroscopy,noesy
+heteronuclear single quantum coherence,hsqc
+heteronuclear multiple quantum coherence,hmqc
+heteronuclear multiple bond correlation,hmbc
+# === SPECTROSCOPY - MASS ===,
+mass spectrometry,
+high resolution mass spectrometry,hrms
+matrix assisted laser desorption ionization,maldi
+matrix assisted laser desorption ionization mass spectrometry,maldi-ms
+matrix assisted laser desorption ionization time-of-flight mass spectrometry,maldi-tof|maldi-tof ms
+direct analysis in real time,dart
+electrospray ionization,esi
+electrospray ionization mass spectrometry,esi-ms
+# === ELECTROPHORESIS ===,
+polyacrylamide gel electrophoresis,page
+sodium dodecyl sulfate polyacrylamide gel electrophoresis,sds-page
+pulsed-field gel electrophoresis,pfge
+agarose gel electrophoresis,gel electrophoresis
+capillary electrophoresis,
+# === BLOTTING METHODS ===,
+western blotting,western blot
+eastern blotting,eastern blot
+southern blotting,southern blot
+northern blotting,northern blot
+# === SPECTROSCOPY - INFRARED ===,
+infrared spectroscopy,
+fourier transform infrared spectroscopy,ftir
+near infrared spectroscopy,nir
+attenuated total reflectance,atr
+attenuated total reflectance fourier transform infrared spectroscopy,atr-ftir
+# === SPECTROSCOPY - UV/VIS ===,
+ultraviolet visible spectroscopy,uv-vis
+# === SPECTROSCOPY - OTHER ===,
+x-ray diffraction,xrd
+scanning electron microscopy,sem
+transmission electron microscopy,tem
+raman spectroscopy,
+surface enhanced raman spectroscopy,sers
+# === BIOASSAY METHODS ===,
+dpph assay,dpph
+ferric reducing antioxidant power,frap
+oxygen radical absorbance capacity,orac
+trolox equivalent antioxidant capacity,teac
+total radical trapping antioxidant parameter,trap
+abts assay,abts
+minimum inhibitory concentration,
