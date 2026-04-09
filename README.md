@@ -22,9 +22,11 @@ PhytoQuery is a research paper reader that retrieves papers from Europe PMC, par
 - Citations with source references
 
 ### Named Entity Recognition (NER)
-- Extract entities from papers: Chemicals, Species, Plant Parts, Diseases, etc.
-- Click "Find Key Terms" to run NER extraction
-- Entities grouped by type in the sidebar
+- Extract entities from papers with dictionary-backed and LLM-assisted NER.
+- Dictionary-backed entity types currently include `PLANT PART`, `ANALYTICAL TECHNIQUE`, `EXTRACTION METHOD`, `DEVELOPMENT STAGE`, and `SEASON`.
+- Gazetteer entities are loaded from CSV dictionaries, matched with aliases, and normalized to canonical terms before sidebar grouping.
+- Click "Find Key Terms" to run NER extraction.
+- Entities are grouped by type in the sidebar and highlighted inline in the paper view.
 
 ### Security
 - HTML sanitization via nh3 (server-side) and DOMPurify (client-side)
@@ -66,6 +68,8 @@ export RAG_TEMPERATURE=0.1
 export RAG_TOP_K=10
 ```
 
+Dictionary-backed NER does not introduce additional `NER_*` environment variables. Gazetteer behavior is driven by the CSV files in `backend/gazetteer/data/` and their matcher modules in `backend/gazetteer/`.
+
 ## 5. Testing
 
 ### Run Tests
@@ -74,17 +78,10 @@ cd PhytoQuery
 phytovenv\Scripts\python -m pytest backend/tests/ -v
 ```
 
-### Test Coverage
-| Module | Tests |
-|--------|-------|
-| config_ner.py | 4 |
-| config_rag.py | 4 |
-| caching.py | 8 |
-| highlighter.py | 10 |
-| sanitizer.py | 9 |
-| rag_chunking.py | 5 |
-| toc_generator.py | 10 |
-| **Total** | **50** |
+### Test Scope
+- Backend tests live in `backend/tests/` and use `pytest` with async support from `backend/pytest.ini`.
+- Dictionary and NER pipeline coverage includes matcher alias normalization, canonical term mapping, highlighter class mapping, and end-to-end extraction checks in `backend/tests/test_dictionary_ner_pipeline.py`.
+- Existing backend tests also cover configuration, caching, sanitization, TOC generation, and RAG chunking.
 
 ## 5. Quick Start
 
@@ -137,6 +134,10 @@ PhytoQuery/
 │   │   ├── ner_engine.py      # NER extraction
 │   │   ├── rag_engine.py      # RAG chat
 │   │   └── doi_resolver.py    # DOI fallback sources
+│   ├── gazetteer/             # Dictionary-backed NER matchers and CSV data
+│   │   ├── data/              # Gazetteer CSV dictionaries
+│   │   ├── *_matcher.py       # PhraseMatcher-backed entity matchers
+│   │   └── build_matcher.py   # Gazetteer build/cache helpers
 │   └── tests/
 ├── data/                       # Runtime data
 │   ├── cache/                  # Paper & NER cache

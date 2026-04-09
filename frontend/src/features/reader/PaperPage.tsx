@@ -169,7 +169,6 @@ const PaperPage: React.FC = () => {
       isExtracted={isExtracted}
       isExtracting={isExtracting}
       extractionError={extractionError}
-      summary={paperData.summary}
       fallbackSource={fallbackSource ?? undefined}
       isFetchingFallback={false}
       paperAuthors={paperData.authors || []}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml } from '../../utils/sanitize';
 import { PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
@@ -14,7 +14,6 @@ interface PaperViewerProps {
   isExtracted?: boolean;
   isExtracting?: boolean;
   extractionError?: string | null;
-  summary?: Record<string, { text: string; count: number; avg_score: number }[]>;
   fallbackSource?: { source: string; url: string };
   isFetchingFallback?: boolean;
   paperAuthors?: string[];
@@ -24,7 +23,7 @@ interface PaperViewerProps {
 }
 
 interface GroupedEntities {
-  [label: string]: { text: string; count: number }[];
+  [label: string]: { text: string; count: number; aliases: string[] }[];
 }
 
 const PaperViewer: React.FC<PaperViewerProps> = ({
@@ -43,9 +42,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
    paperJournal,
    paperDate,
    onExtract,
- }) => {
+  }) => {
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
+  const [entitySearch, setEntitySearch] = useState('');
   const htmlContainerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -62,50 +62,62 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       fullText = tempDiv.textContent || tempDiv.innerText || '';
     }
 
-    // Group entities case-insensitively
-    const uniqueEntities: Record<string, { label: string, originalTexts: Record<string, number> }> = {};
+    // Group entities by normalized key but track all original texts
+    const uniqueEntities: Record<string, { label: string, originalTexts: Record<string, number>, aliases: Set<string> }> = {};
 
     entities.forEach((entity) => {
-      // Strip any stray HTML tags like <em> that might have been extracted by the AI
+      // Use canonical form from backend, or fallback to normalized text
       const cleanText = entity.text.replace(/<[^>]+>/g, '').trim();
-      const lowerText = cleanText.toLowerCase();
+      const canonicalForm = entity.canonical || cleanText.toLowerCase();
+      const lowerText = canonicalForm.toLowerCase();
       if (!uniqueEntities[lowerText]) {
-        uniqueEntities[lowerText] = { label: entity.label, originalTexts: {} };
+        uniqueEntities[lowerText] = { 
+          label: entity.label, 
+          originalTexts: {},
+          aliases: new Set<string>()
+        };
       }
+      (entity.aliases || []).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
+      uniqueEntities[lowerText].aliases.add(canonicalForm);
+      // Store original text for display and frequency tracking
       uniqueEntities[lowerText].originalTexts[cleanText] = (uniqueEntities[lowerText].originalTexts[cleanText] || 0) + 1;
     });
 
     Object.keys(uniqueEntities).forEach(lowerText => {
       const data = uniqueEntities[lowerText];
       
-      // Determine most frequent original casing
-      let bestText = lowerText;
-      let maxCount = 0;
-      for (const [text, count] of Object.entries(data.originalTexts)) {
-        if (count > maxCount) {
-          maxCount = count;
-          bestText = text;
-        }
-      }
-
-      // Count frequency in full text using safe boundary regex
-      let trueCount = 0;
+      // Count frequency of EACH variant in full text to find most frequent form
+      const aliasList = Array.from(data.aliases);
+      const variantCounts: Record<string, number> = {};
+      
       if (fullText) {
-        try {
-          const escapedText = lowerText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const regex = new RegExp(`(?:^|\\W)(${escapedText})(?:$|\\W)`, 'gi');
-          while (regex.exec(fullText) !== null) {
-            trueCount++;
-            // Rewind 1 character to handle overlapping boundaries (e.g. "virus, ebola, virus")
-            if (regex.lastIndex > 0) {
-              regex.lastIndex -= 1;
+        for (const variant of aliasList) {
+          const normalizedVariant = variant.toLowerCase();
+          let count = 0;
+          try {
+            const escapedText = normalizedVariant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`(?:^|\\W)(${escapedText})(?:$|\\W)`, 'gi');
+            while (regex.exec(fullText) !== null) {
+              count++;
+              if (regex.lastIndex > 0) {
+                regex.lastIndex -= 1;
+              }
             }
+          } catch (e) {
+            // Skip invalid regex
           }
-        } catch (e) {
-          // Ultimate fallback to basic string count
-          trueCount = fullText.toLowerCase().split(lowerText).length - 1;
+          if (count > 0) {
+            variantCounts[variant] = count;
+          }
         }
       }
+      
+      // Find the most frequent variant in the full text for display
+      const mostFrequentText = Object.entries(variantCounts)
+        .sort(([, a], [, b]) => b - a)[0]?.[0] || lowerText;
+      
+      // Calculate total count from all variants
+      let trueCount = Object.values(variantCounts).reduce((sum, c) => sum + c, 0);
 
       // Fallback to at least 1 if it was extracted by AI
       if (trueCount === 0) {
@@ -115,7 +127,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       if (!grouped[data.label]) {
         grouped[data.label] = [];
       }
-      grouped[data.label].push({ text: bestText, count: trueCount });
+      // Use most frequent text form for display
+      grouped[data.label].push({ text: mostFrequentText, count: trueCount, aliases: aliasList });
     });
 
     // Sort by count descending
@@ -125,6 +138,37 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
     return grouped;
   }, [entities, html]);
+
+  const normalizedEntitySearch = entitySearch.trim().toLowerCase();
+  useEffect(() => {
+    setEntitySearch('');
+  }, [doi, html, isExtracted]);
+
+  const filteredGroupedEntities = useCallback(() => {
+    const grouped = groupedEntities();
+    if (!normalizedEntitySearch) {
+      return Object.entries(grouped);
+    }
+
+    return Object.entries(grouped)
+      .map(([label, ents]) => {
+        const filtered = ents
+          .filter((ent) => {
+            // Match against display text (most frequent form) or aliases
+            const displayMatch = ent.text.toLowerCase().includes(normalizedEntitySearch);
+            const aliasMatch = ent.aliases.some((alias) => {
+              const normalizedAlias = alias.toLowerCase();
+              return normalizedAlias !== ent.text.toLowerCase() && normalizedAlias.includes(normalizedEntitySearch);
+            });
+            return displayMatch || aliasMatch;
+          });
+
+        return [label, filtered] as const;
+      })
+      .filter(([, ents]) => ents.length > 0);
+  }, [groupedEntities, normalizedEntitySearch]);
+
+  const visibleGroupedEntities = useMemo(() => filteredGroupedEntities(), [filteredGroupedEntities]);
 
   // Setup scroll spy for sub-headings (based on HTML blob sections)
   useEffect(() => {
@@ -152,7 +196,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       { rootMargin: '-20% 0px -70% 0px', threshold: 0 }
     );
 
-    sectionNodes.forEach((el: Element) => observerRef.current?.observe(el as HTMLElement));
+    sectionNodes.forEach((el: Element) => observerRef.current?.observe(el as Element));
 
     return () => {
       observerRef.current?.disconnect();
@@ -225,9 +269,11 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     { label: 'SPECIES', className: 'legend-species' },
     { label: 'PLANT PART', className: 'legend-plant-part' },
     { label: 'EXTRACTION METHOD', className: 'legend-extraction-method' },
+    { label: 'DEVELOPMENT STAGE', className: 'legend-development-stage' },
+    { label: 'SEASON', className: 'legend-season' },
     { label: 'LOCATION', className: 'legend-location' },
     { label: 'CHEMICAL ACTIVITY', className: 'legend-chemical-activity' },
-    { label: 'ISOLATION METHOD', className: 'legend-isolation-method' },
+    { label: 'ANALYTICAL TECHNIQUE', className: 'legend-analytical-technique' },
     { label: 'DISEASE', className: 'legend-disease' },
     { label: 'DRUG', className: 'legend-drug' },
     { label: 'CHEMICAL LIGAND', className: 'legend-chemical-ligand' },
@@ -419,6 +465,18 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             Extracted Mentions
           </h3>
 
+          {isExtracted && (
+            <div className="relative">
+              <input
+                type="text"
+                value={entitySearch}
+                onChange={(e) => setEntitySearch(e.target.value)}
+                placeholder="Search terms..."
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-medium text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+          )}
+
           {!isExtracted ? (
             <div className="text-center py-10 bg-slate-100/50 rounded-2xl border border-dashed border-slate-200">
               <p className="text-[10px] text-slate-400 uppercase tracking-widest italic font-medium">
@@ -427,7 +485,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             </div>
           ) : (
             <div className="space-y-8 pr-2">
-              {Object.entries(groupedEntities()).map(([label, ents], idx) => (
+              {visibleGroupedEntities.length === 0 ? (
+                <div className="text-center py-10 bg-white rounded-2xl border border-slate-100">
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest italic font-medium">
+                    No matching entities
+                  </p>
+                </div>
+              ) : visibleGroupedEntities.map(([label, ents], idx) => (
                 <div key={label} className="animate-fade-in" style={{ animationDelay: `${idx * 0.05}s` }}>
                   <div className="flex items-center space-x-2 mb-4">
                     <div
@@ -440,9 +504,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    {ents
-                      .sort((a, b) => b.count - a.count)
-                      .map((ent, eIdx) => (
+                    {ents.map((ent, eIdx) => (
                         <div
                           key={eIdx}
                           className="flex justify-between items-center py-2.5 px-4 bg-white border border-slate-100 rounded-xl transition-all hover:border-blue-100 group/item"

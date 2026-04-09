@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { Chats, Paperclip, PaperPlaneTilt, Plus, FileText } from '@phosphor-icons/react';
 import { ragApi } from '../../lib/api';
 
@@ -151,14 +152,16 @@ const RagPage: React.FC = () => {
                         : 'bg-white border border-slate-100 text-slate-900'
                     }`}
                   >
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                    <div className={`text-sm prose prose-sm max-w-none ${message.type === 'user' ? 'prose-invert' : ''}`}>
+                      <ReactMarkdown>{message.content}</ReactMarkdown>
+                    </div>
                     {message.sources && message.sources.length > 0 && (
                       <div className="mt-3 pt-3 border-t border-slate-100">
                         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Sources</p>
                         <div className="space-y-1">
                           {message.sources.map((source, idx) => (
                             <p key={idx} className="text-xs text-slate-500">
-                              {String(source.title || source.filename || `Source ${idx + 1}`)}
+                              {String(source.source)}{source.section ? ` - ${source.section}` : ''}
                             </p>
                           ))}
                         </div>

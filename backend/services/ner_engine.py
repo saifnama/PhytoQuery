@@ -9,6 +9,10 @@ from typing import List, Dict, Any
 from collections import defaultdict
 from backend.core.http_client import HttpClientManager
 
+# Import dictionary-based matchers
+from backend.gazetteer.plant_part_matcher import match_plant_parts
+from backend.gazetteer.analytical_technique_matcher import match_analytical_techniques
+
 # Suppress spaCy FutureWarning about set union in tokenizer
 warnings.filterwarnings("ignore", category=FutureWarning, module="spacy.language")
 
@@ -29,31 +33,15 @@ from backend.config_ner import (
 def get_active_provider():
     """Determine which LLM provider to use based on config.
 
-    Fallback order: Ollama -> OpenRouter.
+    Fallback order: OpenRouter -> Ollama.
+    OpenRouter has top priority (better quality), Ollama as fallback.
     """
-    if NER_NER_OLLAMA_URL:
-        return "ollama"
-    if NER_NER_OPENROUTER_API_KEY:
-        return "openrouter"
-    raise ValueError(
-        "No LLM provider configured. Set NER_NER_OLLAMA_URL or NER_NER_OPENROUTER_API_KEY"
-    )
-
-
-def get_active_provider():
-    """Determine which LLM provider to use based on config.
-
-    Fallback order: Ollama -> OpenRouter.
-    If Ollama URL is configured (non-empty), use Ollama. Otherwise, check OpenRouter.
-    """
-    # Ollama has top priority when configured
-    if NER_OLLAMA_URL:
-        return "ollama"
-    # OpenRouter as OpenAI-compatible API
     if NER_OPENROUTER_API_KEY:
         return "openrouter"
+    if NER_OLLAMA_URL:
+        return "ollama"
     raise ValueError(
-        "No LLM provider configured. Set NER_OLLAMA_URL or NER_OPENROUTER_API_KEY"
+        "No LLM provider configured. Set NER_OPENROUTER_API_KEY or NER_OLLAMA_URL"
     )
 
 
@@ -78,11 +66,7 @@ ENTITY TYPES & DEFINITIONS
    - Examples (scientific): Ocimum sanctum, Cinnamomum verum, Azadirachta indica, Candida albicans, Staphylococcus aureus
    - Examples (common): tulsi, neem, basil, yeast, staph bacteria
 
-3. PLANT PART
-   - The specific anatomical part of the plant or organism used
-   - Examples: leaves, bark, roots, seeds, flowers, aerial parts, rhizome, heartwood, fruit peel
-
-4. EXTRACTION METHOD
+3. EXTRACTION METHOD
    - Physical or mechanical process used to obtain crude extract
    - Examples: maceration, cold percolation, Soxhlet extraction, cold press, solvent extraction
 
@@ -95,7 +79,7 @@ ENTITY TYPES & DEFINITIONS
    - Biological, pharmacological, or chemical activity/property of a compound
    - Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal
 
-7. ISOLATION METHOD
+7. ANALYTICAL TECHNIQUE
    - Specific separation or isolation technique (more specific than EXTRACTION METHOD)
    - Examples: steam distillation, hydrodistillation, supercritical CO₂ extraction, column chromatography, HPLC, fractional distillation, liquid-liquid partitioning
 
@@ -118,9 +102,9 @@ DISAMBIGUATION RULES
 ════════════════════════════════════════
 
 - CHEMICAL vs DRUG: If the compound is discussed in a clinical/therapeutic treatment context, label it DRUG. If discussed as a constituent or in activity screening, label it CHEMICAL.
-- ISOLATION METHOD vs EXTRACTION METHOD: Always prefer ISOLATION METHOD when the technique is a specific separation process (e.g., steam distillation, HPLC). Use EXTRACTION METHOD for bulk crude extraction processes (e.g., Soxhlet, maceration).
+- ANALYTICAL TECHNIQUE vs EXTRACTION METHOD: Always prefer ANALYTICAL TECHNIQUE when the technique is a specific separation process (e.g., steam distillation, HPLC). Use EXTRACTION METHOD for bulk crude extraction processes (e.g., Soxhlet, maceration).
 - SPECIES (scientific) vs SPECIES (common): Same entity type — distinguish only via the "name_type" field. Both "tulsi" and "Ocimum sanctum" → SPECIES.
-- Nested entities are allowed. "leaves of Cinnamomum verum" → extract PLANT PART ("leaves") and SPECIES ("Cinnamomum verum") as separate entities.
+- Nested entities are allowed. Extract overlapping entities separately.
 - If a span is ambiguous between two types, choose the most specific and contextually dominant type.
 
 ════════════════════════════════════════
@@ -169,16 +153,14 @@ Input:
 "Essential oil of Cinnamomum verum bark collected from Wayanad, Kerala was obtained by steam distillation. Eugenol (72.4%) exhibited strong antimicrobial activity against Staphylococcus aureus."
 
 <reasoning>
-1. Candidate spans: Cinnamomum verum (species - scientific), bark (plant part), Wayanad, Kerala (location), steam distillation (isolation method), Eugenol (chemical), 72.4% (percentage), antimicrobial (chemical activity), Staphylococcus aureus (species - scientific)
+1. Candidate spans: Cinnamomum verum (species), Wayanad, Kerala (location), steam distillation (isolation method), Eugenol (chemical), antimicrobial (chemical activity), Staphylococcus aureus (species)
 2. Ambiguities: None.
-3. Nested entities: None.
 </reasoning>
 
 [
   {"span": "Cinnamomum verum",    "type": "SPECIES",           "start": 17,  "end": 33,  "name_type": "scientific", "linked_to": null},
-  {"span": "bark",                "type": "PLANT PART",        "start": 34,  "end": 38,  "name_type": null,         "linked_to": null},
   {"span": "Wayanad, Kerala",     "type": "LOCATION",          "start": 54,  "end": 69,  "name_type": null,         "balanced": null},
-  {"span": "steam distillation",  "type": "ISOLATION METHOD",  "start": 86,  "end": 103, "name_type": null,         "linked_to": null},
+  {"span": "steam distillation",  "type": "ANALYTICAL TECHNIQUE",  "start": 86,  "end": 103, "name_type": null,         "linked_to": null},
   {"span": "Eugenol",             "type": "CHEMICAL",          "start": 105, "end": 112, "name_type": null,         "linked_to": null},
   {"span": "antimicrobial",       "type": "CHEMICAL ACTIVITY", "start": 140, "end": 153, "name_type": null,         "linked_to": "Eugenol"},
   {"span": "Staphylococcus aureus","type": "SPECIES",          "start": 162, "end": 183, "name_type": "scientific", "linked_to": null}
@@ -190,14 +172,11 @@ Input:
 "Leaves and roots of neem collected from Tamil Nadu were subjected to Soxhlet extraction using methanol. The crude extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models. Nimbolide (3.8%) was isolated via column chromatography and found to inhibit COX-2 enzyme."
 
 <reasoning>
-1. Candidate spans: Leaves, roots (plant parts), neem (species - common), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical - solvent), antifungal (chemical activity), Candida albicans (species - scientific), antidiabetic (chemical activity), diabetes (disease), streptozotocin (drug - used as disease model inducer), Nimbolide (chemical), 3.8% (percentage), column chromatography (isolation method), COX-2 enzyme (chemical ligand)
-2. Ambiguities: streptozotocin — used as a pharmacological tool to induce diabetes, label DRUG. methanol — solvent used in extraction, label CHEMICAL.
-3. Nested entities: "Leaves and roots" → two separate PLANT PART entities.
+1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (chemical activity), Candida albicans (species), antidiabetic (chemical activity), diabetes (disease), streptozotocin (drug), Nimbolide (chemical), column chromatography (isolation method), COX-2 enzyme (chemical ligand)
+2. Ambiguities: streptozotocin — used as pharmacological tool to induce diabetes, label DRUG.
 </reasoning>
 
 [
-  {"span": "Leaves",                "type": "PLANT PART",        "start": 0,   "end": 6,   "name_type": null,         "linked_to": null},
-  {"span": "roots",                 "type": "PLANT PART",        "start": 11,  "end": 16,  "name_type": null,         "linked_to": null},
   {"span": "neem",                  "type": "SPECIES",           "start": 20,  "end": 24,  "name_type": "common",     "linked_to": null},
   {"span": "Tamil Nadu",            "type": "LOCATION",          "start": 40,  "end": 50,  "name_type": null,         "linked_to": null},
   {"span": "Soxhlet extraction",    "type": "EXTRACTION METHOD", "start": 68,  "end": 85,  "name_type": null,         "linked_to": null},
@@ -208,7 +187,7 @@ Input:
   {"span": "streptozotocin",        "type": "DRUG",              "start": 176, "end": 190, "name_type": null,         "linked_to": null},
   {"span": "diabetes",              "type": "DISEASE",           "start": 199, "end": 207, "name_type": null,         "linked_to": null},
   {"span": "Nimbolide",             "type": "CHEMICAL",          "start": 216, "end": 225, "name_type": null,         "linked_to": null},
-  {"span": "column chromatography", "type": "ISOLATION METHOD",  "start": 247, "end": 267, "name_type": null,         "linked_to": null},
+  {"span": "column chromatography", "type": "ANALYTICAL TECHNIQUE",  "start": 247, "end": 267, "name_type": null,         "linked_to": null},
   {"span": "COX-2 enzyme",          "type": "CHEMICAL LIGAND",   "start": 287, "end": 303, "name_type": null,         "linked_to": null}
 ]
 """
@@ -217,46 +196,18 @@ Input:
 LABEL_DEFINITIONS = {
     "CHEMICAL": "Chemical compounds, natural molecules, phytochemicals, metabolites.",
     "SPECIES": "Any living organism (plants, bacteria, fungi, animals, parasites) and taxonomic groups.",
-    "PLANT PART": "Parts of a plant used in extraction or referenced as source material.",
+    # PLANT PART - handled by dictionary matching (no LLM needed)
     "EXTRACTION METHOD": "Physical or mechanical process used to obtain crude extract.",
     "LOCATION": "Geographic locations, countries, regions, institutions.",
     "CHEMICAL ACTIVITY": "Biological or chemical activities and effects of substances.",
-    "ISOLATION METHOD": "Specific separation or isolation technique.",
+    "ANALYTICAL TECHNIQUE": "Specific separation or isolation technique.",
     "DISEASE": "Diseases, medical conditions, infections, disorders.",
     "DRUG": "Pharmaceutical drugs and synthetic medicines.",
     "CHEMICAL LIGAND": "Molecular, cellular, or biological target of a compound (enzymes, receptors, ligands, proteins, pathways).",
 }
 
 RULER_PATTERNS = [
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "hplc"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "gc-ms"}]},
-    {
-        "label": "ISOLATION METHOD",
-        "pattern": [{"LOWER": "gc"}, {"TEXT": "-"}, {"LOWER": "ms"}],
-    },
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "tlc"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "nmr"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "ftir"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"TEXT": "HPLC-MS"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "lc-ms"}]},
-    {
-        "label": "ISOLATION METHOD",
-        "pattern": [{"LOWER": "lc"}, {"TEXT": "-"}, {"LOWER": "ms"}],
-    },
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "hplc-dad"}]},
-    {"label": "ISOLATION METHOD", "pattern": [{"LOWER": "uplc"}]},
-    {
-        "label": "ISOLATION METHOD",
-        "pattern": [{"LOWER": "ms"}, {"TEXT": "/"}, {"LOWER": "ms"}],
-    },
-    {
-        "label": "ISOLATION METHOD",
-        "pattern": [{"LOWER": "column"}, {"LOWER": "chromatography"}],
-    },
-    {
-        "label": "ISOLATION METHOD",
-        "pattern": [{"LOWER": "thin"}, {"LOWER": "layer"}, {"LOWER": "chromatography"}],
-    },
+    # ANALYTICAL TECHNIQUE patterns removed - now handled by dictionary
 ]
 
 
@@ -273,45 +224,181 @@ class NERService:
         self.all_labels = list(LABEL_DEFINITIONS.keys())
         self.result_cache = {}  # Cache: DOI -> list of entities
 
-    async def process_text(self, text: str) -> List[Dict[str, Any]]:
-        """Main entry point for NER processing with parallelized chunking."""
-        # 1. Rule-based extraction (sequential)
-        ruler_entities = self.apply_entity_ruler(text)
+    async def process_text(
+        self, text: str, max_chunks: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Main entry point for NER processing with chunking.
 
-        # 2. Chunking
+        Args:
+            text: Input text to process
+            max_chunks: Maximum number of chunks to process (for performance)
+        """
+        # 1. Dictionary-based extraction (PLANT PARTS) - fast, from CSV
+        dict_entities = match_plant_parts(text)
+        # Normalize dict entities: span->text, type->label for deduplication
+        dict_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),  # Include canonical for normalization
+                "aliases": e.get("aliases"),
+            }
+            for e in dict_entities
+        ]
+
+        # 1b. Dictionary-based ANALYTICAL TECHNIQUE extraction
+        analytical_entities = match_analytical_techniques(text)
+        analytical_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),  # Include canonical for normalization
+                "aliases": e.get("aliases"),
+            }
+            for e in analytical_entities
+        ]
+
+        # 1c. Dictionary-based EXTRACTION METHOD extraction
+        from backend.gazetteer.extraction_method_matcher import (
+            match_extraction_methods,
+        )
+
+        extraction_entities = match_extraction_methods(text)
+        extraction_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            }
+            for e in extraction_entities
+        ]
+
+        # 1d. Dictionary-based DEVELOPMENT STAGE extraction
+        from backend.gazetteer.development_stage_matcher import (
+            match_development_stages,
+        )
+
+        development_entities = match_development_stages(text)
+        development_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            }
+            for e in development_entities
+        ]
+
+        # 1e. Dictionary-based SEASON extraction
+        from backend.gazetteer.season_matcher import match_seasons
+
+        season_entities = match_seasons(text)
+        season_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            }
+            for e in season_entities
+        ]
+
+        # 2. Chunking - limit chunks for performance
         chunks = self.split_into_word_chunks(text)
+        if len(chunks) > max_chunks:
+            # Take first N chunks and join them
+            chunks = chunks[:max_chunks]
+            text = " ".join(chunks)
+        else:
+            text = text  # Keep original text reference
 
-        # 3. LLM extraction (parallel)
-        async def process_chunk(chunk):
-            raw_response = await self.call_llm(chunk)
-            return self.parse_llm_response(raw_response)
-
-        tasks = [process_chunk(chunk) for chunk in chunks]
-        results_list = await asyncio.gather(*tasks)
-
+        # 4. LLM extraction (sequential to avoid rate limiting)
+        # Even if LLM fails, we still have dictionary + ruler entities
         llm_entities = []
-        for res in results_list:
-            llm_entities.extend(res)
+        try:
+            for chunk in chunks:
+                raw_response = await self.call_llm(chunk)
+                parsed = self.parse_llm_response(raw_response)
+                llm_entities.extend(parsed)
+        except Exception as e:
+            logger.warning(
+                f"LLM extraction failed: {e}. Using dictionary + ruler entities only."
+            )
 
-        # 4. Combine and deduplicate
-        all_entities = ruler_entities + llm_entities
-        summary, filtered = self.deduplicate(
-            all_entities, text
-        )  # Pass original full text
+        # 5. Combine and deduplicate (only dictionary + LLM)
+        all_entities = (
+            dict_entities
+            + analytical_entities
+            + extraction_entities
+            + development_entities
+            + season_entities
+            + llm_entities
+        )
+
+        # 6. Normalize all entities to canonical form
+        from backend.gazetteer.plant_part_matcher import (
+            get_matcher as get_plant_matcher,
+        )
+        from backend.gazetteer.analytical_technique_matcher import (
+            get_matcher as get_analytical_matcher,
+        )
+
+        plant_matcher = get_plant_matcher()
+        analytical_matcher = get_analytical_matcher()
+        from backend.gazetteer.extraction_method_matcher import (
+            get_matcher as get_extraction_matcher,
+        )
+
+        extraction_matcher = get_extraction_matcher()
+        from backend.gazetteer.development_stage_matcher import (
+            get_matcher as get_development_matcher,
+        )
+
+        development_matcher = get_development_matcher()
+        from backend.gazetteer.season_matcher import (
+            get_matcher as get_season_matcher,
+        )
+
+        season_matcher = get_season_matcher()
+
+        for e in all_entities:
+            if e.get("canonical"):
+                continue
+            text_lower = e.get("text", "").lower()
+            label = e.get("label", "")
+            if label == "PLANT PART":
+                e["canonical"] = plant_matcher.canonical_map.get(
+                    text_lower, e.get("text", "")
+                )
+            elif label == "ANALYTICAL TECHNIQUE":
+                e["canonical"] = analytical_matcher.canonical_map.get(
+                    text_lower, e.get("text", "")
+                )
+            elif label == "EXTRACTION METHOD":
+                e["canonical"] = extraction_matcher.canonical_map.get(
+                    text_lower, e.get("text", "")
+                )
+            elif label == "DEVELOPMENT STAGE":
+                e["canonical"] = development_matcher.canonical_map.get(
+                    text_lower, e.get("text", "")
+                )
+            elif label == "SEASON":
+                e["canonical"] = season_matcher.canonical_map.get(
+                    text_lower, e.get("text", "")
+                )
+
+        summary, filtered = self.deduplicate(all_entities, text)
         return summary, filtered
 
     def apply_entity_ruler(self, text: str) -> List[Dict[str, Any]]:
-        doc = self.nlp(text)
-        entities = []
-        seen = set()
-        for ent in doc.ents:
-            key = (ent.start_char, ent.end_char)
-            if key not in seen:
-                entities.append(
-                    {"text": ent.text.strip(), "label": ent.label_, "score": 1.0}
-                )
-                seen.add(key)
-        return entities
+        """Disabled - using dictionary matchers instead."""
+        return []
 
     def split_into_word_chunks(
         self, text: str, chunk_size: int = NER_CHUNK_SIZE_WORDS
@@ -325,8 +412,7 @@ class NERService:
         return chunks
 
     async def call_llm(self, text_chunk: str) -> str:
-        """Call Qwen3.5:9b via /api/chat with /no_think to disable built-in thinking."""
-        # Build provider-determined payloads and endpoints
+        """Call LLM for NER: Ollama first, then OpenRouter fallback."""
         provider = None
         try:
             provider = get_active_provider()
@@ -334,7 +420,7 @@ class NERService:
             logger.error(f"NER provider config error: {e}")
             return ""
 
-        # Common payload structure, adapted per provider as needed
+        # Try Ollama first (primary)
         if provider == "ollama":
             payload = {
                 "model": NER_OLLAMA_MODEL,
@@ -346,22 +432,27 @@ class NERService:
                     },
                 ],
                 "stream": False,
-                "options": {"temperature": 0.0, "seed": 42, "num_ctx": 8192},
+                "options": {
+                    "temperature": 0.0,
+                    "seed": 42,
+                    "num_ctx": 8192,
+                    "num_predict": 4096,
+                },
             }
             try:
                 client = await HttpClientManager.get_client()
                 response = await client.post(
-                    f"{NER_OLLAMA_URL}/api/chat", json=payload, timeout=120.0
+                    f"{NER_OLLAMA_URL}/api/chat", json=payload, timeout=300.0
                 )
                 if response.status_code == 200:
                     result = response.json()
                     return result.get("message", {}).get("content", "")
             except Exception as e:
                 logger.error(f"Error calling Ollama LLM: {e}")
-            return ""
+                # Fall through to try OpenRouter
 
-        # OpenRouter provider (fallback)
-        if provider == "openrouter":
+        # Try OpenRouter (fallback)
+        if NER_OPENROUTER_API_KEY:
             url = "https://openrouter.ai/api/v1/chat/completions"
             headers = {"Authorization": f"Bearer {NER_OPENROUTER_API_KEY}"}
             payload = {
@@ -376,21 +467,40 @@ class NERService:
                 "stream": False,
                 "temperature": 0.0,
             }
-            try:
-                client = await HttpClientManager.get_client()
-                response = await client.post(
-                    url, json=payload, headers=headers, timeout=120.0
-                )
-                if response.status_code == 200:
-                    result = response.json()
-                    return (
-                        result.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
+
+            max_retries = 3
+            base_delay = 2.0
+            for attempt in range(max_retries):
+                try:
+                    client = await HttpClientManager.get_client()
+                    response = await client.post(
+                        url, json=payload, headers=headers, timeout=30.0
                     )
-            except Exception as e:
-                logger.error(f"Error calling OpenRouter LLM: {e}")
-            return ""
+
+                    # Handle rate limiting (429) with retry
+                    if response.status_code == 429:
+                        retry_after = int(
+                            response.headers.get(
+                                "retry-after", base_delay * (2**attempt)
+                            )
+                        )
+                        logger.warning(
+                            f"Rate limited (429). Retrying after {retry_after}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        return (
+                            result.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "")
+                        )
+                except Exception as e:
+                    logger.error(f"Error calling OpenRouter LLM: {e}")
+                    await asyncio.sleep(base_delay * (2**attempt))
+                    continue
 
         return ""
 
@@ -420,10 +530,9 @@ class NERService:
                 remap = {
                     "TARGET": "CHEMICAL LIGAND",
                     "CHEMICAL_LIGAND": "CHEMICAL LIGAND",
-                    "PLANT_PART": "PLANT PART",
                     "EXTRACTION_METHOD": "EXTRACTION METHOD",
                     "CHEMICAL_ACTIVITY": "CHEMICAL ACTIVITY",
-                    "ISOLATION_METHOD": "ISOLATION METHOD",
+                    "ANALYTICAL_TECHNIQUE": "ANALYTICAL TECHNIQUE",
                 }
                 label = remap.get(label, label)
 

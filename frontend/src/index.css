@@ -2,6 +2,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
 
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 /* CSS Variables - SaaS Dashboard Palette */
 :root {
@@ -19,19 +20,35 @@
     --header-bg: #ffffff;
     --sidebar-bg: #ffffff;
     --tab-inactive: #94a3b8;
-    --entity-highlight-bg: rgba(91, 141, 239, 0.12);
-
-    /* Entity Color Palette */
-    --color-chemical: #5B8DEF;
-    --color-chemical-activity: #3A6FD8;
-    --color-chemical-ligand: #7C4DFF;
-    --color-location: #9AA5B1;
-    --color-species: #2EAD7D;
-    --color-plant-part: #6BBF59;
-    --color-extraction: #F2A65A;
-    --color-isolation: #E07A5F;
-    --color-drug: #D66BA0;
-    --color-disease: #D64545;
+    /* Reader entity palette: single source of truth */
+    --entity-highlight-alpha: 0.18;
+    --entity-highlight-border-alpha: 0.24;
+    --entity-default: #374151;
+    --entity-default-rgb: 55 65 81;
+    --entity-chemical: #2563EB;
+    --entity-chemical-rgb: 37 99 235;
+    --entity-species: #16A34A;
+    --entity-species-rgb: 22 163 74;
+    --entity-plant-part: #84CC16;
+    --entity-plant-part-rgb: 132 204 22;
+    --entity-extraction-method: #7C3AED;
+    --entity-extraction-method-rgb: 124 58 237;
+    --entity-development-stage: #F97316;
+    --entity-development-stage-rgb: 249 115 22;
+    --entity-season: #EAB308;
+    --entity-season-rgb: 234 179 8;
+    --entity-location: #06B6D4;
+    --entity-location-rgb: 6 182 212;
+    --entity-chemical-activity: #EC4899;
+    --entity-chemical-activity-rgb: 236 72 153;
+    --entity-analytical-technique: #64748B;
+    --entity-analytical-technique-rgb: 100 116 139;
+    --entity-disease: #DC2626;
+    --entity-disease-rgb: 220 38 38;
+    --entity-drug: #0D9488;
+    --entity-drug-rgb: 13 148 136;
+    --entity-chemical-ligand: #D946EF;
+    --entity-chemical-ligand-rgb: 217 70 239;
     
     /* Typography & Sizing Tokens (design-system-friendly) */
     --heading-h2-size: 1.75rem;
@@ -209,42 +226,191 @@ header {
 
 /* Removed dark-mode table scroll shadows */
 
-/* Entity Highlight Classes */
-.ent-chemical { color: var(--color-chemical); background: rgba(91, 141, 239, 0.12) !important; font-weight: 600; }
-.ent-chemical-activity { color: var(--color-chemical-activity); background: rgba(58, 111, 216, 0.12) !important; font-weight: 600; }
-.ent-chemical-ligand { color: var(--color-chemical-ligand); background: rgba(124, 77, 255, 0.12) !important; font-weight: 600; }
-.ent-location { color: var(--color-location); background: rgba(154, 165, 177, 0.12) !important; font-weight: 600; }
-.ent-species { color: var(--color-species); background: rgba(46, 173, 125, 0.12) !important; font-weight: 600; }
-.ent-plant-part { color: var(--color-plant-part); background: rgba(107, 191, 89, 0.12) !important; font-weight: 600; }
-.ent-extraction-method { color: var(--color-extraction); background: rgba(242, 166, 90, 0.12) !important; font-weight: 600; }
-.ent-isolation-method { color: var(--color-isolation); background: rgba(224, 122, 95, 0.12) !important; font-weight: 600; }
-.ent-drug { color: var(--color-drug); background: rgba(214, 107, 160, 0.12) !important; font-weight: 600; }
-.ent-disease { color: var(--color-disease); background: rgba(214, 69, 69, 0.12) !important; font-weight: 600; }
+/* Entity highlight palette wiring: legend + inline spans/marks share the same color tokens */
+.ent-chemical,
+mark.ner-chemical,
+.legend-chemical {
+    --entity-accent: var(--entity-chemical);
+    --entity-accent-rgb: var(--entity-chemical-rgb);
+}
 
-/* NER Highlighting in Paper Content (mark tags) */
-mark.ner-chemical { all: unset; color: var(--color-chemical); background: rgba(91, 141, 239, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-chemical-activity { all: unset; color: var(--color-chemical-activity); background: rgba(58, 111, 216, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-chemical-ligand { all: unset; color: var(--color-chemical-ligand); background: rgba(124, 77, 255, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-location { all: unset; color: var(--color-location); background: rgba(154, 165, 177, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-species { all: unset; color: var(--color-species); background: rgba(46, 173, 125, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-plant-part { all: unset; color: var(--color-plant-part); background: rgba(107, 191, 89, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-extraction-method { all: unset; color: var(--color-extraction); background: rgba(242, 166, 90, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-isolation-method { all: unset; color: var(--color-isolation); background: rgba(224, 122, 95, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-drug { all: unset; color: var(--color-drug); background: rgba(214, 107, 160, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-disease { all: unset; color: var(--color-disease); background: rgba(214, 69, 69, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
-mark.ner-default { all: unset; color: #374151; background: rgba(156, 163, 175, 0.15); font-weight: 600; padding: 1px 3px; border-radius: 3px; cursor: help; }
+.ent-species,
+mark.ner-species,
+.legend-species {
+    --entity-accent: var(--entity-species);
+    --entity-accent-rgb: var(--entity-species-rgb);
+}
 
-/* Legend Colors */
-.legend-chemical { color: var(--color-chemical) !important; }
-.legend-chemical-activity { color: var(--color-chemical-activity) !important; }
-.legend-chemical-ligand { color: var(--color-chemical-ligand) !important; }
-.legend-location { color: var(--color-location) !important; }
-.legend-species { color: var(--color-species) !important; }
-.legend-plant-part { color: var(--color-plant-part) !important; }
-.legend-extraction-method { color: var(--color-extraction) !important; }
-.legend-isolation-method { color: var(--color-isolation) !important; }
-.legend-drug { color: var(--color-drug) !important; }
-.legend-disease { color: var(--color-disease) !important; }
+.ent-plant-part,
+mark.ner-plant-part,
+.legend-plant-part {
+    --entity-accent: var(--entity-plant-part);
+    --entity-accent-rgb: var(--entity-plant-part-rgb);
+}
+
+.ent-extraction-method,
+mark.ner-extraction-method,
+.legend-extraction-method {
+    --entity-accent: var(--entity-extraction-method);
+    --entity-accent-rgb: var(--entity-extraction-method-rgb);
+}
+
+.ent-development-stage,
+mark.ner-development-stage,
+.legend-development-stage {
+    --entity-accent: var(--entity-development-stage);
+    --entity-accent-rgb: var(--entity-development-stage-rgb);
+}
+
+.ent-season,
+mark.ner-season,
+.legend-season {
+    --entity-accent: var(--entity-season);
+    --entity-accent-rgb: var(--entity-season-rgb);
+}
+
+.ent-location,
+mark.ner-location,
+.legend-location {
+    --entity-accent: var(--entity-location);
+    --entity-accent-rgb: var(--entity-location-rgb);
+}
+
+.ent-chemical-activity,
+mark.ner-chemical-activity,
+.legend-chemical-activity {
+    --entity-accent: var(--entity-chemical-activity);
+    --entity-accent-rgb: var(--entity-chemical-activity-rgb);
+}
+
+.ent-analytical-technique,
+mark.ner-analytical-technique,
+.legend-analytical-technique,
+.ent-isolation-method,
+mark.ner-isolation-method,
+.legend-isolation-method {
+    --entity-accent: var(--entity-analytical-technique);
+    --entity-accent-rgb: var(--entity-analytical-technique-rgb);
+}
+
+.ent-disease,
+mark.ner-disease,
+.legend-disease {
+    --entity-accent: var(--entity-disease);
+    --entity-accent-rgb: var(--entity-disease-rgb);
+}
+
+.ent-drug,
+mark.ner-drug,
+.legend-drug {
+    --entity-accent: var(--entity-drug);
+    --entity-accent-rgb: var(--entity-drug-rgb);
+}
+
+.ent-chemical-ligand,
+mark.ner-chemical-ligand,
+.legend-chemical-ligand {
+    --entity-accent: var(--entity-chemical-ligand);
+    --entity-accent-rgb: var(--entity-chemical-ligand-rgb);
+}
+
+.legend-chemical,
+.legend-species,
+.legend-plant-part,
+.legend-extraction-method,
+.legend-development-stage,
+.legend-season,
+.legend-location,
+.legend-chemical-activity,
+.legend-analytical-technique,
+.legend-isolation-method,
+.legend-drug,
+.legend-disease,
+.legend-chemical-ligand,
+.article-prose :is(
+    .ent-chemical,
+    .ent-species,
+    .ent-plant-part,
+    .ent-extraction-method,
+    .ent-development-stage,
+    .ent-season,
+    .ent-location,
+    .ent-chemical-activity,
+    .ent-analytical-technique,
+    .ent-isolation-method,
+    .ent-drug,
+    .ent-disease,
+    .ent-chemical-ligand,
+    mark.ner-chemical,
+    mark.ner-species,
+    mark.ner-plant-part,
+    mark.ner-extraction-method,
+    mark.ner-development-stage,
+    mark.ner-season,
+    mark.ner-location,
+    mark.ner-chemical-activity,
+    mark.ner-analytical-technique,
+    mark.ner-isolation-method,
+    mark.ner-drug,
+    mark.ner-disease,
+    mark.ner-chemical-ligand
+) {
+    color: var(--entity-accent, var(--entity-default)) !important;
+}
+
+.article-prose :is(
+    .ent-chemical,
+    .ent-species,
+    .ent-plant-part,
+    .ent-extraction-method,
+    .ent-development-stage,
+    .ent-season,
+    .ent-location,
+    .ent-chemical-activity,
+    .ent-analytical-technique,
+    .ent-isolation-method,
+    .ent-drug,
+    .ent-disease,
+    .ent-chemical-ligand,
+    mark.ner-chemical,
+    mark.ner-species,
+    mark.ner-plant-part,
+    mark.ner-extraction-method,
+    mark.ner-development-stage,
+    mark.ner-season,
+    mark.ner-location,
+    mark.ner-chemical-activity,
+    mark.ner-analytical-technique,
+    mark.ner-isolation-method,
+    mark.ner-drug,
+    mark.ner-disease,
+    mark.ner-chemical-ligand
+) {
+    background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;
+    border-radius: 0.25rem;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    box-shadow: inset 0 0 0 1px rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-border-alpha));
+    cursor: help;
+    font-weight: 600;
+    line-height: inherit;
+    padding: 0.02em 0.18em;
+    text-decoration: none;
+}
+
+mark.ner-default {
+    background-color: rgb(var(--entity-default-rgb) / var(--entity-highlight-alpha)) !important;
+    border-radius: 0.25rem;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    box-shadow: inset 0 0 0 1px rgb(var(--entity-default-rgb) / var(--entity-highlight-border-alpha));
+    color: var(--entity-default) !important;
+    cursor: help;
+    font-weight: 600;
+    line-height: inherit;
+    padding: 0.02em 0.18em;
+    text-decoration: none;
+}
 
 /* Reading Progress Bar */
 .progress-bar-fill {

@@ -10,8 +10,8 @@ import os
 # OPENROUTER (Primary for RAG)
 # =============================================================================
 
-RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "")
-RAG_OPENROUTER_MODEL = os.getenv("RAG_OPENROUTER_MODEL", "stepfun/step-3.5-flash:free")
+RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "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")
+RAG_OPENROUTER_MODEL = os.getenv("RAG_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
 
 # =============================================================================
 # OLLAMA (Fallback for RAG)

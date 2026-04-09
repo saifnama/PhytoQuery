@@ -3,6 +3,7 @@ import re
 import hashlib
 import httpx
 import json
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -75,7 +76,7 @@ class OllamaLLM:
         self.provider = provider
         self.api_key = api_key
 
-    async def invoke(self, prompt: str):
+    async def invoke(self, prompt: str, max_retries: int = 3, base_delay: float = 2.0):
         headers = {}
         if self.provider == "ollama":
             payload = {
@@ -91,31 +92,63 @@ class OllamaLLM:
                 "temperature": self.temperature,
             }
             headers = {"Authorization": f"Bearer {self.api_key}"}
-        try:
-            client = await HttpClientManager.get_client()
-            kwargs = {"json": payload, "timeout": 120.0}
-            if self.provider == "openrouter":
-                kwargs["headers"] = headers
-            response = await client.post(self.url, **kwargs)
-            response.raise_for_status()
-            result = response.json()
 
-            class Response:
-                def __init__(self, content):
-                    self.content = content
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                client = await HttpClientManager.get_client()
+                kwargs = {"json": payload, "timeout": None}
+                if self.provider == "openrouter":
+                    kwargs["headers"] = headers
+                response = await client.post(self.url, **kwargs)
 
-            if self.provider == "ollama":
-                return Response(result["message"]["content"])
-            else:
-                return Response(result["choices"][0]["message"]["content"])
-        except Exception as e:
-            import traceback
+                # Handle rate limiting (429) with retry
+                if response.status_code == 429:
+                    retry_after = int(
+                        response.headers.get("retry-after", base_delay * (2**attempt))
+                    )
+                    logger.warning(
+                        f"Rate limited (429). Retrying after {retry_after}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
 
-            err_msg = f"RAG LLM Request URL: {self.url}\nPayload: {payload}\nError: {e}\n{traceback.format_exc()}"
-            with open("rag_error.log", "w") as f:
-                f.write(err_msg)
-            logger.error(f"Error calling {self.provider} LLM for RAG: {e}")
-            raise
+                response.raise_for_status()
+                result = response.json()
+
+                class Response:
+                    def __init__(self, content):
+                        self.content = content
+
+                if self.provider == "ollama":
+                    return Response(result["message"]["content"])
+                else:
+                    return Response(result["choices"][0]["message"]["content"])
+            except Exception as e:
+                last_exception = e
+                # Retry on network errors or 5xx errors
+                if (
+                    hasattr(e, "status_code")
+                    and e.status_code
+                    and 500 <= e.status_code < 600
+                ):
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        f"Server error {e.status_code}. Retrying after {delay}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(f"Error calling {self.provider} LLM for RAG: {e}")
+                raise
+
+        # All retries exhausted
+        import traceback
+
+        err_msg = f"RAG LLM Request URL: {self.url}\nPayload: {payload}\nError: {last_exception}\n{traceback.format_exc()}"
+        with open("rag_error.log", "w") as f:
+            f.write(err_msg)
+        logger.error(f"All retries failed for RAG LLM: {last_exception}")
+        raise last_exception
 
 
 class RAGService:

@@ -1,6 +1,6 @@
 """
 NER Configuration
-==================
+================
 Named Entity Recognition settings and providers.
 """
 
@@ -10,9 +10,7 @@ import os
 # OLLAMA (Primary for NER)
 # =============================================================================
 
-NER_OLLAMA_URL = os.getenv(
-    "NER_OLLAMA_URL", "https://p.trycloudflare.com"
-)
+NER_OLLAMA_URL = os.getenv("NER_OLLAMA_URL", "https://garcia-new-stress-effective.trycloudflare.com")
 NER_OLLAMA_MODEL = os.getenv("NER_OLLAMA_MODEL", "llama3.1:8b")
 
 # =============================================================================
@@ -20,16 +18,15 @@ NER_OLLAMA_MODEL = os.getenv("NER_OLLAMA_MODEL", "llama3.1:8b")
 # =============================================================================
 
 NER_OPENROUTER_API_KEY = os.getenv("NER_OPENROUTER_API_KEY", "")
-NER_OPENROUTER_MODEL = os.getenv(
-    "NER_OPENROUTER_MODEL", "anthropic/claude-3-haiku:free"
-)
+NER_OPENROUTER_MODEL = os.getenv("NER_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
 
 # =============================================================================
 # NER SETTINGS
 # =============================================================================
 
 NER_CONFIDENCE_THRESHOLD = float(os.getenv("NER_CONFIDENCE_THRESHOLD", "0.7"))
-NER_CHUNK_SIZE_WORDS = int(os.getenv("NER_CHUNK_SIZE_WORDS", "1000"))
+NER_CHUNK_SIZE_WORDS = int(os.getenv("NER_CHUNK_SIZE_WORDS", "250"))
+NER_MAX_CHUNKS = int(os.getenv("NER_MAX_CHUNKS", "3"))
 
 
 def get_ner_provider() -> dict:

@@ -10,6 +10,8 @@ export interface Entity {
   text: string;
   label: string;
   score: number;
+  canonical?: string;  // Normalized form for display (e.g., "seed" for "seeds")
+  aliases?: string[];  // All variations for counting
 }
 
 export interface NERRequest {

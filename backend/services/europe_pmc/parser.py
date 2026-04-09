@@ -351,11 +351,11 @@ class XMLParser:
                 ref_data = {"id": ref_id}
 
                 # Extract citation element (contains structured reference data)
-                citation = (
-                    ref.find(".//citation")
-                    or ref.find(".//element-citation")
-                    or ref.find(".//mixed-citation")
-                )
+                citation = ref.find(".//citation")
+                if citation is None:
+                    citation = ref.find(".//element-citation")
+                if citation is None:
+                    citation = ref.find(".//mixed-citation")
                 if citation is not None:
                     # Authors
                     authors = []
