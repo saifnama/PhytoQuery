@@ -16,7 +16,7 @@ function App() {
             <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<NerPage />} />
-                <Route path="/rag" element={<RagPage />} />
+                <Route path="/chat" element={<RagPage />} />
                 <Route path="/paper/:doi" element={<PaperPage />} />
               </Routes>
             </ErrorBoundary>

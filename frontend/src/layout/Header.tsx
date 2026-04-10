@@ -12,7 +12,7 @@ const Header: React.FC<HeaderProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
   const isResearch = location.pathname === '/';
-  const isChat = location.pathname === '/rag';
+  const isChat = location.pathname === '/chat';
 
   return (
     <header className="h-16 flex items-center px-8 bg-white border-b border-slate-100 sticky top-0 z-30 justify-between">
@@ -39,7 +39,7 @@ const Header: React.FC<HeaderProps> = ({
             <span>Research</span>
           </button>
           <button
-            onClick={() => navigate('/rag')}
+            onClick={() => navigate('/chat')}
             className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
               isChat
                 ? 'bg-white text-blue-600 shadow-sm'

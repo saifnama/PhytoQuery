@@ -11,13 +11,13 @@ import os
 # =============================================================================
 
 RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "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")
-RAG_OPENROUTER_MODEL = os.getenv("RAG_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
+RAG_OPENROUTER_MODEL = os.getenv("RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 
 # =============================================================================
 # OLLAMA (Fallback for RAG)
 # =============================================================================
 
-RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "https://p.trycloudflare.com")
+RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "")
 RAG_OLLAMA_MODEL = os.getenv("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
 # =============================================================================

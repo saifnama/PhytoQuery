@@ -27,6 +27,7 @@ export interface NERResponse {
 
 export interface QueryRequest {
   query: string;
+  selected_files?: string[];
 }
 
 export interface QueryResponse {
@@ -38,6 +39,14 @@ export interface UploadResponse {
   status: string;
   message: string;
   files: string[];
+}
+
+export interface IndexedFileInfo {
+  name: string;
+  file_type: string;
+  chunk_count: number;
+  indexed_at: string;
+  parser_type: string;
 }
 
 export interface Heading {

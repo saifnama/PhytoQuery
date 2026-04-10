@@ -56,7 +56,6 @@ API_PREFIXES = (
     "/search",
     "/paper",
     "/ner",
-    "/rag",
     "/health",
     "/doi",
     "/api",

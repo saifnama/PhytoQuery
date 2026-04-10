@@ -27,11 +27,20 @@ class QueryRequest(BaseModel):
         min_length=1,
         example="What are the main bioactive compounds in Ocimum sanctum?",
     )
+    selected_files: Optional[List[str]] = None  # Filter RAG to only these sources
 
 
 class QueryResponse(BaseModel):
     answer: str
     sources: List[Dict[str, Any]]
+
+
+class IndexedFileInfo(BaseModel):
+    name: str
+    file_type: str
+    chunk_count: int
+    indexed_at: str
+    parser_type: str
 
 
 class UploadResponse(BaseModel):

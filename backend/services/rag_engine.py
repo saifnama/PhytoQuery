@@ -5,6 +5,7 @@ import httpx
 import json
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ class RAGConfig:
     similarity_threshold: float = RAG_SIMILARITY_THRESHOLD
     embedding_model: str = RAG_EMBEDDING_MODEL
     top_k: int = RAG_TOP_K
+    parser_type: str = "pymupdf"  # "pymupdf" (fast) or "docling" (detailed)
     chroma_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data",
@@ -175,8 +177,20 @@ class RAGService:
             search_kwargs={"k": config.top_k}
         )
 
-    def process_and_index_pdfs(self, pdf_paths: List[str]):
-        """Extract, chunk, and index PDFs."""
+    def process_and_index_pdfs(
+        self, pdf_paths: List[str], parser_type: str = "docling"
+    ):
+        """Extract, chunk, and index PDFs.
+
+        Args:
+            pdf_paths: List of PDF file paths to process
+            parser_type: "pymupdf" for fast extraction, "docling" for detailed (default: "docling")
+        """
+        # Store parser type for use in _process_pdf
+        self._current_parser = (
+            parser_type if parser_type in ("pymupdf", "docling") else "docling"
+        )
+
         all_docs = []
         for path in pdf_paths:
             docs = self._process_pdf(path)
@@ -189,40 +203,59 @@ class RAGService:
     def _process_pdf(self, pdf_path: str) -> List[Document]:
         """PDF processing pipeline (Preserved from notebook)"""
         source = os.path.basename(pdf_path)
-        tables = []
 
-        # 1. Primary: Try Docling
-        full_text, tables = self._extract_with_docling(pdf_path)
+        # Get parser type from instance or default to docling
+        parser_type = getattr(self, "_current_parser", "docling")
 
-        # 2. Fallbacks
-        if not full_text:
-            full_text = self._extract_with_pymupdf4llm(pdf_path)
-
-        if not tables:
-            tables = self._extract_tables_pdfplumber(pdf_path)
+        # 1. Extract using selected parser
+        if parser_type == "pymupdf":
+            full_text, tables = self._extract_with_pymupdf(pdf_path)
+        else:
+            full_text, tables = self._extract_with_docling(pdf_path)
 
         if not full_text:
             return []
 
-        # 3. Section detection & Chunking
+        # 2. Section detection & Chunking
         sections = self._detect_sections(full_text)
         chunks = self._chunk_by_sections(sections, tables)
 
-        # 4. Deduplication
+        # 3. Deduplication
         unique_chunks = self._deduplicate_chunks(chunks)
 
         documents = []
+        file_ext = os.path.splitext(source)[1].lower() or ".pdf"
+        indexed_at = datetime.now(timezone.utc).isoformat()
         for i, chunk in enumerate(unique_chunks):
             meta = chunk.get("metadata", {})
             meta["source"] = source
             meta["chunk_id"] = f"{source}_{i}"
+            meta["parser_type"] = parser_type
+            meta["file_type"] = file_ext
+            meta["indexed_at"] = indexed_at
+            meta["total_chunks"] = len(unique_chunks)
             documents.append(Document(page_content=chunk["text"], metadata=meta))
 
         return documents
 
-    async def query(self, question: str) -> Dict[str, Any]:
-        """Query the RAG pipeline."""
-        docs = self.retriever.invoke(question)
+    async def query(
+        self, question: str, filter_files: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Query the RAG pipeline with optional source filtering.
+
+        Args:
+            question: The user's natural language question.
+            filter_files: If provided, only search chunks from these source filenames.
+        """
+        # Use filtered search if specific files are selected
+        if filter_files:
+            docs = self.vectorstore.similarity_search(
+                question,
+                k=config.top_k,
+                filter={"source": {"$in": filter_files}},
+            )
+        else:
+            docs = self.retriever.invoke(question)
 
         context_parts = []
         sources = []
@@ -237,7 +270,8 @@ class RAGService:
                 header = f"[{src}" + (f" - {sec}" if sec else "") + "]:"
                 context_parts.append(f"{header}\n{d.page_content}")
 
-            sources.append({"source": src, "section": sec})
+            parser_type = d.metadata.get("parser_type", "docling")
+            sources.append({"source": src, "section": sec, "parser_type": parser_type})
 
         context = "\n\n".join(context_parts)
         prompt = f"""Answer using ONLY the context below. Use markdown.
@@ -251,6 +285,97 @@ Answer:"""
 
         response = await self.llm.invoke(prompt)
         return {"answer": response.content.strip(), "sources": sources}
+
+    def list_indexed_files(self) -> List[Dict[str, Any]]:
+        """Query ChromaDB for all unique indexed source files and their metadata."""
+        try:
+            collection = self.vectorstore._collection
+            result = collection.get(include=["metadatas"])
+            metadatas = result.get("metadatas", [])
+
+            # Aggregate per unique source
+            file_map: Dict[str, Dict[str, Any]] = {}
+            for meta in metadatas:
+                src = meta.get("source", "")
+                if not src:
+                    continue
+                if src not in file_map:
+                    file_map[src] = {
+                        "name": src,
+                        "file_type": meta.get("file_type", os.path.splitext(src)[1] or ".pdf"),
+                        "chunk_count": 0,
+                        "indexed_at": meta.get("indexed_at", ""),
+                        "parser_type": meta.get("parser_type", "docling"),
+                    }
+                file_map[src]["chunk_count"] += 1
+
+            return list(file_map.values())
+        except Exception as e:
+            logger.error(f"Error listing indexed files: {e}")
+            return []
+
+    def delete_source(self, filename: str) -> bool:
+        """Remove a source completely: delete its chunks from ChromaDB and the PDF from disk."""
+        try:
+            # 1. Find all chunk IDs belonging to this source
+            collection = self.vectorstore._collection
+            result = collection.get(
+                where={"source": filename},
+                include=["metadatas"],
+            )
+            ids_to_delete = result.get("ids", [])
+
+            if ids_to_delete:
+                collection.delete(ids=ids_to_delete)
+                logger.info(f"Deleted {len(ids_to_delete)} chunks for '{filename}' from ChromaDB")
+
+            # 2. Delete the PDF file from uploads directory
+            upload_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data", "uploads",
+            )
+            file_path = os.path.join(upload_dir, filename)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Deleted file: {file_path}")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting source '{filename}': {e}")
+            return False
+
+    def reset_rag(self) -> bool:
+        """Permanently delete all indexed chunks from ChromaDB and all uploaded PDFs."""
+        try:
+            # 1. Clear ChromaDB
+            # We can retrieve all IDs and delete them
+            collection = self.vectorstore._collection
+            result = collection.get(include=["metadatas"])
+            all_ids = result.get("ids", [])
+            
+            if all_ids:
+                collection.delete(ids=all_ids)
+                logger.info(f"Deleted all {len(all_ids)} chunks from ChromaDB")
+
+            # 2. Clear Uploads directory
+            upload_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "data", "uploads",
+            )
+            if os.path.exists(upload_dir):
+                for filename in os.listdir(upload_dir):
+                    file_path = os.path.join(upload_dir, filename)
+                    try:
+                        if os.path.isfile(file_path):
+                            os.unlink(file_path)
+                    except Exception as e:
+                        logger.error(f"Failed to delete {file_path}: {e}")
+                logger.info("Cleared all files from uploads directory.")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error resetting RAG data: {e}")
+            return False
 
     # --- Helper Methods (Logic preserved from notebook) ---
 
@@ -287,40 +412,34 @@ Answer:"""
         except:
             return None, []
 
-    def _extract_with_pymupdf4llm(self, pdf_path):
+    def _extract_with_pymupdf(self, pdf_path):
+        """Fast PDF extraction using PyMuPDF (fitz)
+
+        Uses plain text extraction for maximum compatibility.
+        Much faster than Docling but without table structure detection.
+        """
         try:
-            import pymupdf4llm
+            import fitz  # PyMuPDF
 
-            pages = pymupdf4llm.to_markdown(
-                pdf_path, page_chunks=True, force_text=True, show_progress=False
-            )
-            return "\n\n".join([p.get("text", "") for p in pages])
-        except:
-            return None
-
-    def _extract_tables_pdfplumber(self, pdf_path):
-        try:
-            import pdfplumber
-
+            text_parts = []
             tables = []
-            with pdfplumber.open(pdf_path) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
-                    for t in page.extract_tables():
-                        if t and len(t) > 1:
-                            md = (
-                                "| " + " | ".join([str(c or "") for c in t[0]]) + " |\n"
-                            )
-                            md += "| " + " | ".join(["---"] * len(t[0])) + " |\n"
-                            for row in t[1:]:
-                                md += (
-                                    "| "
-                                    + " | ".join([str(c or "") for c in row])
-                                    + " |\n"
-                                )
-                            tables.append({"content": md, "page": page_num})
-            return tables
-        except:
-            return []
+
+            doc = fitz.open(pdf_path)
+            for page_num, page in enumerate(doc):
+                text = page.get_text("text")
+                if text.strip():
+                    text_parts.append(text)
+
+            doc.close()
+
+            full_text = "\n\n".join(text_parts)
+            if not full_text.strip():
+                logger.warning(f"PyMuPDF extracted empty text from {pdf_path}")
+                return None, []
+            return full_text, tables
+        except Exception as e:
+            logger.warning(f"PyMuPDF extraction failed for {pdf_path}: {e}")
+            return None, []
 
     def _detect_sections(self, text):
         lines = text.split("\n")

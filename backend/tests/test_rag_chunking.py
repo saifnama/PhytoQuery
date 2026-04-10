@@ -64,3 +64,119 @@ def test_section_detection_boundaries(service):
     assert sections[0]["title"] == "Header 1"
     assert sections[1]["title"] == "Header 2"
     assert "List Header" in sections[2]["title"]
+
+
+def test_process_pdf_uses_docling_only(service, monkeypatch, tmp_path):
+    """PDF processing should rely on Docling output only."""
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    monkeypatch.setattr(
+        service,
+        "_extract_with_docling",
+        lambda path: (
+            "# Methods\nDocling extracted content.",
+            [{"content": "| A |\n| --- |\n| 1 |", "page": 1}],
+        ),
+    )
+
+    docs = service._process_pdf(str(pdf_path))
+
+    assert docs
+    assert any(doc.metadata.get("content_type") == "table" for doc in docs)
+    assert any("Docling extracted content." in doc.page_content for doc in docs)
+
+
+def test_process_pdf_returns_empty_when_docling_extracts_no_text(
+    service, monkeypatch, tmp_path
+):
+    """Without Docling text, the docling-only pipeline should return no chunks."""
+    pdf_path = tmp_path / "empty.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    monkeypatch.setattr(service, "_extract_with_docling", lambda path: (None, []))
+
+    docs = service._process_pdf(str(pdf_path))
+
+    assert docs == []
+
+
+def test_process_and_index_pdfs_accepts_parser_type(service, monkeypatch, tmp_path):
+    """process_and_index_pdfs should accept parser_type parameter."""
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    # Track which extractor was called
+    extractors_used = []
+
+    def mock_docling(path):
+        extractors_used.append("docling")
+        return "# Test\nContent from docling.", []
+
+    def mock_pymupdf(path):
+        extractors_used.append("pymupdf")
+        return "Content from pymupdf.", []
+
+    monkeypatch.setattr(service, "_extract_with_docling", mock_docling)
+    monkeypatch.setattr(service, "_extract_with_pymupdf", mock_pymupdf)
+    monkeypatch.setattr(service.vectorstore, "add_documents", lambda docs: None)
+
+    # Test with docling (default)
+    service.process_and_index_pdfs([str(pdf_path)], parser_type="docling")
+    assert "docling" in extractors_used
+
+    # Reset and test with pymupdf
+    extractors_used.clear()
+    service.process_and_index_pdfs([str(pdf_path)], parser_type="pymupdf")
+    assert "pymupdf" in extractors_used
+
+
+def test_process_pdf_uses_pymupdf_when_selected(service, monkeypatch, tmp_path):
+    """When parser_type is pymupdf, _extract_with_pymupdf should be used."""
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    called = {"pymupdf": False, "docling": False}
+
+    def mock_pymupdf(path):
+        called["pymupdf"] = True
+        return "PyMuPDF text.", []
+
+    def mock_docling(path):
+        called["docling"] = True
+        return "Docling text.", []
+
+    monkeypatch.setattr(service, "_extract_with_pymupdf", mock_pymupdf)
+    monkeypatch.setattr(service, "_extract_with_docling", mock_docling)
+
+    # Set parser to pymupdf
+    service._current_parser = "pymupdf"
+    docs = service._process_pdf(str(pdf_path))
+
+    assert called["pymupdf"] is True
+    assert called["docling"] is False
+    assert len(docs) > 0
+    assert docs[0].metadata.get("parser_type") == "pymupdf"
+
+
+def test_process_pdf_metadata_includes_parser_type(service, monkeypatch, tmp_path):
+    """Document metadata should include parser_type."""
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 mock")
+
+    monkeypatch.setattr(
+        service, "_extract_with_docling", lambda path: ("Test content.", [])
+    )
+    monkeypatch.setattr(
+        service, "_extract_with_pymupdf", lambda path: ("Test content.", [])
+    )
+
+    # Test docling metadata
+    service._current_parser = "docling"
+    docs = service._process_pdf(str(pdf_path))
+    assert docs[0].metadata.get("parser_type") == "docling"
+
+    # Test pymupdf metadata
+    service._current_parser = "pymupdf"
+    docs = service._process_pdf(str(pdf_path))
+    assert docs[0].metadata.get("parser_type") == "pymupdf"
