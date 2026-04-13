@@ -1,6 +1,6 @@
 """
 RAG Configuration
-==================
+=================
 Retrieval-Augmented Generation settings and providers.
 """
 
@@ -10,8 +10,13 @@ import os
 # OPENROUTER (Primary for RAG)
 # =============================================================================
 
-RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "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")
-RAG_OPENROUTER_MODEL = os.getenv("RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+RAG_OPENROUTER_API_KEY = os.getenv(
+    "RAG_OPENROUTER_API_KEY",
+    "",
+)
+RAG_OPENROUTER_MODEL = os.getenv(
+    "RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
+)
 
 # =============================================================================
 # OLLAMA (Fallback for RAG)

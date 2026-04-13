@@ -170,6 +170,29 @@ const RagPage: React.FC = () => {
     loadIndexedFiles();
   }, [loadIndexedFiles]);
 
+  // Cleanup user data when user closes/refreshes the page
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      // Call cleanup endpoint when user closes the page
+      try {
+        await ragApi.cleanupUserData();
+      } catch (e) {
+        // Ignore errors during cleanup - don't block page unload
+        console.log('User data cleanup on close');
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    // Also handle pagehide for mobile browsers
+    window.addEventListener('pagehide', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, []);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };

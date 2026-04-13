@@ -160,11 +160,6 @@ class RAGService:
             model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
-        self.vectorstore = Chroma(
-            persist_directory=config.chroma_dir,
-            embedding_function=self.embeddings,
-            collection_name="research_docs",
-        )
         self.llm = OllamaLLM(
             base_url=LLM_PROVIDER.get("url", "").replace("/api/chat", ""),
             model=LLM_PROVIDER["model"],
@@ -173,19 +168,49 @@ class RAGService:
             provider=LLM_PROVIDER["provider"],
             api_key=LLM_PROVIDER.get("api_key"),
         )
-        self.retriever = self.vectorstore.as_retriever(
-            search_kwargs={"k": config.top_k}
+        # Cache for per-user vectorstores
+        self._vectorstore_cache: Dict[str, Chroma] = {}
+
+    def _get_user_collection(self, user_id: str) -> Chroma:
+        """Get or create a ChromaDB collection for a specific user."""
+        if user_id in self._vectorstore_cache:
+            return self._vectorstore_cache[user_id]
+
+        # Create user-specific collection
+        # Sanitize user_id for collection name (alphanumeric + underscore only)
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+        collection_name = f"user_{safe_user_id}"
+
+        # User-specific persist directory
+        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
+        os.makedirs(user_chroma_dir, exist_ok=True)
+
+        vectorstore = Chroma(
+            persist_directory=user_chroma_dir,
+            embedding_function=self.embeddings,
+            collection_name=collection_name,
         )
 
+        self._vectorstore_cache[user_id] = vectorstore
+        logger.info(f"Created ChromaDB collection for user: {user_id}")
+        return vectorstore
+
     def process_and_index_pdfs(
-        self, pdf_paths: List[str], parser_type: str = "docling"
+        self,
+        pdf_paths: List[str],
+        parser_type: str = "docling",
+        user_id: str = "default",
     ):
-        """Extract, chunk, and index PDFs.
+        """Extract, chunk, and index PDFs for a specific user.
 
         Args:
             pdf_paths: List of PDF file paths to process
-            parser_type: "pymupdf" for fast extraction, "docling" for detailed (default: "docling")
+            parser_type: "pymupdf" for fast extraction, "docling" for detailed
+            user_id: Unique identifier for the user (isolates their documents)
         """
+        # Get user's vector store
+        vectorstore = self._get_user_collection(user_id)
+
         # Store parser type for use in _process_pdf
         self._current_parser = (
             parser_type if parser_type in ("pymupdf", "docling") else "docling"
@@ -193,14 +218,14 @@ class RAGService:
 
         all_docs = []
         for path in pdf_paths:
-            docs = self._process_pdf(path)
+            docs = self._process_pdf(path, user_id=user_id)
             all_docs.extend(docs)
 
         if all_docs:
-            self.vectorstore.add_documents(all_docs)
+            vectorstore.add_documents(all_docs)
         return [os.path.basename(p) for p in pdf_paths]
 
-    def _process_pdf(self, pdf_path: str) -> List[Document]:
+    def _process_pdf(self, pdf_path: str, user_id: str = "default") -> List[Document]:
         """PDF processing pipeline (Preserved from notebook)"""
         source = os.path.basename(pdf_path)
 
@@ -239,23 +264,30 @@ class RAGService:
         return documents
 
     async def query(
-        self, question: str, filter_files: Optional[List[str]] = None
+        self,
+        question: str,
+        filter_files: Optional[List[str]] = None,
+        user_id: str = "default",
     ) -> Dict[str, Any]:
         """Query the RAG pipeline with optional source filtering.
 
         Args:
             question: The user's natural language question.
             filter_files: If provided, only search chunks from these source filenames.
+            user_id: User identifier to isolate their documents.
         """
+        vectorstore = self._get_user_collection(user_id)
+
         # Use filtered search if specific files are selected
         if filter_files:
-            docs = self.vectorstore.similarity_search(
+            docs = vectorstore.similarity_search(
                 question,
                 k=config.top_k,
                 filter={"source": {"$in": filter_files}},
             )
         else:
-            docs = self.retriever.invoke(question)
+            retriever = vectorstore.as_retriever(search_kwargs={"k": config.top_k})
+            docs = retriever.invoke(question)
 
         context_parts = []
         sources = []
@@ -286,10 +318,11 @@ Answer:"""
         response = await self.llm.invoke(prompt)
         return {"answer": response.content.strip(), "sources": sources}
 
-    def list_indexed_files(self) -> List[Dict[str, Any]]:
-        """Query ChromaDB for all unique indexed source files and their metadata."""
+    def list_indexed_files(self, user_id: str = "default") -> List[Dict[str, Any]]:
+        """Query ChromaDB for all unique indexed source files for a specific user."""
         try:
-            collection = self.vectorstore._collection
+            vectorstore = self._get_user_collection(user_id)
+            collection = vectorstore._collection
             result = collection.get(include=["metadatas"])
             metadatas = result.get("metadatas", [])
 
@@ -302,7 +335,9 @@ Answer:"""
                 if src not in file_map:
                     file_map[src] = {
                         "name": src,
-                        "file_type": meta.get("file_type", os.path.splitext(src)[1] or ".pdf"),
+                        "file_type": meta.get(
+                            "file_type", os.path.splitext(src)[1] or ".pdf"
+                        ),
                         "chunk_count": 0,
                         "indexed_at": meta.get("indexed_at", ""),
                         "parser_type": meta.get("parser_type", "docling"),
@@ -310,15 +345,16 @@ Answer:"""
                 file_map[src]["chunk_count"] += 1
 
             return list(file_map.values())
+
         except Exception as e:
             logger.error(f"Error listing indexed files: {e}")
             return []
 
-    def delete_source(self, filename: str) -> bool:
-        """Remove a source completely: delete its chunks from ChromaDB and the PDF from disk."""
+    def delete_source(self, filename: str, user_id: str = "default") -> bool:
+        """Remove a source completely for a specific user: delete its chunks from ChromaDB."""
         try:
-            # 1. Find all chunk IDs belonging to this source
-            collection = self.vectorstore._collection
+            vectorstore = self._get_user_collection(user_id)
+            collection = vectorstore._collection
             result = collection.get(
                 where={"source": filename},
                 include=["metadatas"],
@@ -327,54 +363,68 @@ Answer:"""
 
             if ids_to_delete:
                 collection.delete(ids=ids_to_delete)
-                logger.info(f"Deleted {len(ids_to_delete)} chunks for '{filename}' from ChromaDB")
-
-            # 2. Delete the PDF file from uploads directory
-            upload_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "data", "uploads",
-            )
-            file_path = os.path.join(upload_dir, filename)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Deleted file: {file_path}")
+                logger.info(
+                    f"Deleted {len(ids_to_delete)} chunks for '{filename}' from user {user_id}'s ChromaDB"
+                )
 
             return True
         except Exception as e:
             logger.error(f"Error deleting source '{filename}': {e}")
             return False
 
-    def reset_rag(self) -> bool:
-        """Permanently delete all indexed chunks from ChromaDB and all uploaded PDFs."""
+    def reset_rag(self, user_id: str = "default") -> bool:
+        """Permanently delete all indexed chunks from a specific user's ChromaDB."""
         try:
-            # 1. Clear ChromaDB
-            # We can retrieve all IDs and delete them
-            collection = self.vectorstore._collection
+            vectorstore = self._get_user_collection(user_id)
+            collection = vectorstore._collection
             result = collection.get(include=["metadatas"])
             all_ids = result.get("ids", [])
-            
+
             if all_ids:
                 collection.delete(ids=all_ids)
-                logger.info(f"Deleted all {len(all_ids)} chunks from ChromaDB")
-
-            # 2. Clear Uploads directory
-            upload_dir = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "data", "uploads",
-            )
-            if os.path.exists(upload_dir):
-                for filename in os.listdir(upload_dir):
-                    file_path = os.path.join(upload_dir, filename)
-                    try:
-                        if os.path.isfile(file_path):
-                            os.unlink(file_path)
-                    except Exception as e:
-                        logger.error(f"Failed to delete {file_path}: {e}")
-                logger.info("Cleared all files from uploads directory.")
+                logger.info(f"Deleted all {len(all_ids)} chunks for user {user_id}")
 
             return True
         except Exception as e:
-            logger.error(f"Error resetting RAG data: {e}")
+            logger.error(f"Error resetting RAG data for user {user_id}: {e}")
+            return False
+
+    def cleanup_user(self, user_id: str) -> bool:
+        """Clean up all data for a user when they close their browser.
+        Deletes: ChromaDB collection folder + uploads folder for this user."""
+        try:
+            # 1. Delete user's ChromaDB folder
+            safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+            user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
+            if os.path.exists(user_chroma_dir):
+                import shutil
+
+                shutil.rmtree(user_chroma_dir)
+                logger.info(f"Deleted ChromaDB folder: {user_chroma_dir}")
+
+            # 2. Remove from cache
+            if user_id in self._vectorstore_cache:
+                del self._vectorstore_cache[user_id]
+
+            # 3. Delete user's uploads folder
+            upload_dir = os.path.join(
+                os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                ),
+                "data",
+                "uploads",
+                safe_user_id,
+            )
+            if os.path.exists(upload_dir):
+                import shutil
+
+                shutil.rmtree(upload_dir)
+                logger.info(f"Deleted uploads folder: {upload_dir}")
+
+            logger.info(f"Cleaned up all data for user: {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error cleaning up user {user_id}: {e}")
             return False
 
     # --- Helper Methods (Logic preserved from notebook) ---

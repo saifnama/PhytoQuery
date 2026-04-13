@@ -1,6 +1,6 @@
 """
 NER Configuration
-================
+=================
 Named Entity Recognition settings and providers.
 """
 
@@ -10,7 +10,9 @@ import os
 # OLLAMA (Primary for NER)
 # =============================================================================
 
-NER_OLLAMA_URL = os.getenv("NER_OLLAMA_URL", "https://garcia-new-stress-effective.trycloudflare.com")
+NER_OLLAMA_URL = os.getenv(
+    "NER_OLLAMA_URL", "https://trycloudflare.com"
+)
 NER_OLLAMA_MODEL = os.getenv("NER_OLLAMA_MODEL", "llama3.1:8b")
 
 # =============================================================================
