@@ -74,3 +74,66 @@ async def process_doi_json(
     response = NERResponse(doi=doi, mode=mode, text=text[:1000], entities=entities)
     ner_cache.set(doi, {"entities": response.dict(), "summary": summary})
     return response
+
+
+# --- Molecular Structure Image Endpoint ---
+
+
+@router.get("/molecule/image")
+async def get_molecule_image(
+    smiles: str,
+    width: int = 300,
+    height: int = 200,
+):
+    """
+    Generate a molecular structure image from a SMILES string.
+    
+    Args:
+        smiles: SMILES string representing the molecule
+        width: Image width in pixels (default 300)
+        height: Image height in pixels (default 200)
+    
+    Returns:
+        JSON with base64-encoded PNG image
+    """
+    from backend.core.rdkit_utils import smiles_to_image_base64
+    
+    image_b64 = smiles_to_image_base64(
+        smiles=smiles,
+        width=width,
+        height=height
+    )
+    
+    if not image_b64:
+        raise HTTPException(status_code=400, detail="Invalid SMILES string")
+    
+    return {
+        "smiles": smiles,
+        "image": image_b64,
+        "width": width,
+        "height": height
+    }
+
+
+@router.get("/molecule/info")
+async def get_molecule_info(smiles: str):
+    """
+    Get molecular information from a SMILES string.
+    
+    Args:
+        smiles: SMILES string
+    
+    Returns:
+        JSON with molecular weight, formula, etc.
+    """
+    from backend.core.rdkit_utils import get_mol_info
+    
+    info = get_mol_info(smiles)
+    
+    if not info:
+        raise HTTPException(status_code=400, detail="Invalid SMILES string")
+    
+    return {
+        "smiles": smiles,
+        **info
+    }

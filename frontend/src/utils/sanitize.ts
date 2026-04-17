@@ -13,7 +13,18 @@ export function sanitizeHtml(html: string): string {
   // Allow server-side attributes; allow data-rid and data-entity across all tags
   const PURIFY_CONFIG: any = {
     ALLOWED_TAGS,
-    ADD_ATTR: ['data-rid','data-entity'],
+    ADD_ATTR: [
+      'data-rid',
+      'data-entity',
+      // Species metadata attributes from highlighter
+      'data-accepted-scientific-name',
+      'data-scientific-name-verified',
+      'data-common-name',
+      'data-name-type',
+      'data-taxon-id',
+      'data-source-db',
+      'data-source-url',
+    ],
   };
   try {
     // dompurify expects to be called as DOMPurify.sanitize(html, config)

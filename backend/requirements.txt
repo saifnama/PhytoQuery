@@ -18,6 +18,7 @@ python-multipart==0.0.6
 numpy<2.0
 pandas
 pymupdf
+rank-bm25>=0.2.2
 openpyxl
 tqdm
 httpx==0.25.1

@@ -77,10 +77,25 @@ async def upload_pdfs_json(
         indexed_files = service.process_and_index_pdfs(
             saved_paths, parser_type=parser_type, user_id=user_id
         )
+
+        # Generate summaries for each uploaded file
+        summaries = {}
+        for path in saved_paths:
+            filename = os.path.basename(path)
+            extracted_text = getattr(service, '_last_extracted_text', '')
+            if extracted_text:
+                try:
+                    summary = await service.summarize_document(extracted_text, filename)
+                    if summary:
+                        summaries[filename] = summary
+                except Exception as e:
+                    logger.warning(f"Summary generation failed for {filename}: {e}")
+
         return UploadResponse(
             status="success",
             message=f"Successfully indexed {len(indexed_files)} files using {parser_type}",
             files=indexed_files,
+            summaries=summaries if summaries else None,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
@@ -151,8 +166,16 @@ async def query_rag_json(
 ):
     user_id = get_user_id(x_user_id)
     try:
+        # Convert chat_history from Pydantic models to dicts
+        history = None
+        if request.chat_history:
+            history = [{"role": m.role, "content": m.content} for m in request.chat_history]
+
         result = await service.query(
-            request.query, filter_files=request.selected_files, user_id=user_id
+            request.query,
+            filter_files=request.selected_files,
+            user_id=user_id,
+            chat_history=history,
         )
         return QueryResponse(**result)
     except Exception as e:

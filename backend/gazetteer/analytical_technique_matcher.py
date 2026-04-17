@@ -78,8 +78,8 @@ class AnalyticalTechniqueMatcher:
             reader = csv.reader(f)
             headers = next(reader, [])
 
-            # Check for aliases column
-            has_aliases = headers and len(headers) > 1 and "alias" in headers[1].lower()
+            # Check for synonyms column (term,synonyms format)
+            has_synonyms = headers and len(headers) > 1 and "synonym" in headers[1].lower()
 
             for row in reader:
                 if not row or not row[0].strip():
@@ -92,11 +92,11 @@ class AnalyticalTechniqueMatcher:
                 # Primary term
                 terms.append(row[0].strip().lower())
 
-                # Aliases from second column
-                if has_aliases and len(row) > 1 and row[1].strip():
-                    for alias in row[1].strip().split("|"):
-                        if alias.strip():
-                            terms.append(alias.strip().lower())
+                # Synonyms from second column
+                if has_synonyms and len(row) > 1 and row[1].strip():
+                    for synonym in row[1].strip().split("|"):
+                        if synonym.strip():
+                            terms.append(synonym.strip().lower())
 
         # Deduplicate
         terms = list(set(terms))

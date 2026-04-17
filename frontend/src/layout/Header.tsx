@@ -11,7 +11,7 @@ const Header: React.FC<HeaderProps> = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const isResearch = location.pathname === '/';
+  const isSearch = location.pathname === '/';
   const isChat = location.pathname === '/chat';
 
   return (
@@ -30,13 +30,13 @@ const Header: React.FC<HeaderProps> = ({
           <button
             onClick={() => navigate('/')}
             className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              isResearch
+              isSearch
                 ? 'bg-white text-blue-600 shadow-sm'
                 : 'text-slate-500 hover:text-slate-700'
             }`}
           >
             <MagnifyingGlass size={18} weight="bold" />
-            <span>Research</span>
+            <span>Search</span>
           </button>
           <button
             onClick={() => navigate('/chat')}

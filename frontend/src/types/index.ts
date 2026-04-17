@@ -12,6 +12,21 @@ export interface Entity {
   score: number;
   canonical?: string;  // Normalized form for display (e.g., "seed" for "seeds")
   aliases?: string[];  // All variations for counting
+  name_type?: 'scientific' | 'common' | null;
+  linked_to?: string | null;
+  scientific_name_verified?: string;
+  accepted_scientific_name?: string;
+  common_name?: string;
+  source_db?: string;
+  source_url?: string;
+  taxon_id?: string;
+  match_status?: string;
+  review_required?: string;
+  // Chemical entity fields
+  preferred_name?: string;
+  inchikey?: string;
+  smiles?: string;
+  molecular_formula?: string;
 }
 
 export interface NERRequest {
@@ -25,20 +40,33 @@ export interface NERResponse {
   entities: Entity[];
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface QueryRequest {
   query: string;
   selected_files?: string[];
+  chat_history?: ChatMessage[];
 }
 
 export interface QueryResponse {
   answer: string;
-  sources: Record<string, unknown>[];
+  sources: {
+    source: string;
+    section: string;
+    parser_type: string;
+    score: number;
+    chunk_text: string;
+  }[];
 }
 
 export interface UploadResponse {
   status: string;
   message: string;
   files: string[];
+  summaries?: Record<string, string>;
 }
 
 export interface IndexedFileInfo {
@@ -47,6 +75,10 @@ export interface IndexedFileInfo {
   chunk_count: number;
   indexed_at: string;
   parser_type: string;
+  authors?: string;
+  doi?: string;
+  journal?: string;
+  summary?: string;
 }
 
 export interface Heading {
@@ -87,6 +119,10 @@ export interface PaperData {
   pmcid: string;
   // Summary of entities by label for sidebar counts
   summary?: Record<string, { text: string; count: number; avg_score: number }[]>;
+  entities?: Entity[];
+  is_extracted?: boolean;
+  fallback_source?: string;
+  fallback_url?: string;
   // Metadata from fallback sources (OpenAlex, Semantic Scholar, PubMed)
   authors?: string[];
   year?: number | null;

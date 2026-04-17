@@ -3,6 +3,148 @@ import { sanitizeHtml } from '../../utils/sanitize';
 import { PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 
+const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
+const CHEMICAL_SELECTOR = '.ent-chemical, .ent-drug, mark.ner-chemical, mark.ner-drug';
+const SPECIES_POPUP_WIDTH = 320;
+const SPECIES_POPUP_ESTIMATED_HEIGHT = 280;
+
+type SpeciesPopupData = {
+  primaryName: string;
+  acceptedScientificName?: string;
+  scientificNameVerified?: string;
+  commonName?: string;
+  canonical?: string;
+  sourceDb?: string;
+  sourceUrl?: string;
+  taxonId?: string;
+  matchStatus?: string;
+  reviewRequired?: string;
+  nameType?: Entity['name_type'];
+  metadataScore: number;
+};
+
+type SpeciesPopupState = {
+  species: SpeciesPopupData;
+  anchorText: string;
+  position: {
+    top: number;
+    left: number;
+  };
+};
+
+type ChemicalPopupData = {
+  primaryName: string;
+  preferredName?: string;
+  synonyms?: string[];
+  smiles?: string;
+  imageData?: string; // base64 encoded molecular structure image
+  inchikey?: string;
+  molecularFormula?: string;
+  sourceDb?: string;
+  sourceUrl?: string;
+};
+
+type ChemicalPopupState = {
+  chemical: ChemicalPopupData;
+  anchorText: string;
+  position: {
+    top: number;
+    left: number;
+  };
+};
+
+const stripHtml = (value?: string | null) => (value || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+const normalizeLookupText = (value?: string | null) => stripHtml(value).toLowerCase();
+
+const getSpeciesPrimaryName = (entity: Entity) => {
+  const acceptedScientificName = stripHtml(entity.accepted_scientific_name);
+  const verifiedScientificName = stripHtml(entity.scientific_name_verified);
+  const canonicalName = stripHtml(entity.canonical);
+  const commonName = stripHtml(entity.common_name);
+  const cleanText = stripHtml(entity.text);
+
+  if (acceptedScientificName) return acceptedScientificName;
+  if (verifiedScientificName) return verifiedScientificName;
+  if (entity.name_type === 'scientific' && canonicalName) return canonicalName;
+  if (canonicalName && normalizeLookupText(canonicalName) !== normalizeLookupText(commonName)) {
+    return canonicalName;
+  }
+  return canonicalName || cleanText;
+};
+
+const getSpeciesMetadataScore = (entity: Entity) => {
+  let score = 0;
+  if (stripHtml(entity.accepted_scientific_name)) score += 32;
+  if (stripHtml(entity.scientific_name_verified)) score += 16;
+  if (entity.name_type === 'scientific') score += 8;
+  if (stripHtml(entity.common_name)) score += 4;
+  if (stripHtml(entity.canonical)) score += 2;
+  if (stripHtml(entity.source_db)) score += 2;
+  if (stripHtml(entity.source_url)) score += 2;
+  if (stripHtml(entity.taxon_id)) score += 2;
+  if (stripHtml(entity.match_status)) score += 1;
+  if (stripHtml(entity.review_required)) score += 1;
+  return score;
+};
+
+const pickBetterSpeciesRepresentative = (current: Entity, candidate: Entity) => {
+  const currentScore = getSpeciesMetadataScore(current);
+  const candidateScore = getSpeciesMetadataScore(candidate);
+
+  if (candidateScore > currentScore) return candidate;
+  if (candidateScore < currentScore) return current;
+
+  return stripHtml(candidate.text).length > stripHtml(current.text).length ? candidate : current;
+};
+
+const getSpeciesAliasList = (entity: Entity) => {
+  const aliasSet = new Set<string>();
+  const addAlias = (value?: string | null) => {
+    const cleaned = stripHtml(value);
+    if (cleaned) aliasSet.add(cleaned);
+  };
+
+  addAlias(entity.text);
+  addAlias(entity.accepted_scientific_name);
+  addAlias(entity.scientific_name_verified);
+  addAlias(entity.canonical);
+  addAlias(entity.common_name);
+  (entity.aliases || []).forEach((alias) => addAlias(alias));
+
+  return Array.from(aliasSet);
+};
+
+const buildSpeciesPopupData = (entity: Entity): SpeciesPopupData => ({
+  primaryName: getSpeciesPrimaryName(entity),
+  acceptedScientificName: stripHtml(entity.accepted_scientific_name) || undefined,
+  scientificNameVerified: stripHtml(entity.scientific_name_verified) || undefined,
+  commonName: stripHtml(entity.common_name) || undefined,
+  canonical: stripHtml(entity.canonical) || undefined,
+  sourceDb: stripHtml(entity.source_db) || undefined,
+  sourceUrl: stripHtml(entity.source_url) || undefined,
+  taxonId: stripHtml(entity.taxon_id) || undefined,
+  matchStatus: stripHtml(entity.match_status) || undefined,
+  reviewRequired: stripHtml(entity.review_required) || undefined,
+  nameType: entity.name_type ?? undefined,
+  metadataScore: getSpeciesMetadataScore(entity),
+});
+
+const getSpeciesPopupPosition = (anchor: HTMLElement) => {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const top = rect.bottom + SPECIES_POPUP_ESTIMATED_HEIGHT + margin <= window.innerHeight
+    ? rect.bottom + 10
+    : Math.max(margin, rect.top - SPECIES_POPUP_ESTIMATED_HEIGHT - 10);
+  const centeredLeft = rect.left + rect.width / 2 - SPECIES_POPUP_WIDTH / 2;
+  const left = Math.min(
+    Math.max(margin, centeredLeft),
+    Math.max(margin, window.innerWidth - SPECIES_POPUP_WIDTH - margin)
+  );
+
+  return { top, left };
+};
+
 
 interface PaperViewerProps {
   doi: string;
@@ -23,7 +165,19 @@ interface PaperViewerProps {
 }
 
 interface GroupedEntities {
-  [label: string]: { text: string; count: number; aliases: string[] }[];
+  [label: string]: {
+    text: string;
+    count: number;
+    aliases: string[];
+    subtitle?: string;
+    // Chemical metadata
+    preferred_name?: string;
+    inchikey?: string;
+    smiles?: string;
+    molecular_formula?: string;
+    source_db?: string;
+    source_url?: string;
+  }[];
 }
 
 const PaperViewer: React.FC<PaperViewerProps> = ({
@@ -46,8 +200,205 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
   const [entitySearch, setEntitySearch] = useState('');
+  const [expandedChemical, setExpandedChemical] = useState<string | null>(null);
+  const [activeSpeciesPopup, setActiveSpeciesPopup] = useState<SpeciesPopupState | null>(null);
+  const [activeChemicalPopup, setActiveChemicalPopup] = useState<ChemicalPopupState | null>(null);
   const htmlContainerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const speciesPopupRef = useRef<HTMLDivElement>(null);
+  const chemicalPopupRef = useRef<HTMLDivElement>(null);
+  const activeSpeciesAnchorRef = useRef<HTMLElement | null>(null);
+  const activeChemicalAnchorRef = useRef<HTMLElement | null>(null);
+
+  const closeSpeciesPopup = useCallback(() => {
+    activeSpeciesAnchorRef.current = null;
+    setActiveSpeciesPopup(null);
+  }, []);
+
+  const closeChemicalPopup = useCallback(() => {
+    activeChemicalAnchorRef.current = null;
+    setActiveChemicalPopup(null);
+  }, []);
+
+  const speciesLookup = useMemo(() => {
+    const groupedSpecies = new Map<string, { representative: Entity; aliases: Set<string> }>();
+
+    entities.forEach((entity) => {
+      if (entity.label !== 'SPECIES') return;
+
+      const groupKey = normalizeLookupText(getSpeciesPrimaryName(entity))
+        || normalizeLookupText(entity.canonical)
+        || normalizeLookupText(entity.text);
+
+      if (!groupKey) return;
+
+      const existingGroup = groupedSpecies.get(groupKey);
+      if (!existingGroup) {
+        groupedSpecies.set(groupKey, {
+          representative: entity,
+          aliases: new Set(getSpeciesAliasList(entity)),
+        });
+        return;
+      }
+
+      existingGroup.representative = pickBetterSpeciesRepresentative(existingGroup.representative, entity);
+      // Merge ALL aliases from both entities (not just new ones)
+      const allAliases = new Set([
+        ...getSpeciesAliasList(existingGroup.representative),
+        ...getSpeciesAliasList(entity)
+      ]);
+      existingGroup.aliases = allAliases;
+    });
+
+    const lookup = new Map<string, SpeciesPopupData>();
+
+    groupedSpecies.forEach(({ representative, aliases }) => {
+      const speciesData = buildSpeciesPopupData(representative);
+
+      // Add ALL aliases to lookup so popup works regardless of which variant is clicked
+      aliases.forEach((alias) => {
+        const normalizedAlias = normalizeLookupText(alias);
+        if (!normalizedAlias) return;
+
+        const existing = lookup.get(normalizedAlias);
+        if (!existing || speciesData.metadataScore > existing.metadataScore) {
+          lookup.set(normalizedAlias, speciesData);
+        }
+      });
+      
+      // Also add the primary name itself
+      const primaryName = normalizeLookupText(speciesData.primaryName);
+      if (primaryName) {
+        const existing = lookup.get(primaryName);
+        if (!existing || speciesData.metadataScore > existing.metadataScore) {
+          lookup.set(primaryName, speciesData);
+        }
+      }
+    });
+
+    return lookup;
+  }, [entities]);
+
+  const openSpeciesPopup = useCallback((target: HTMLElement) => {
+    const lookupKey = target.dataset.speciesLookupKey;
+    if (!lookupKey) return;
+
+    const species = speciesLookup.get(lookupKey);
+    if (!species) return;
+
+    activeSpeciesAnchorRef.current = target;
+    setActiveSpeciesPopup({
+      species,
+      anchorText: stripHtml(target.textContent),
+      position: getSpeciesPopupPosition(target),
+    });
+  }, [speciesLookup]);
+
+  // Chemical lookup map - handles both CHEMICAL and DRUG labels (LLM might label compounds as DRUG)
+  const chemicalLookup = useMemo(() => {
+    const groupedChemicals = new Map<string, { representative: Entity; aliases: Set<string> }>();
+    
+    entities.forEach((entity) => {
+      if (entity.label !== 'CHEMICAL' && entity.label !== 'DRUG') return;
+      
+      const groupKey = normalizeLookupText(entity.canonical || entity.text);
+      if (!groupKey) return;
+      
+      const existingGroup = groupedChemicals.get(groupKey);
+      if (!existingGroup) {
+        groupedChemicals.set(groupKey, {
+          representative: entity,
+          aliases: new Set((entity.aliases || []).map(a => stripHtml(a))),
+        });
+        return;
+      }
+      
+      // Keep the one with more metadata
+      const existingMetaCount = [existingGroup.representative.inchikey, existingGroup.representative.molecular_formula, existingGroup.representative.source_db, existingGroup.representative.smiles].filter(Boolean).length;
+      const newMetaCount = [entity.inchikey, entity.molecular_formula, entity.source_db, entity.smiles].filter(Boolean).length;
+      if (newMetaCount > existingMetaCount) {
+        groupedChemicals.set(groupKey, { representative: entity, aliases: existingGroup.aliases });
+      } else {
+        // Merge aliases even if not replacing
+        (entity.aliases || []).forEach((alias) => existingGroup.aliases.add(stripHtml(alias)));
+      }
+    });
+    
+    const lookup = new Map<string, ChemicalPopupData>();
+    
+    groupedChemicals.forEach(({ representative, aliases }) => {
+      // Use canonical if available, otherwise fall back to text
+      const keyText = representative.canonical || representative.text;
+      const normalizedText = normalizeLookupText(keyText);
+      if (!normalizedText) return;
+      
+      // Create popup data
+      const chemicalData: ChemicalPopupData = {
+        primaryName: keyText,  // Use the key text (canonical or text)
+        preferredName: stripHtml(representative.preferred_name) || undefined,
+        synonyms: Array.from(aliases).filter(a => normalizeLookupText(a) !== normalizedText),
+        smiles: stripHtml(representative.smiles) || undefined,
+        inchikey: stripHtml(representative.inchikey) || undefined,
+        molecularFormula: stripHtml(representative.molecular_formula) || undefined,
+        sourceDb: stripHtml(representative.source_db) || undefined,
+        sourceUrl: stripHtml(representative.source_url) || undefined,
+      };
+      
+      // Add the canonical/primary text
+      lookup.set(normalizedText, chemicalData);
+      
+      // Add all aliases so popup works when clicking any variant
+      aliases.forEach((alias) => {
+        const normalizedAlias = normalizeLookupText(alias);
+        if (normalizedAlias && normalizedAlias !== normalizedText) {
+          lookup.set(normalizedAlias, chemicalData);
+        }
+      });
+    });
+    
+    return lookup;
+  }, [entities]);
+
+  const openChemicalPopup = useCallback(async (target: HTMLElement) => {
+    // Try using the data attribute first (set during highlight), then fallback to text content
+    let lookupKey = target.dataset.chemicalLookupKey;
+    if (!lookupKey) {
+      lookupKey = normalizeLookupText(target.textContent);
+    }
+    if (!lookupKey) return;
+
+    // Try direct lookup, then fallback to trying all possible lookups
+    let chemical = chemicalLookup.get(lookupKey);
+    if (!chemical) {
+      // Try with raw text as fallback
+      const rawKey = normalizeLookupText(target.textContent || '');
+      chemical = chemicalLookup.get(rawKey);
+    }
+    if (!chemical) return;
+
+    // Fetch molecular structure image if SMILES is available
+    let imageData: string | undefined;
+    if (chemical.smiles) {
+      try {
+        const response = await fetch(`/api/ner/molecule/image?smiles=${encodeURIComponent(chemical.smiles)}&width=250&height=180`);
+        if (response.ok) {
+          const data = await response.json();
+          imageData = data.image;
+        }
+      } catch (e) {
+        console.error('Failed to fetch molecule image:', e);
+      }
+    }
+
+    const chemicalWithImage = { ...chemical, imageData };
+
+    activeChemicalAnchorRef.current = target;
+    setActiveChemicalPopup({
+      chemical: chemicalWithImage,
+      anchorText: stripHtml(target.textContent),
+      position: getSpeciesPopupPosition(target),
+    });
+  }, [chemicalLookup]);
 
   // Group entities by label and calculate true frequency from frontend HTML
   const groupedEntities = useCallback(() => {
@@ -63,22 +414,41 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     }
 
     // Group entities by normalized key but track all original texts
-    const uniqueEntities: Record<string, { label: string, originalTexts: Record<string, number>, aliases: Set<string> }> = {};
+    const uniqueEntities: Record<string, {
+      label: string;
+      originalTexts: Record<string, number>;
+      aliases: Set<string>;
+      representative: Entity;
+    }> = {};
 
     entities.forEach((entity) => {
       // Use canonical form from backend, or fallback to normalized text
-      const cleanText = entity.text.replace(/<[^>]+>/g, '').trim();
-      const canonicalForm = entity.canonical || cleanText.toLowerCase();
+      const cleanText = stripHtml(entity.text);
+      const canonicalForm = entity.label === 'SPECIES'
+        ? getSpeciesPrimaryName(entity)
+        : (stripHtml(entity.canonical) || cleanText);
       const lowerText = canonicalForm.toLowerCase();
       if (!uniqueEntities[lowerText]) {
         uniqueEntities[lowerText] = { 
           label: entity.label, 
           originalTexts: {},
-          aliases: new Set<string>()
+          aliases: new Set<string>(),
+          representative: entity,
         };
+      } else if (entity.label === 'SPECIES') {
+        uniqueEntities[lowerText].representative = pickBetterSpeciesRepresentative(
+          uniqueEntities[lowerText].representative,
+          entity
+        );
       }
-      (entity.aliases || []).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
-      uniqueEntities[lowerText].aliases.add(canonicalForm);
+
+      if (entity.label === 'SPECIES') {
+        getSpeciesAliasList(entity).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
+      } else {
+        (entity.aliases || []).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
+        uniqueEntities[lowerText].aliases.add(canonicalForm);
+      }
+
       // Store original text for display and frequency tracking
       uniqueEntities[lowerText].originalTexts[cleanText] = (uniqueEntities[lowerText].originalTexts[cleanText] || 0) + 1;
     });
@@ -127,8 +497,22 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       if (!grouped[data.label]) {
         grouped[data.label] = [];
       }
+      const representative = data.representative;
+      const displayText = data.label === 'SPECIES'
+        ? getSpeciesPrimaryName(representative)
+        : mostFrequentText;
+      // No subtitle for species - show only scientific name
+      const subtitle = undefined;
       // Use most frequent text form for display
-      grouped[data.label].push({ text: mostFrequentText, count: trueCount, aliases: aliasList });
+      const chemicalMeta = data.label === 'CHEMICAL' ? {
+        preferred_name: representative.preferred_name,
+        inchikey: representative.inchikey,
+        smiles: representative.smiles,
+        molecular_formula: representative.molecular_formula,
+        source_db: representative.source_db,
+        source_url: representative.source_url,
+      } : {};
+      grouped[data.label].push({ text: displayText, count: trueCount, aliases: aliasList, subtitle, ...chemicalMeta });
     });
 
     // Sort by count descending
@@ -142,7 +526,236 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const normalizedEntitySearch = entitySearch.trim().toLowerCase();
   useEffect(() => {
     setEntitySearch('');
-  }, [doi, html, isExtracted]);
+    closeSpeciesPopup();
+  }, [doi, html, isExtracted, closeSpeciesPopup]);
+
+  useEffect(() => {
+    const container = htmlContainerRef.current;
+    if (!container) return;
+
+    const speciesNodes = container.querySelectorAll<HTMLElement>(SPECIES_SELECTOR);
+    speciesNodes.forEach((node) => {
+      const lookupKey = normalizeLookupText(node.textContent);
+      const species = speciesLookup.get(lookupKey);
+
+      if (!species) {
+        node.removeAttribute('data-species-lookup-key');
+        node.removeAttribute('role');
+        node.removeAttribute('tabindex');
+        node.removeAttribute('aria-haspopup');
+        node.removeAttribute('aria-expanded');
+        return;
+      }
+
+      node.dataset.speciesLookupKey = lookupKey;
+      node.setAttribute('role', 'button');
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('aria-haspopup', 'dialog');
+      node.setAttribute('aria-expanded', activeSpeciesAnchorRef.current === node && activeSpeciesPopup ? 'true' : 'false');
+      node.setAttribute('title', species.primaryName);
+    });
+  }, [html, speciesLookup, activeSpeciesPopup]);
+
+  useEffect(() => {
+    const container = htmlContainerRef.current;
+    if (!container) return;
+
+    const handleSpeciesClick = (event: MouseEvent) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-species-lookup-key]');
+      if (!target || !container.contains(target)) return;
+
+      event.preventDefault();
+
+      if (activeSpeciesAnchorRef.current === target && activeSpeciesPopup) {
+        closeSpeciesPopup();
+        return;
+      }
+
+      openSpeciesPopup(target);
+    };
+
+    const handleSpeciesKeyDown = (event: KeyboardEvent) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-species-lookup-key]');
+      if (!target || !container.contains(target)) return;
+
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openSpeciesPopup(target);
+      }
+
+      if (event.key === 'Escape') {
+        closeSpeciesPopup();
+        target.blur();
+      }
+    };
+
+    container.addEventListener('click', handleSpeciesClick);
+    container.addEventListener('keydown', handleSpeciesKeyDown);
+
+    return () => {
+      container.removeEventListener('click', handleSpeciesClick);
+      container.removeEventListener('keydown', handleSpeciesKeyDown);
+    };
+  }, [activeSpeciesPopup, closeSpeciesPopup, openSpeciesPopup]);
+
+  useEffect(() => {
+    if (!activeSpeciesPopup) return;
+
+    const repositionPopup = () => {
+      const anchor = activeSpeciesAnchorRef.current;
+      if (!anchor) return;
+
+      const nextPosition = getSpeciesPopupPosition(anchor);
+      setActiveSpeciesPopup((current) => {
+        if (!current) return current;
+        if (current.position.top === nextPosition.top && current.position.left === nextPosition.left) {
+          return current;
+        }
+        return { ...current, position: nextPosition };
+      });
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (speciesPopupRef.current?.contains(target)) return;
+      if (activeSpeciesAnchorRef.current?.contains(target)) return;
+      closeSpeciesPopup();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeSpeciesPopup();
+      }
+    };
+
+    window.addEventListener('resize', repositionPopup);
+    window.addEventListener('scroll', repositionPopup, true);
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('resize', repositionPopup);
+      window.removeEventListener('scroll', repositionPopup, true);
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [activeSpeciesPopup, closeSpeciesPopup]);
+
+  // Chemical popup - add data attributes to highlighted chemicals
+  useEffect(() => {
+    const container = htmlContainerRef.current;
+    if (!container) return;
+
+    const chemicalNodes = container.querySelectorAll<HTMLElement>(CHEMICAL_SELECTOR);
+    chemicalNodes.forEach((node) => {
+      const lookupKey = normalizeLookupText(node.textContent);
+      const chemical = chemicalLookup.get(lookupKey);
+
+      // Fallback: try with text content directly if not found
+      const fallbackKey = normalizeLookupText(node.textContent || '');
+      const chemicalFallback = !chemical ? chemicalLookup.get(fallbackKey) : chemical;
+
+      if (!chemicalFallback) {
+        node.removeAttribute('data-chemical-lookup-key');
+        node.removeAttribute('role');
+        node.removeAttribute('tabindex');
+        node.removeAttribute('aria-haspopup');
+        node.removeAttribute('aria-expanded');
+        return;
+      }
+
+      node.dataset.chemicalLookupKey = lookupKey;
+      node.setAttribute('role', 'button');
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('aria-haspopup', 'dialog');
+      node.setAttribute('aria-expanded', activeChemicalAnchorRef.current === node && activeChemicalPopup ? 'true' : 'false');
+      node.setAttribute('title', chemicalFallback.primaryName);
+    });
+  }, [html, chemicalLookup, activeChemicalPopup]);
+
+  // Chemical popup click/key handlers
+  useEffect(() => {
+    const container = htmlContainerRef.current;
+    if (!container) return;
+
+    const handleChemicalClick = (event: MouseEvent) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key]');
+      if (!target || !container.contains(target)) return;
+
+      event.preventDefault();
+
+      if (activeChemicalAnchorRef.current === target && activeChemicalPopup) {
+        closeChemicalPopup();
+        return;
+      }
+
+      openChemicalPopup(target);
+    };
+
+    const handleChemicalKeyDown = (event: KeyboardEvent) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key]');
+      if (!target || !container.contains(target)) return;
+
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openChemicalPopup(target);
+      }
+
+      if (event.key === 'Escape') {
+        closeChemicalPopup();
+        target.blur();
+      }
+    };
+
+    container.addEventListener('click', handleChemicalClick);
+    container.addEventListener('keydown', handleChemicalKeyDown);
+
+    return () => {
+      container.removeEventListener('click', handleChemicalClick);
+      container.removeEventListener('keydown', handleChemicalKeyDown);
+    };
+  }, [activeChemicalPopup, closeChemicalPopup, openChemicalPopup]);
+
+  // Chemical popup repositioning
+  useEffect(() => {
+    if (!activeChemicalPopup) return;
+
+    const repositionPopup = () => {
+      const anchor = activeChemicalAnchorRef.current;
+      if (!anchor) return;
+
+      const nextPosition = getSpeciesPopupPosition(anchor);
+      setActiveChemicalPopup((current) => {
+        if (!current) return current;
+        return { ...current, position: nextPosition };
+      });
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (chemicalPopupRef.current?.contains(target)) return;
+      if (activeChemicalAnchorRef.current?.contains(target)) return;
+      closeChemicalPopup();
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeChemicalPopup();
+      }
+    };
+
+    window.addEventListener('resize', repositionPopup);
+    window.addEventListener('scroll', repositionPopup, true);
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('resize', repositionPopup);
+      window.removeEventListener('scroll', repositionPopup, true);
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [activeChemicalPopup, closeChemicalPopup]);
 
   const filteredGroupedEntities = useCallback(() => {
     const grouped = groupedEntities();
@@ -272,11 +885,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     { label: 'DEVELOPMENT STAGE', className: 'legend-development-stage' },
     { label: 'SEASON', className: 'legend-season' },
     { label: 'LOCATION', className: 'legend-location' },
-    { label: 'CHEMICAL ACTIVITY', className: 'legend-chemical-activity' },
+    { label: 'BIOACTIVITY', className: 'legend-bioactivity' },
     { label: 'ANALYTICAL TECHNIQUE', className: 'legend-analytical-technique' },
     { label: 'DISEASE', className: 'legend-disease' },
     { label: 'DRUG', className: 'legend-drug' },
-    { label: 'CHEMICAL LIGAND', className: 'legend-chemical-ligand' },
   ];
 
   return (
@@ -395,6 +1007,159 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
            className="p-10 lg:px-20 lg:py-14 min-h-screen article-prose"
            dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
          />
+        {activeSpeciesPopup && (
+          <div
+            ref={speciesPopupRef}
+            role="dialog"
+            aria-label={`Species metadata for ${activeSpeciesPopup.species.primaryName}`}
+            className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-emerald-100 bg-white p-4 shadow-2xl shadow-slate-900/10"
+            style={{
+              top: `${activeSpeciesPopup.position.top}px`,
+              left: `${activeSpeciesPopup.position.left}px`,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-600">
+                  Species
+                </p>
+                <h3 className="mt-2 text-sm font-semibold text-slate-900 italic leading-snug">
+                  {activeSpeciesPopup.species.scientificNameVerified || activeSpeciesPopup.species.primaryName}
+                </h3>
+                {activeSpeciesPopup.species.commonName && normalizeLookupText(activeSpeciesPopup.species.commonName) !== normalizeLookupText(activeSpeciesPopup.species.primaryName) && (
+                  <p className="mt-1 text-[11px] font-medium text-slate-500 normal-case">
+                    {activeSpeciesPopup.species.commonName}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closeSpeciesPopup}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-300 hover:text-slate-600"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
+              {/* Taxon ID */}
+              {activeSpeciesPopup.species.taxonId && (
+                <div className="flex items-start gap-2">
+                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Taxon</span>
+                  <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.taxonId}</span>
+                </div>
+              )}
+
+              {/* Source DB and URL */}
+              {(activeSpeciesPopup.species.sourceDb || activeSpeciesPopup.species.sourceUrl) && (
+                <div className="flex items-start gap-2">
+                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Source</span>
+                  {activeSpeciesPopup.species.sourceUrl ? (
+                    <a
+                      href={activeSpeciesPopup.species.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-w-0 break-words font-medium text-blue-600 hover:underline"
+                    >
+                      {activeSpeciesPopup.species.sourceDb || 'View'}
+                    </a>
+                  ) : (
+                    <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.sourceDb}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {activeChemicalPopup && (
+          <div
+            ref={chemicalPopupRef}
+            role="dialog"
+            aria-label={`Chemical metadata for ${activeChemicalPopup.chemical.primaryName}`}
+            className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-blue-100 bg-white p-4 shadow-2xl shadow-slate-900/10"
+            style={{
+              top: `${activeChemicalPopup.position.top}px`,
+              left: `${activeChemicalPopup.position.left}px`,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-blue-600">
+                  Chemical
+                </p>
+                <h3 className="mt-2 text-sm font-semibold text-slate-900 leading-snug">
+                  {activeChemicalPopup.chemical.primaryName}
+                </h3>
+                {activeChemicalPopup.chemical.preferredName && normalizeLookupText(activeChemicalPopup.chemical.preferredName) !== normalizeLookupText(activeChemicalPopup.chemical.primaryName) && (
+                  <p className="mt-1 text-[11px] font-medium text-slate-500 normal-case">
+                    {activeChemicalPopup.chemical.preferredName}
+                  </p>
+                )}
+                {activeChemicalPopup.chemical.synonyms && activeChemicalPopup.chemical.synonyms.length > 0 && (
+                  <p className="mt-1 text-[10px] font-medium text-slate-400 normal-case">
+                    Also: {activeChemicalPopup.chemical.synonyms.slice(0, 5).join(', ')}
+                    {activeChemicalPopup.chemical.synonyms.length > 5 ? ` +${activeChemicalPopup.chemical.synonyms.length - 5} more` : ''}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closeChemicalPopup}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-300 hover:text-slate-600"
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Molecular Structure Image */}
+            {activeChemicalPopup.chemical.imageData && (
+              <div className="mt-3 flex justify-center">
+                <img 
+                  src={`data:image/png;base64,${activeChemicalPopup.chemical.imageData}`}
+                  alt="Molecular structure"
+                  className="max-w-full h-auto rounded-lg border border-slate-100"
+                />
+              </div>
+            )}
+
+            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
+              {/* Molecular Formula */}
+              {activeChemicalPopup.chemical.molecularFormula && (
+                <div className="flex items-start gap-2">
+                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Formula</span>
+                  <span className="min-w-0 break-words font-mono font-medium">{activeChemicalPopup.chemical.molecularFormula}</span>
+                </div>
+              )}
+
+              {/* InChIKey */}
+              {activeChemicalPopup.chemical.inchikey && (
+                <div className="flex items-start gap-2">
+                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">InChIKey</span>
+                  <span className="min-w-0 break-words font-mono font-medium break-all">{activeChemicalPopup.chemical.inchikey}</span>
+                </div>
+              )}
+
+              {/* Source DB and URL */}
+              {(activeChemicalPopup.chemical.sourceDb || activeChemicalPopup.chemical.sourceUrl) && (
+                <div className="flex items-start gap-2">
+                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Source</span>
+                  {activeChemicalPopup.chemical.sourceUrl ? (
+                    <a
+                      href={activeChemicalPopup.chemical.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-w-0 break-words font-medium text-blue-600 hover:underline"
+                    >
+                      {activeChemicalPopup.chemical.sourceDb || 'View'}
+                    </a>
+                  ) : (
+                    <span className="min-w-0 break-words font-medium">{activeChemicalPopup.chemical.sourceDb}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {isFetchingFallback && (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
@@ -504,19 +1269,122 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    {ents.map((ent, eIdx) => (
+                    {ents.map((ent, eIdx) => {
+                      const expandKey = `${label}-${ent.text.toLowerCase()}-${eIdx}`;
+                      const isExpanded = expandedChemical === expandKey;
+                      const hasChemicalMeta = label === 'CHEMICAL' && (
+                        ent.molecular_formula || ent.inchikey || ent.smiles || ent.source_db
+                      );
+
+                      if (label === 'CHEMICAL' && hasChemicalMeta) {
+                        return (
+                          <div key={eIdx} className="bg-white border border-slate-100 rounded-xl overflow-hidden transition-all hover:border-blue-200">
+                            {/* Collapsed / header row */}
+                            <button
+                              onClick={() => setExpandedChemical(isExpanded ? null : expandKey)}
+                              className="w-full flex items-center justify-between py-2.5 px-4 text-left cursor-pointer"
+                            >
+                              <div className="min-w-0 pr-2">
+                                <div className="text-[10px] text-slate-600 font-bold truncate uppercase">
+                                  {ent.text}
+                                </div>
+                                {ent.molecular_formula && (
+                                  <div className="text-[9px] text-slate-400 font-mono mt-0.5 truncate normal-case">
+                                    {ent.molecular_formula}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center shrink-0 gap-2">
+                                <span className="text-[10px] font-extrabold text-blue-600">
+                                  {ent.count}
+                                </span>
+                                <span className={`text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}>
+                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                </span>
+                              </div>
+                            </button>
+
+                            {/* Expanded detail panel */}
+                            <div className={`overflow-hidden transition-all duration-200 ${isExpanded ? 'max-h-48' : 'max-h-0'}`}>
+                              <div className="px-4 pb-3 pt-1 border-t border-slate-50 space-y-1.5">
+                                {ent.preferred_name && ent.preferred_name !== ent.text && (
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-16">Name</span>
+                                    <span className="text-[9px] text-slate-600 font-medium truncate">{ent.preferred_name}</span>
+                                  </div>
+                                )}
+                                {ent.molecular_formula && (
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-16">Formula</span>
+                                    <span className="text-[9px] text-slate-600 font-mono font-medium">{ent.molecular_formula}</span>
+                                  </div>
+                                )}
+                                {ent.inchikey && (
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-16">InChIKey</span>
+                                    <span className="text-[9px] text-slate-600 font-mono font-medium break-all">{ent.inchikey}</span>
+                                  </div>
+                                )}
+                                {ent.smiles && (
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-16">SMILES</span>
+                                    <span className="text-[9px] text-slate-600 font-mono font-medium break-all">{ent.smiles}</span>
+                                  </div>
+                                )}
+                                {ent.source_db && (
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-16">Source</span>
+                                    {ent.source_url ? (
+                                      <a
+                                        href={ent.source_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[9px] text-blue-600 hover:underline font-medium truncate"
+                                      >
+                                        {ent.source_db}
+                                      </a>
+                                    ) : (
+                                      <span className="text-[9px] text-slate-600 font-medium">{ent.source_db}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Default card for non-CHEMICAL entities
+                      return (
                         <div
                           key={eIdx}
                           className="flex justify-between items-center py-2.5 px-4 bg-white border border-slate-100 rounded-xl transition-all hover:border-blue-100 group/item"
                         >
-                          <span className="text-[10px] text-slate-600 font-bold uppercase truncate pr-2">
-                            {ent.text}
-                          </span>
-                          <span className="text-[10px] font-extrabold text-blue-600">
+                          <div className="min-w-0 pr-2">
+                            <div className={`text-[10px] text-slate-600 font-bold truncate ${label === 'SPECIES' ? '' : 'uppercase'}`}>
+                              {label === 'SPECIES' ? getSpeciesPrimaryName({
+                                text: ent.text,
+                                label: 'SPECIES',
+                                score: 1,
+                                accepted_scientific_name: ent.text,
+                                scientific_name_verified: ent.text,
+                                canonical: ent.text,
+                              } as Entity) : ent.text}
+                            </div>
+                            {ent.subtitle && (
+                              <div className="text-[10px] text-slate-400 truncate mt-0.5 normal-case font-medium">
+                                {ent.subtitle}
+                              </div>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-extrabold text-blue-600 shrink-0">
                             {ent.count}
                           </span>
                         </div>
-                      ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}

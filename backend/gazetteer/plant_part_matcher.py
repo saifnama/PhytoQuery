@@ -81,8 +81,9 @@ class PlantPartMatcher:
             reader = csv.reader(f)
             headers = next(reader, [])
 
-            # Check if using new format (term,aliases)
-            has_aliases = headers and len(headers) > 1 and "alias" in headers[1].lower()
+            # Check if using new format (term,aliases|synonyms)
+            second_header = headers[1].lower() if headers and len(headers) > 1 else ""
+            has_aliases = "alias" in second_header or "synonym" in second_header
 
             for row in reader:
                 if not row or not row[0].strip():

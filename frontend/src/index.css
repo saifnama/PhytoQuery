@@ -39,16 +39,14 @@
     --entity-season-rgb: 234 179 8;
     --entity-location: #06B6D4;
     --entity-location-rgb: 6 182 212;
-    --entity-chemical-activity: #EC4899;
-    --entity-chemical-activity-rgb: 236 72 153;
+    --entity-bioactivity: #EC4899;
+    --entity-bioactivity-rgb: 236 72 153;
     --entity-analytical-technique: #64748B;
     --entity-analytical-technique-rgb: 100 116 139;
     --entity-disease: #DC2626;
     --entity-disease-rgb: 220 38 38;
     --entity-drug: #0D9488;
     --entity-drug-rgb: 13 148 136;
-    --entity-chemical-ligand: #D946EF;
-    --entity-chemical-ligand-rgb: 217 70 239;
     
     /* Typography & Sizing Tokens (design-system-friendly) */
     --heading-h2-size: 1.75rem;
@@ -276,11 +274,11 @@ mark.ner-location,
     --entity-accent-rgb: var(--entity-location-rgb);
 }
 
-.ent-chemical-activity,
-mark.ner-chemical-activity,
-.legend-chemical-activity {
-    --entity-accent: var(--entity-chemical-activity);
-    --entity-accent-rgb: var(--entity-chemical-activity-rgb);
+.ent-bioactivity,
+mark.ner-bioactivity,
+.legend-bioactivity {
+    --entity-accent: var(--entity-bioactivity);
+    --entity-accent-rgb: var(--entity-bioactivity-rgb);
 }
 
 .ent-analytical-technique,
@@ -307,13 +305,6 @@ mark.ner-drug,
     --entity-accent-rgb: var(--entity-drug-rgb);
 }
 
-.ent-chemical-ligand,
-mark.ner-chemical-ligand,
-.legend-chemical-ligand {
-    --entity-accent: var(--entity-chemical-ligand);
-    --entity-accent-rgb: var(--entity-chemical-ligand-rgb);
-}
-
 .legend-chemical,
 .legend-species,
 .legend-plant-part,
@@ -321,12 +312,11 @@ mark.ner-chemical-ligand,
 .legend-development-stage,
 .legend-season,
 .legend-location,
-.legend-chemical-activity,
+.legend-bioactivity,
 .legend-analytical-technique,
 .legend-isolation-method,
 .legend-drug,
 .legend-disease,
-.legend-chemical-ligand,
 .article-prose :is(
     .ent-chemical,
     .ent-species,
@@ -335,12 +325,11 @@ mark.ner-chemical-ligand,
     .ent-development-stage,
     .ent-season,
     .ent-location,
-    .ent-chemical-activity,
+    .ent-bioactivity,
     .ent-analytical-technique,
     .ent-isolation-method,
     .ent-drug,
     .ent-disease,
-    .ent-chemical-ligand,
     mark.ner-chemical,
     mark.ner-species,
     mark.ner-plant-part,
@@ -348,12 +337,11 @@ mark.ner-chemical-ligand,
     mark.ner-development-stage,
     mark.ner-season,
     mark.ner-location,
-    mark.ner-chemical-activity,
+    mark.ner-bioactivity,
     mark.ner-analytical-technique,
     mark.ner-isolation-method,
     mark.ner-drug,
-    mark.ner-disease,
-    mark.ner-chemical-ligand
+    mark.ner-disease
 ) {
     color: var(--entity-accent, var(--entity-default)) !important;
 }
@@ -366,12 +354,11 @@ mark.ner-chemical-ligand,
     .ent-development-stage,
     .ent-season,
     .ent-location,
-    .ent-chemical-activity,
+    .ent-bioactivity,
     .ent-analytical-technique,
     .ent-isolation-method,
     .ent-drug,
     .ent-disease,
-    .ent-chemical-ligand,
     mark.ner-chemical,
     mark.ner-species,
     mark.ner-plant-part,
@@ -379,12 +366,11 @@ mark.ner-chemical-ligand,
     mark.ner-development-stage,
     mark.ner-season,
     mark.ner-location,
-    mark.ner-chemical-activity,
+    mark.ner-bioactivity,
     mark.ner-analytical-technique,
     mark.ner-isolation-method,
     mark.ner-drug,
-    mark.ner-disease,
-    mark.ner-chemical-ligand
+    mark.ner-disease
 ) {
     background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;
     border-radius: 0.25rem;
@@ -696,4 +682,3 @@ mark.ner-default {
 }
 
 /* Removed dark mode overrides */
-

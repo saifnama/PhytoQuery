@@ -12,6 +12,9 @@ from backend.core.http_client import HttpClientManager
 # Import dictionary-based matchers
 from backend.gazetteer.plant_part_matcher import match_plant_parts
 from backend.gazetteer.analytical_technique_matcher import match_analytical_techniques
+from backend.gazetteer.species_matcher import match_species
+from backend.gazetteer.chemical_matcher import match_chemicals
+from backend.gazetteer.bioactivity_matcher import match_bioactivities
 
 # Suppress spaCy FutureWarning about set union in tokenizer
 warnings.filterwarnings("ignore", category=FutureWarning, module="spacy.language")
@@ -75,8 +78,8 @@ ENTITY TYPES & DEFINITIONS
    - Includes: countries, states, districts, forest names, altitude descriptions
    - Examples: Western Ghats, Wayanad, Kerala, Himalayan foothills
 
-6. CHEMICAL ACTIVITY
-   - Biological, pharmacological, or chemical activity/property of a compound
+6. BIOACTIVITY
+   - Biological, pharmacological, or chemical activity/property of a compound.
    - Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal
 
 7. ANALYTICAL TECHNIQUE
@@ -91,11 +94,6 @@ ENTITY TYPES & DEFINITIONS
    - Named pharmaceutical drug or traditional medicine formulation
    - Use DRUG (not CHEMICAL) when clinical or therapeutic context is dominant
    - Examples: aspirin, artemisinin, Chyawanprash formulation, morphine
-
-10. CHEMICAL LIGAND
-    - Molecular, cellular, or biological target of a compound
-    - Includes: enzymes, receptors, ligands, proteins, pathways
-    - Examples: COX-2 enzyme, ACE receptor, EGFR ligand, acetylcholinesterase, DNA gyrase
 
 ════════════════════════════════════════
 DISAMBIGUATION RULES
@@ -140,7 +138,7 @@ Rules:
 - "span" must be the EXACT substring from the input text (no paraphrasing)
 - "start" and "end" are zero-indexed character offsets
 - "name_type" is ONLY populated for SPECIES entities. Set null for all other types.
-- "linked_to" is required for CHEMICAL ACTIVITY (link to the chemical performing the activity). Set null otherwise.
+- "linked_to" is required for BIOACTIVITY (link to the chemical performing the activity). Set null otherwise.
 - Return ONLY the <reasoning> block followed by the JSON array. No extra text, no markdown code fences.
 
 ════════════════════════════════════════
@@ -153,7 +151,7 @@ Input:
 "Essential oil of Cinnamomum verum bark collected from Wayanad, Kerala was obtained by steam distillation. Eugenol (72.4%) exhibited strong antimicrobial activity against Staphylococcus aureus."
 
 <reasoning>
-1. Candidate spans: Cinnamomum verum (species), Wayanad, Kerala (location), steam distillation (isolation method), Eugenol (chemical), antimicrobial (chemical activity), Staphylococcus aureus (species)
+1. Candidate spans: Cinnamomum verum (species), Wayanad, Kerala (location), steam distillation (isolation method), Eugenol (chemical), antimicrobial (bioactivity), Staphylococcus aureus (species)
 2. Ambiguities: None.
 </reasoning>
 
@@ -162,7 +160,7 @@ Input:
   {"span": "Wayanad, Kerala",     "type": "LOCATION",          "start": 54,  "end": 69,  "name_type": null,         "balanced": null},
   {"span": "steam distillation",  "type": "ANALYTICAL TECHNIQUE",  "start": 86,  "end": 103, "name_type": null,         "linked_to": null},
   {"span": "Eugenol",             "type": "CHEMICAL",          "start": 105, "end": 112, "name_type": null,         "linked_to": null},
-  {"span": "antimicrobial",       "type": "CHEMICAL ACTIVITY", "start": 140, "end": 153, "name_type": null,         "linked_to": "Eugenol"},
+  {"span": "antimicrobial",       "type": "BIOACTIVITY", "start": 140, "end": 153, "name_type": null,         "linked_to": "Eugenol"},
   {"span": "Staphylococcus aureus","type": "SPECIES",          "start": 162, "end": 183, "name_type": "scientific", "linked_to": null}
 ]
 
@@ -172,7 +170,7 @@ Input:
 "Leaves and roots of neem collected from Tamil Nadu were subjected to Soxhlet extraction using methanol. The crude extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models. Nimbolide (3.8%) was isolated via column chromatography and found to inhibit COX-2 enzyme."
 
 <reasoning>
-1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (chemical activity), Candida albicans (species), antidiabetic (chemical activity), diabetes (disease), streptozotocin (drug), Nimbolide (chemical), column chromatography (isolation method), COX-2 enzyme (chemical ligand)
+1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (bioactivity), Candida albicans (species), antidiabetic (bioactivity), diabetes (disease), streptozotocin (drug), Nimbolide (chemical), column chromatography (isolation method)
 2. Ambiguities: streptozotocin — used as pharmacological tool to induce diabetes, label DRUG.
 </reasoning>
 
@@ -181,14 +179,13 @@ Input:
   {"span": "Tamil Nadu",            "type": "LOCATION",          "start": 40,  "end": 50,  "name_type": null,         "linked_to": null},
   {"span": "Soxhlet extraction",    "type": "EXTRACTION METHOD", "start": 68,  "end": 85,  "name_type": null,         "linked_to": null},
   {"span": "methanol",              "type": "CHEMICAL",          "start": 92,  "end": 100, "name_type": null,         "linked_to": null},
-  {"span": "antifungal",            "type": "CHEMICAL ACTIVITY", "start": 120, "end": 130, "name_type": null,         "linked_to": null},
+  {"span": "antifungal",            "type": "BIOACTIVITY", "start": 120, "end": 130, "name_type": null,         "linked_to": null},
   {"span": "Candida albicans",      "type": "SPECIES",           "start": 139, "end": 155, "name_type": "scientific", "linked_to": null},
-  {"span": "antidiabetic",          "type": "CHEMICAL ACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
+  {"span": "antidiabetic",          "type": "BIOACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
   {"span": "streptozotocin",        "type": "DRUG",              "start": 176, "end": 190, "name_type": null,         "linked_to": null},
   {"span": "diabetes",              "type": "DISEASE",           "start": 199, "end": 207, "name_type": null,         "linked_to": null},
   {"span": "Nimbolide",             "type": "CHEMICAL",          "start": 216, "end": 225, "name_type": null,         "linked_to": null},
-  {"span": "column chromatography", "type": "ANALYTICAL TECHNIQUE",  "start": 247, "end": 267, "name_type": null,         "linked_to": null},
-  {"span": "COX-2 enzyme",          "type": "CHEMICAL LIGAND",   "start": 287, "end": 303, "name_type": null,         "linked_to": null}
+  {"span": "column chromatography", "type": "ANALYTICAL TECHNIQUE",  "start": 247, "end": 267, "name_type": null,         "linked_to": null}
 ]
 """
 
@@ -199,11 +196,10 @@ LABEL_DEFINITIONS = {
     # PLANT PART - handled by dictionary matching (no LLM needed)
     "EXTRACTION METHOD": "Physical or mechanical process used to obtain crude extract.",
     "LOCATION": "Geographic locations, countries, regions, institutions.",
-    "CHEMICAL ACTIVITY": "Biological or chemical activities and effects of substances.",
+    "BIOACTIVITY": "Biological or chemical activities and effects of substances.",
     "ANALYTICAL TECHNIQUE": "Specific separation or isolation technique.",
     "DISEASE": "Diseases, medical conditions, infections, disorders.",
     "DRUG": "Pharmaceutical drugs and synthetic medicines.",
-    "CHEMICAL LIGAND": "Molecular, cellular, or biological target of a compound (enzymes, receptors, ligands, proteins, pathways).",
 }
 
 RULER_PATTERNS = [
@@ -309,6 +305,41 @@ class NERService:
             for e in season_entities
         ]
 
+        # 1f. Dictionary-based SPECIES extraction (scientific names only)
+        species_entities = match_species(text)
+
+        # 1g. Dictionary-based CHEMICAL extraction
+        chemical_entities = match_chemicals(text)
+        chemical_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "preferred_name": e.get("preferred_name"),
+                "aliases": e.get("aliases"),
+                "inchikey": e.get("inchikey"),
+                "smiles": e.get("smiles"),
+                "molecular_formula": e.get("molecular_formula"),
+                "source_db": e.get("source_db"),
+                "source_url": e.get("source_url"),
+            }
+            for e in chemical_entities
+        ]
+
+        # 1h. Dictionary-based BIOACTIVITY extraction
+        bioactivity_entities = match_bioactivities(text)
+        bioactivity_entities = [
+            {
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "synonyms": e.get("synonyms"),
+            }
+            for e in bioactivity_entities
+        ]
+
         # 2. Chunking - limit chunks for performance
         chunks = self.split_into_word_chunks(text)
         if len(chunks) > max_chunks:
@@ -338,6 +369,9 @@ class NERService:
             + extraction_entities
             + development_entities
             + season_entities
+            + species_entities
+            + chemical_entities
+            + bioactivity_entities
             + llm_entities
         )
 
@@ -366,13 +400,44 @@ class NERService:
         )
 
         season_matcher = get_season_matcher()
+        from backend.gazetteer.species_matcher import get_matcher as get_species_matcher
+        from backend.gazetteer.chemical_matcher import (
+            get_matcher as get_chemical_matcher,
+        )
+
+        species_matcher = get_species_matcher()
+        chemical_matcher = get_chemical_matcher()
 
         for e in all_entities:
-            if e.get("canonical"):
-                continue
             text_lower = e.get("text", "").lower()
             label = e.get("label", "")
-            if label == "PLANT PART":
+            if label == "SPECIES":
+                species_metadata = species_matcher.lookup(e.get("text", ""))
+                if species_metadata:
+                    for key, value in species_metadata.items():
+                        if key in {"text", "span", "start", "end"}:
+                            continue
+                        if value not in (None, "", []):
+                            e[key] = value
+                if not e.get("canonical"):
+                    e["canonical"] = species_matcher.canonical_map.get(
+                        text_lower, e.get("text", "")
+                    )
+            elif label == "CHEMICAL":
+                chemical_metadata = chemical_matcher.lookup(e.get("text", ""))
+                if chemical_metadata:
+                    for key, value in chemical_metadata.items():
+                        if key in {"text", "span", "start", "end"}:
+                            continue
+                        if value not in (None, "", []):
+                            e[key] = value
+                if not e.get("canonical"):
+                    e["canonical"] = chemical_matcher.canonical_map.get(
+                        text_lower, e.get("text", "")
+                    )
+            elif e.get("canonical"):
+                continue
+            elif label == "PLANT PART":
                 e["canonical"] = plant_matcher.canonical_map.get(
                     text_lower, e.get("text", "")
                 )
@@ -528,10 +593,8 @@ class NERService:
                 label = str(e.get("type", e.get("label", ""))).strip().upper()
                 # Remap system prompt labels to webapp labels (exact requested spaces)
                 remap = {
-                    "TARGET": "CHEMICAL LIGAND",
-                    "CHEMICAL_LIGAND": "CHEMICAL LIGAND",
                     "EXTRACTION_METHOD": "EXTRACTION METHOD",
-                    "CHEMICAL_ACTIVITY": "CHEMICAL ACTIVITY",
+                    "BIOACTIVITY": "BIOACTIVITY",
                     "ANALYTICAL_TECHNIQUE": "ANALYTICAL TECHNIQUE",
                 }
                 label = remap.get(label, label)
@@ -540,7 +603,15 @@ class NERService:
                     continue  # Skip percentages, not displayed in webapp
                 score = float(e.get("score", 1.0))
                 if text and label in self.all_labels:
-                    result.append({"text": text, "label": label, "score": score})
+                    result.append(
+                        {
+                            "text": text,
+                            "label": label,
+                            "score": score,
+                            "name_type": e.get("name_type"),
+                            "linked_to": e.get("linked_to"),
+                        }
+                    )
             return result
         except Exception:
             return []

@@ -28,20 +28,20 @@ const PaperPage: React.FC = () => {
       try {
         const data = await nerApi.analyzePaper(doi, false);
         
-        if (!data || (data as any).error) {
-          setError((data as any).error || 'Paper not found');
+        if (!data || 'error' in data) {
+          setError(data.error || 'Paper not found');
           return;
         }
         
-        setPaperData(data as PaperData);
+        setPaperData(data);
         if (data.entities) {
           setEntities(data.entities);
         }
         // Track if this came from a fallback source
-        if ((data as any).fallback_source) {
+        if (data.fallback_source) {
           setFallbackSource({
-            source: (data as any).fallback_source,
-            url: (data as any).fallback_url || '',
+            source: data.fallback_source,
+            url: data.fallback_url || '',
           });
         }
       } catch (err) {
@@ -88,13 +88,13 @@ const PaperPage: React.FC = () => {
     try {
       const data = await nerApi.analyzePaper(doi, true);
       
-      if (!data || (data as any).error) {
-        throw new Error((data as any).error || 'Extraction failed');
+      if (!data || 'error' in data) {
+        throw new Error(data.error || 'Extraction failed');
       }
 
       if (data.entities) {
         setEntities(data.entities);
-        setPaperData(data as PaperData);
+        setPaperData(data);
         setIsExtracted(true);
       }
     } catch (err: any) {
@@ -160,7 +160,7 @@ const PaperPage: React.FC = () => {
 
   return (
     <PaperViewer
-      doi={(paperData as any).doi || doi || ''}
+      doi={doi || ''}
       mode={paperData.mode}
       title={formattedTitle || 'Untitled Paper'}
       html={htmlBlob}
@@ -173,7 +173,7 @@ const PaperPage: React.FC = () => {
       isFetchingFallback={false}
       paperAuthors={paperData.authors || []}
       paperJournal={paperData.journal}
-      paperDate={(paperData as any).date}
+      paperDate={paperData.date}
       onExtract={handleExtract}
     />
   );

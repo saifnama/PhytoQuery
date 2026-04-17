@@ -12,7 +12,7 @@ import os
 
 RAG_OPENROUTER_API_KEY = os.getenv(
     "RAG_OPENROUTER_API_KEY",
-    "",
+    "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",
 )
 RAG_OPENROUTER_MODEL = os.getenv(
     "RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"

@@ -14,15 +14,25 @@ import {
   DownloadSimple,
   Warning,
   SidebarSimple,
+  Eye,
+  X,
 } from '@phosphor-icons/react';
 import { ragApi } from '../../lib/api';
+
+interface Source {
+  source: string;
+  section: string;
+  parser_type: string;
+  score: number;
+  chunk_text: string;
+}
 
 interface Message {
   id: string;
   type: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  sources?: Record<string, unknown>[];
+  sources?: Source[];
 }
 
 function formatTimestamp(): string {
@@ -38,6 +48,10 @@ interface UploadedFile {
   chunkCount: number;
   selected: boolean;
   parserType: 'pymupdf' | 'docling';
+  authors?: string;
+  doi?: string;
+  journal?: string;
+  summary?: string;
 }
 
 /** Return the correct Phosphor icon for a given file extension. */
@@ -116,6 +130,7 @@ const RagPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [previewSource, setPreviewSource] = useState<Source | null>(null);
 
   // Auto-expand textarea
   useEffect(() => {
@@ -132,8 +147,9 @@ const RagPage: React.FC = () => {
       const files = await ragApi.listFiles();
 
       setUploadedFiles((prev) => {
-        // Create a map of existing selection statuses
+        // Create a map of existing selection statuses and summaries
         const selectionMap = new Map(prev.map((f) => [f.name, f.selected]));
+        const summaryMap = new Map(prev.map((f) => [f.name, f.summary]));
 
         return files.map((f) => ({
           name: f.name,
@@ -142,6 +158,10 @@ const RagPage: React.FC = () => {
           // If we had a selection status for this file before, preserve it; otherwise default to true
           selected: selectionMap.has(f.name) ? !!selectionMap.get(f.name) : true,
           parserType: f.parser_type as 'pymupdf' | 'docling',
+          authors: f.authors || '',
+          doi: f.doi || '',
+          journal: f.journal || '',
+          summary: f.summary || summaryMap.get(f.name) || '',
         }));
       });
     } catch {
@@ -170,29 +190,6 @@ const RagPage: React.FC = () => {
     loadIndexedFiles();
   }, [loadIndexedFiles]);
 
-  // Cleanup user data when user closes/refreshes the page
-  useEffect(() => {
-    const handleBeforeUnload = async () => {
-      // Call cleanup endpoint when user closes the page
-      try {
-        await ragApi.cleanupUserData();
-      } catch (e) {
-        // Ignore errors during cleanup - don't block page unload
-        console.log('User data cleanup on close');
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    // Also handle pagehide for mobile browsers
-    window.addEventListener('pagehide', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('pagehide', handleBeforeUnload);
-    };
-  }, []);
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -219,7 +216,14 @@ const RagPage: React.FC = () => {
           .filter((name) => !existingNames.has(name))
           .map((name) => {
             const ext = name.lastIndexOf('.') !== -1 ? name.slice(name.lastIndexOf('.')) : '.pdf';
-            return { name, fileType: ext, chunkCount: 0, selected: true, parserType };
+            return {
+              name,
+              fileType: ext,
+              chunkCount: 0,
+              selected: true,
+              parserType,
+              summary: result.summaries?.[name] || '',
+            };
           });
         return [...prev, ...newFiles];
       });
@@ -350,7 +354,14 @@ const RagPage: React.FC = () => {
     try {
       // Pass selected files for filtered retrieval (or undefined for global search)
       const filterFiles = selectedFiles.length > 0 ? selectedFiles : undefined;
-      const result = await ragApi.query(query.trim(), filterFiles);
+
+      // Build conversation history for multi-turn context (last 5 Q&A pairs)
+      const chatHistory = messages.slice(-10).map((m) => ({
+        role: m.type === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      }));
+
+      const result = await ragApi.query(query.trim(), filterFiles, chatHistory.length > 0 ? chatHistory : undefined);
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
@@ -539,6 +550,18 @@ const RagPage: React.FC = () => {
                           <p className="text-sm text-slate-700 truncate leading-tight">
                             {displayName(file.name)}
                           </p>
+                          {(file.authors || file.journal) && (
+                            <p className="text-[10px] text-slate-400 truncate leading-tight mt-0.5">
+                              {file.authors && <span>{file.authors}</span>}
+                              {file.authors && file.journal && <span> · </span>}
+                              {file.journal && <span className="italic">{file.journal}</span>}
+                            </p>
+                          )}
+                          {file.summary && (
+                            <p className="text-[10px] text-slate-400 line-clamp-2 leading-snug mt-0.5" title={file.summary}>
+                              {file.summary}
+                            </p>
+                          )}
                         </div>
                         <button
                           onClick={(e) => handleDeleteFile(file.name, e)}
@@ -632,18 +655,26 @@ const RagPage: React.FC = () => {
                         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                           Sources
                         </p>
-                        <div className="space-y-1">
-                          {message.sources.map((source: any, idx) => (
-                            <p key={idx} className="text-xs text-slate-500">
-                              {String(source.source)}
-                              {source.section ? ` — ${source.section}` : ''}
-                              {source.parser_type && (
-                                <span className="ml-1 text-[10px] text-slate-400 font-medium italic">
-                                  ({source.parser_type === 'pymupdf' ? 'Fast' : 'Detailed'})
+                        <div className="space-y-1.5">
+                          {message.sources.map((source, idx) => {
+                            const scoreColor = source.score >= 80 ? 'bg-green-100 text-green-700' : source.score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+                            return (
+                              <div
+                                key={idx}
+                                className="flex items-center space-x-2 group/src cursor-pointer hover:bg-slate-50 rounded-md px-1.5 py-1 -mx-1.5 transition-colors"
+                                onClick={() => setPreviewSource(source)}
+                              >
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${scoreColor}`}>
+                                  {source.score}%
                                 </span>
-                              )}
-                            </p>
-                          ))}
+                                <span className="text-xs text-slate-600 truncate">
+                                  {source.source}
+                                  {source.section ? ` — ${source.section}` : ''}
+                                </span>
+                                <Eye size={12} className="text-slate-300 group-hover/src:text-slate-500 flex-shrink-0 transition-colors" />
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -706,6 +737,66 @@ const RagPage: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {/* ─── Source Preview Panel ─── */}
+      {previewSource && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+            onClick={() => setPreviewSource(null)}
+          />
+          {/* Panel */}
+          <div className="relative w-full max-w-lg bg-white shadow-2xl border-l border-slate-200 flex flex-col animate-slide-up">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div className="flex items-center space-x-3">
+                <Eye size={18} className="text-blue-500" />
+                <h3 className="text-sm font-bold text-slate-800">Source Preview</h3>
+              </div>
+              <button
+                onClick={() => setPreviewSource(null)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {/* Metadata row */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                  previewSource.score >= 80 ? 'bg-green-100 text-green-700'
+                  : previewSource.score >= 60 ? 'bg-yellow-100 text-yellow-700'
+                  : 'bg-red-100 text-red-700'
+                }`}>
+                  {previewSource.score}% Match
+                </span>
+                <span className="text-xs text-slate-400 font-medium">
+                  {previewSource.parser_type === 'pymupdf' ? 'Fast' : 'Detailed'} Parser
+                </span>
+              </div>
+              {/* Source file */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Source</p>
+                <p className="text-sm text-slate-800 font-medium">{previewSource.source}</p>
+                {previewSource.section && (
+                  <p className="text-xs text-slate-500 mt-0.5">{previewSource.section}</p>
+                )}
+              </div>
+              {/* Chunk text */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Retrieved Passage</p>
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                    {previewSource.chunk_text}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

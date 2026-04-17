@@ -8,8 +8,11 @@ Compiles gazetteer CSV files into binary matcher for fast loading.
 import csv
 import os
 import pickle
+import re
 import time
 from pathlib import Path
+
+from backend.gazetteer.chemical_matcher import CACHE_VERSION, build_chemical_cache_data
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -23,12 +26,20 @@ CATEGORIES = {
     "EXTRACTION METHOD": "extraction_method.csv",
     "DEVELOPMENT STAGE": "development_stage.csv",
     "SEASON": "season.csv",
+    "SPECIES": "species.csv",
+    "CHEMICAL": "chemical.csv",
 }
 
 
 def build_matcher(category: str, csv_file: Path) -> dict:
     """Build matcher for a category."""
     print(f"\n[{category}] Loading terms...")
+
+    if category == "SPECIES":
+        return build_species_matcher(csv_file)
+
+    if category == "CHEMICAL":
+        return build_chemical_matcher(csv_file)
 
     terms = []
     canonical_map = {}
@@ -68,6 +79,116 @@ def build_matcher(category: str, csv_file: Path) -> dict:
         "canonical_map": canonical_map,
     }
 
+
+def build_species_matcher(csv_file: Path) -> dict:
+    """Build species matcher cache with scientific-name patterns + metadata."""
+    terms = []
+    canonical_map = {}
+    metadata_map = {}
+    aliases_by_canonical = {}
+
+    with open(csv_file, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            scientific_name_input = (row.get("scientific_name_input") or "").strip()
+            scientific_name_verified = (
+                row.get("scientific_name_verified") or ""
+            ).strip()
+            accepted_scientific_name = (
+                row.get("accepted_scientific_name")
+                or scientific_name_verified
+                or scientific_name_input
+            ).strip()
+            common_name = (row.get("common_name") or "").strip()
+            source_db = (row.get("source_db") or "").strip()
+            source_url = (row.get("source_url") or "").strip()
+            taxon_id = (row.get("taxon_id") or "").strip()
+            match_status = (row.get("match_status") or "exact").strip()
+            review_required = (row.get("review_required") or "no").strip()
+
+            canonical = (
+                accepted_scientific_name
+                or scientific_name_verified
+                or scientific_name_input
+            )
+            if not canonical:
+                continue
+
+            scientific_aliases = [
+                value
+                for value in [
+                    scientific_name_input,
+                    scientific_name_verified,
+                    accepted_scientific_name,
+                ]
+                if value
+            ]
+            scientific_aliases = list(dict.fromkeys(scientific_aliases))
+            all_aliases = scientific_aliases + ([common_name] if common_name else [])
+            all_aliases = list(dict.fromkeys(all_aliases))
+
+            aliases_by_canonical[canonical] = all_aliases
+
+            base_metadata = {
+                "canonical": canonical,
+                "accepted_scientific_name": accepted_scientific_name or canonical,
+                "scientific_name_verified": scientific_name_verified or canonical,
+                "common_name": common_name,
+                "source_db": source_db,
+                "source_url": source_url,
+                "taxon_id": taxon_id,
+                "match_status": match_status,
+                "review_required": review_required,
+                "aliases": all_aliases,
+            }
+
+            for alias in scientific_aliases:
+                alias_lower = alias.lower()
+                terms.append(alias_lower)
+                canonical_map[alias_lower] = canonical
+                metadata_map[alias_lower] = {**base_metadata, "name_type": "scientific"}
+
+            if common_name:
+                common_lower = common_name.lower()
+                canonical_map[common_lower] = canonical
+                metadata_map[common_lower] = {**base_metadata, "name_type": "common"}
+
+    terms = list(dict.fromkeys(terms))
+    print(f"[SPECIES] {len(terms)} scientific-name terms")
+    return {
+        "category": "SPECIES",
+        "terms": terms,
+        "count": len(terms),
+        "canonical_map": canonical_map,
+        "metadata_map": metadata_map,
+        "aliases_by_canonical": aliases_by_canonical,
+    }
+
+
+def build_chemical_matcher(csv_file: Path) -> dict:
+    """Build chemical matcher cache with name/synonym patterns + metadata."""
+    with open(csv_file, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    chemical_cache = build_chemical_cache_data(
+        rows,
+        log_collision=lambda alias, existing, canonical: print(
+            f"[CHEMICAL] Duplicate alias collision for '{alias}': '{existing}' vs '{canonical}'. Keeping neither."
+        ),
+    )
+
+    print(f"[CHEMICAL] {len(chemical_cache['terms'])} name/synonym terms")
+    return {
+        "category": "CHEMICAL",
+        "terms": chemical_cache["terms"],
+        "count": len(chemical_cache["terms"]),
+        "canonical_map": chemical_cache["canonical_map"],
+        "metadata_map": chemical_cache["metadata_map"],
+        "aliases_by_canonical": chemical_cache["aliases_by_canonical"],
+        "cache_version": CACHE_VERSION,
+        "source_mtime": csv_file.stat().st_mtime,
+    }
+
     print(f"[{category}] {len(terms)} terms (with aliases)")
     return {
         "category": category,
@@ -87,6 +208,8 @@ def main():
 
     # Ensure build directory exists
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
+
+    cache_file = BUILD_DIR / "dictionary_matcher_cache.pkl"
 
     # Build each category
     results = {}

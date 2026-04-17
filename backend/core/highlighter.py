@@ -6,8 +6,7 @@ class Highlighter:
     # Entity type to CSS class mapping
     COLOR_MAP = {
         "CHEMICAL": "ent-chemical",
-        "CHEMICAL ACTIVITY": "ent-chemical-activity",
-        "CHEMICAL LIGAND": "ent-chemical-ligand",
+        "BIOACTIVITY": "ent-bioactivity",
         "LOCATION": "ent-location",
         "SPECIES": "ent-species",
         "PLANT PART": "ent-plant-part",
@@ -100,9 +99,16 @@ class Highlighter:
 
                     # Look up the label for this specific text
                     match_label = "ENTITY"
+                    match_entity = None
                     for t, l in unique_entities:
                         if t == found_text.lower():
                             match_label = l
+                            break
+
+                    # Find the full entity with metadata
+                    for e in entities:
+                        if e.get("text", "").lower() == found_text.lower() and e.get("label") == match_label:
+                            match_entity = e
                             break
 
                     css_class = cls.COLOR_MAP.get(match_label, "bg-gray-200")
@@ -119,6 +125,24 @@ class Highlighter:
                         f"{css_class} rounded-sm cursor-help transition-all hover:brightness-95"
                     )
                     span["title"] = match_label
+                    
+                    # Add species metadata as data attributes if available
+                    if match_label == "SPECIES" and match_entity:
+                        if match_entity.get("accepted_scientific_name"):
+                            span["data-accepted-scientific-name"] = match_entity["accepted_scientific_name"]
+                        if match_entity.get("scientific_name_verified"):
+                            span["data-scientific-name-verified"] = match_entity["scientific_name_verified"]
+                        if match_entity.get("common_name"):
+                            span["data-common-name"] = match_entity["common_name"]
+                        if match_entity.get("name_type"):
+                            span["data-name-type"] = match_entity["name_type"]
+                        if match_entity.get("taxon_id"):
+                            span["data-taxon-id"] = str(match_entity["taxon_id"])
+                        if match_entity.get("source_db"):
+                            span["data-source-db"] = match_entity["source_db"]
+                        if match_entity.get("source_url"):
+                            span["data-source-url"] = match_entity["source_url"]
+                    
                     span.string = found_text
                     new_content.append(span)
 
