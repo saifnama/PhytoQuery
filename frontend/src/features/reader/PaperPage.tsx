@@ -153,9 +153,11 @@ const PaperPage: React.FC = () => {
   // e.g. "of<i>Lantana</i>L." → "of <i>Lantana</i> L."
   // Works for any tag: <i>, <b>, <em>, <sub>, <sup>, etc.
   const formattedTitle = paperData.title
-    ? paperData.title
-        .replace(/([a-zA-Z])(<[a-zA-Z])/g, '$1 $2')  // letter before opening tag
-        .replace(/(<\/[a-zA-Z]+>)([a-zA-Z])/g, '$1 $2')  // closing tag before letter
+    ? (paperData.title.includes('<')
+        ? paperData.title
+        : paperData.title
+            .replace(/([a-zA-Z])(<[a-zA-Z])/g, '$1 $2')
+            .replace(/(<\/[a-zA-Z]+>)([a-zA-Z])/g, '$1 $2'))
     : '';
 
   return (

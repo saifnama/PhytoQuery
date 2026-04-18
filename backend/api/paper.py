@@ -109,15 +109,24 @@ async def analyze_paper_json(
             summary = cached.get("summary", {}) if isinstance(cached, dict) else {}
             is_extracted = True
         elif run_ner:
-            full_text = "\n\n".join([s["content"] for s in paper_data["sections"]])
+            # Include title + sections for NER
+            title = paper_data.get("title", "")
+            sections_text = "\n\n".join([s["content"] for s in paper_data["sections"]])
+            full_text = f"{title}\n\n{sections_text}" if title else sections_text
             summary, entities = await service.process_text(full_text)
             service.result_cache[clean_id] = entities
             ner_cache.set(clean_id, {"entities": entities, "summary": summary})
             is_extracted = True
 
-        # Highlight ALL sections if NER was run
+        # Highlight title and ALL sections if NER was run
         if is_extracted and entities:
             try:
+                # Highlight title
+                if paper_data.get("title"):
+                    paper_data["title"] = Highlighter.highlight(
+                        paper_data["title"], entities
+                    )
+                # Highlight all sections
                 for section in paper_data["sections"]:
                     section["content"] = Highlighter.highlight(
                         section["content"], entities

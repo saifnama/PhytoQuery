@@ -75,15 +75,19 @@ class SpeciesMatcher:
         with open(DATA_FILE, "r", encoding="utf-8", errors="ignore", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                scientific_name_input = (row.get("scientific_name_input") or "").strip()
+                # Handle various column names - use actual CSV columns
+                scientific_name_input = (
+                    row.get("scientific_name") or 
+                    row.get("scientific_name_input") or 
+                    row.get("scientific_name_verified") or
+                    ""
+                ).strip()
                 scientific_name_verified = (
-                    row.get("scientific_name_verified") or ""
+                    row.get("scientific_name_verified") or 
+                    row.get("scientific_name") or
+                    scientific_name_input
                 ).strip()
-                accepted_scientific_name = (
-                    row.get("accepted_scientific_name")
-                    or scientific_name_verified
-                    or scientific_name_input
-                ).strip()
+                accepted_scientific_name = scientific_name_verified or scientific_name_input
                 common_name = (row.get("common_name") or "").strip()
                 source_db = (row.get("source_db") or "").strip()
                 source_url = (row.get("source_url") or "").strip()

@@ -3,8 +3,81 @@ import { sanitizeHtml } from '../../utils/sanitize';
 import { PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 
+// RDKit.js types
+interface RDKitModule {
+  get_mol(smiles: string): { get_svg(): string; delete(): void } | null;
+  get_qmol(smarts: string): unknown;
+  version(): string;
+}
+
+// Declare global window.initRDKitModule
+declare global {
+  interface Window {
+    initRDKitModule(): Promise<RDKitModule>;
+  }
+}
+
+// RDKit.js module instance - loaded lazily on first use
+let RDKitModule: RDKitModule | null = null;
+let RDKitLoading = false;
+
+// Initialize RDKit.js - called on first molecules request
+async function loadRDKitJS(): Promise<RDKitModule | null> {
+  if (RDKitModule) return RDKitModule;
+  if (RDKitLoading) {
+    // Wait and retry
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return RDKitModule;
+  }
+  
+  RDKitLoading = true;
+  
+  return new Promise((resolve) => {
+    // Load RDKit.js from CDN
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@rdkit/rdkit/dist/RDKit_minimal.js';
+    script.async = true;
+    
+    script.onload = async () => {
+      // Poll for initRDKitModule to become available
+      let attempts = 0;
+      const waitForInit = async () => {
+        while (attempts < 20) {
+          if (typeof window.initRDKitModule === 'function') {
+            try {
+              RDKitModule = await window.initRDKitModule();
+              // RDKit.js ready
+              RDKitLoading = false;
+              resolve(RDKitModule);
+              return;
+            } catch (err) {
+              // init error
+              break;
+            }
+          }
+          await new Promise(r => setTimeout(r, 200));
+          attempts++;
+        }
+        // init not found
+        RDKitLoading = false;
+        resolve(null);
+      };
+      
+      waitForInit();
+    };
+    
+    script.onerror = () => {
+      // script load error
+      RDKitLoading = false;
+      resolve(null);
+    };
+    
+    document.head.appendChild(script);
+  });
+}
+
 const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
-const CHEMICAL_SELECTOR = '.ent-chemical, .ent-drug, mark.ner-chemical, mark.ner-drug';
+const CHEMICAL_SELECTOR = '.ent-chemical, mark.ner-chemical';
 const SPECIES_POPUP_WIDTH = 320;
 const SPECIES_POPUP_ESTIMATED_HEIGHT = 280;
 
@@ -37,7 +110,8 @@ type ChemicalPopupData = {
   preferredName?: string;
   synonyms?: string[];
   smiles?: string;
-  imageData?: string; // base64 encoded molecular structure image
+  imageData?: string; // base64 encoded molecular structure image (deprecated)
+  svgData?: string; // SVG molecular structure from RDKit.js
   inchikey?: string;
   molecularFormula?: string;
   sourceDb?: string;
@@ -115,20 +189,22 @@ const getSpeciesAliasList = (entity: Entity) => {
   return Array.from(aliasSet);
 };
 
-const buildSpeciesPopupData = (entity: Entity): SpeciesPopupData => ({
-  primaryName: getSpeciesPrimaryName(entity),
-  acceptedScientificName: stripHtml(entity.accepted_scientific_name) || undefined,
-  scientificNameVerified: stripHtml(entity.scientific_name_verified) || undefined,
-  commonName: stripHtml(entity.common_name) || undefined,
-  canonical: stripHtml(entity.canonical) || undefined,
-  sourceDb: stripHtml(entity.source_db) || undefined,
-  sourceUrl: stripHtml(entity.source_url) || undefined,
-  taxonId: stripHtml(entity.taxon_id) || undefined,
-  matchStatus: stripHtml(entity.match_status) || undefined,
-  reviewRequired: stripHtml(entity.review_required) || undefined,
-  nameType: entity.name_type ?? undefined,
-  metadataScore: getSpeciesMetadataScore(entity),
-});
+const buildSpeciesPopupData = (entity: Entity): SpeciesPopupData => {
+  return {
+    primaryName: getSpeciesPrimaryName(entity),
+    acceptedScientificName: stripHtml(entity.accepted_scientific_name) || undefined,
+    scientificNameVerified: stripHtml(entity.scientific_name_verified) || undefined,
+    commonName: stripHtml(entity.common_name) || undefined,
+    canonical: stripHtml(entity.canonical) || undefined,
+    sourceDb: stripHtml(entity.source_db) || undefined,
+    sourceUrl: stripHtml(entity.source_url) || undefined,
+    taxonId: stripHtml(entity.taxon_id) || undefined,
+    matchStatus: stripHtml(entity.match_status) || undefined,
+    reviewRequired: stripHtml(entity.review_required) || undefined,
+    nameType: entity.name_type ?? undefined,
+    metadataScore: getSpeciesMetadataScore(entity),
+  };
+};
 
 const getSpeciesPopupPosition = (anchor: HTMLElement) => {
   const rect = anchor.getBoundingClientRect();
@@ -180,6 +256,8 @@ interface GroupedEntities {
   }[];
 }
 
+const isChemicalLikeLabel = (label: string) => label === 'CHEMICAL';
+
 const PaperViewer: React.FC<PaperViewerProps> = ({
    doi,
    mode,
@@ -203,12 +281,25 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const [expandedChemical, setExpandedChemical] = useState<string | null>(null);
   const [activeSpeciesPopup, setActiveSpeciesPopup] = useState<SpeciesPopupState | null>(null);
   const [activeChemicalPopup, setActiveChemicalPopup] = useState<ChemicalPopupState | null>(null);
+  const titleContainerRef = useRef<HTMLHeadingElement>(null);
   const htmlContainerRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const speciesPopupRef = useRef<HTMLDivElement>(null);
   const chemicalPopupRef = useRef<HTMLDivElement>(null);
   const activeSpeciesAnchorRef = useRef<HTMLElement | null>(null);
   const activeChemicalAnchorRef = useRef<HTMLElement | null>(null);
+  const chemicalPopupRequestIdRef = useRef(0);
+
+  const getInteractiveRoots = useCallback(() => {
+    const roots: HTMLElement[] = [];
+    if (titleContainerRef.current) {
+      roots.push(titleContainerRef.current);
+    }
+    if (htmlContainerRef.current) {
+      roots.push(htmlContainerRef.current);
+    }
+    return roots;
+  }, []);
 
   const closeSpeciesPopup = useCallback(() => {
     activeSpeciesAnchorRef.current = null;
@@ -216,6 +307,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, []);
 
   const closeChemicalPopup = useCallback(() => {
+    chemicalPopupRequestIdRef.current += 1;
     activeChemicalAnchorRef.current = null;
     setActiveChemicalPopup(null);
   }, []);
@@ -280,26 +372,42 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [entities]);
 
   const openSpeciesPopup = useCallback((target: HTMLElement) => {
-    const lookupKey = target.dataset.speciesLookupKey;
-    if (!lookupKey) return;
-
-    const species = speciesLookup.get(lookupKey);
+    const text = stripHtml(target.textContent);
+    if (!text) return;
+    
+    // Try to find in lookup - check data attribute first, then text variations
+    let species = speciesLookup.get(target.dataset.speciesLookupKey || "");
+    if (!species) {
+      species = speciesLookup.get(text.toLowerCase());
+    }
+    if (!species) {
+      species = speciesLookup.get(normalizeLookupText(text));
+    }
+    if (!species) {
+      // Try each word in text (for multi-word species names)
+      for (const [key, val] of speciesLookup) {
+        if (text.toLowerCase().includes(key) || key.includes(text.toLowerCase())) {
+          species = val;
+          break;
+        }
+      }
+    }
     if (!species) return;
 
     activeSpeciesAnchorRef.current = target;
     setActiveSpeciesPopup({
       species,
-      anchorText: stripHtml(target.textContent),
+      anchorText: text,
       position: getSpeciesPopupPosition(target),
     });
   }, [speciesLookup]);
 
-  // Chemical lookup map - handles both CHEMICAL and DRUG labels (LLM might label compounds as DRUG)
+  // Chemical lookup map - handles chemical entities for popup/sidebar metadata
   const chemicalLookup = useMemo(() => {
     const groupedChemicals = new Map<string, { representative: Entity; aliases: Set<string> }>();
     
     entities.forEach((entity) => {
-      if (entity.label !== 'CHEMICAL' && entity.label !== 'DRUG') return;
+      if (entity.label !== 'CHEMICAL') return;
       
       const groupKey = normalizeLookupText(entity.canonical || entity.text);
       if (!groupKey) return;
@@ -360,39 +468,59 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [entities]);
 
   const openChemicalPopup = useCallback(async (target: HTMLElement) => {
-    // Try using the data attribute first (set during highlight), then fallback to text content
-    let lookupKey = target.dataset.chemicalLookupKey;
-    if (!lookupKey) {
-      lookupKey = normalizeLookupText(target.textContent);
-    }
-    if (!lookupKey) return;
+    const requestId = chemicalPopupRequestIdRef.current + 1;
+    chemicalPopupRequestIdRef.current = requestId;
+    activeChemicalAnchorRef.current = target;
 
-    // Try direct lookup, then fallback to trying all possible lookups
-    let chemical = chemicalLookup.get(lookupKey);
+    // Try to find in lookup - check data attribute first, then text variations
+    const text = stripHtml(target.textContent);
+    if (!text) return;
+    
+    let chemical = chemicalLookup.get(target.dataset.chemicalLookupKey || "");
     if (!chemical) {
-      // Try with raw text as fallback
-      const rawKey = normalizeLookupText(target.textContent || '');
-      chemical = chemicalLookup.get(rawKey);
+      chemical = chemicalLookup.get(text.toLowerCase());
     }
-    if (!chemical) return;
-
-    // Fetch molecular structure image if SMILES is available
-    let imageData: string | undefined;
-    if (chemical.smiles) {
-      try {
-        const response = await fetch(`/api/ner/molecule/image?smiles=${encodeURIComponent(chemical.smiles)}&width=250&height=180`);
-        if (response.ok) {
-          const data = await response.json();
-          imageData = data.image;
+    if (!chemical) {
+      chemical = chemicalLookup.get(normalizeLookupText(text));
+    }
+    if (!chemical) {
+      // Try each word in text
+      for (const [key, val] of chemicalLookup) {
+        if (text.toLowerCase().includes(key) || key.includes(text.toLowerCase())) {
+          chemical = val;
+          break;
         }
-      } catch (e) {
-        console.error('Failed to fetch molecule image:', e);
       }
     }
+    if (!chemical) return;
+    // Generate molecular structure locally using RDKit.js
+    let svgData: string | undefined;
+    if (chemical.smiles) {
+      try {
+        // Load RDKit.js if not loaded yet
+        const rdkit = await loadRDKitJS();
+        
+        if (rdkit) {
+          const mol = rdkit.get_mol(chemical.smiles);
+          
+          if (mol) {
+            svgData = mol.get_svg();
+            mol.delete();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to generate molecule with RDKit.js:', e);
+      }
+    } else {
+      // No SMILES available
+    }
 
-    const chemicalWithImage = { ...chemical, imageData };
+    if (requestId !== chemicalPopupRequestIdRef.current || !target.isConnected) {
+      return;
+    }
 
-    activeChemicalAnchorRef.current = target;
+    const chemicalWithImage = { ...chemical, svgData };
+
     setActiveChemicalPopup({
       chemical: chemicalWithImage,
       anchorText: stripHtml(target.textContent),
@@ -427,34 +555,36 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       const canonicalForm = entity.label === 'SPECIES'
         ? getSpeciesPrimaryName(entity)
         : (stripHtml(entity.canonical) || cleanText);
-      const lowerText = canonicalForm.toLowerCase();
-      if (!uniqueEntities[lowerText]) {
-        uniqueEntities[lowerText] = { 
+      const normalizedKey = canonicalForm.toLowerCase();
+      const groupKey = `${entity.label}::${normalizedKey}`;
+      if (!uniqueEntities[groupKey]) {
+        uniqueEntities[groupKey] = { 
           label: entity.label, 
           originalTexts: {},
           aliases: new Set<string>(),
           representative: entity,
         };
       } else if (entity.label === 'SPECIES') {
-        uniqueEntities[lowerText].representative = pickBetterSpeciesRepresentative(
-          uniqueEntities[lowerText].representative,
+        uniqueEntities[groupKey].representative = pickBetterSpeciesRepresentative(
+          uniqueEntities[groupKey].representative,
           entity
         );
       }
 
       if (entity.label === 'SPECIES') {
-        getSpeciesAliasList(entity).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
+        getSpeciesAliasList(entity).forEach((alias) => uniqueEntities[groupKey].aliases.add(alias));
       } else {
-        (entity.aliases || []).forEach((alias) => uniqueEntities[lowerText].aliases.add(alias));
-        uniqueEntities[lowerText].aliases.add(canonicalForm);
+        (entity.aliases || []).forEach((alias) => uniqueEntities[groupKey].aliases.add(alias));
+        uniqueEntities[groupKey].aliases.add(canonicalForm);
       }
 
       // Store original text for display and frequency tracking
-      uniqueEntities[lowerText].originalTexts[cleanText] = (uniqueEntities[lowerText].originalTexts[cleanText] || 0) + 1;
+      uniqueEntities[groupKey].originalTexts[cleanText] = (uniqueEntities[groupKey].originalTexts[cleanText] || 0) + 1;
     });
 
-    Object.keys(uniqueEntities).forEach(lowerText => {
-      const data = uniqueEntities[lowerText];
+    Object.keys(uniqueEntities).forEach((groupKey) => {
+      const data = uniqueEntities[groupKey];
+      const representative = data.representative;
       
       // Count frequency of EACH variant in full text to find most frequent form
       const aliasList = Array.from(data.aliases);
@@ -484,7 +614,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       
       // Find the most frequent variant in the full text for display
       const mostFrequentText = Object.entries(variantCounts)
-        .sort(([, a], [, b]) => b - a)[0]?.[0] || lowerText;
+        .sort(([, a], [, b]) => b - a)[0]?.[0] || stripHtml(representative.canonical) || stripHtml(representative.text);
       
       // Calculate total count from all variants
       let trueCount = Object.values(variantCounts).reduce((sum, c) => sum + c, 0);
@@ -497,14 +627,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       if (!grouped[data.label]) {
         grouped[data.label] = [];
       }
-      const representative = data.representative;
       const displayText = data.label === 'SPECIES'
         ? getSpeciesPrimaryName(representative)
         : mostFrequentText;
       // No subtitle for species - show only scientific name
       const subtitle = undefined;
       // Use most frequent text form for display
-      const chemicalMeta = data.label === 'CHEMICAL' ? {
+      const chemicalMeta = isChemicalLikeLabel(data.label) ? {
         preferred_name: representative.preferred_name,
         inchikey: representative.inchikey,
         smiles: representative.smiles,
@@ -524,59 +653,92 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [entities, html]);
 
   const normalizedEntitySearch = entitySearch.trim().toLowerCase();
+  
+  // Pre-load RDKit.js on mount so it's ready before first click
+  useEffect(() => {
+    // Pre-load RDKit.js on mount for instant rendering
+    loadRDKitJS();
+  }, []);
+  
   useEffect(() => {
     setEntitySearch('');
+    setExpandedChemical(null);
     closeSpeciesPopup();
-  }, [doi, html, isExtracted, closeSpeciesPopup]);
+    closeChemicalPopup();
+  }, [doi, html, isExtracted, closeSpeciesPopup, closeChemicalPopup]);
 
   useEffect(() => {
-    const container = htmlContainerRef.current;
-    if (!container) return;
+    const roots = getInteractiveRoots();
+    if (roots.length === 0) return;
 
-    const speciesNodes = container.querySelectorAll<HTMLElement>(SPECIES_SELECTOR);
-    speciesNodes.forEach((node) => {
-      const lookupKey = normalizeLookupText(node.textContent);
-      const species = speciesLookup.get(lookupKey);
+    roots.forEach((container) => {
+      const speciesNodes = container.matches(SPECIES_SELECTOR)
+        ? [container as HTMLElement]
+        : Array.from(container.querySelectorAll<HTMLElement>(SPECIES_SELECTOR));
 
-      if (!species) {
-        node.removeAttribute('data-species-lookup-key');
-        node.removeAttribute('role');
-        node.removeAttribute('tabindex');
-        node.removeAttribute('aria-haspopup');
-        node.removeAttribute('aria-expanded');
-        return;
-      }
+      speciesNodes.forEach((node) => {
+        const lookupKey = normalizeLookupText(node.textContent);
+        const species = speciesLookup.get(lookupKey);
 
-      node.dataset.speciesLookupKey = lookupKey;
-      node.setAttribute('role', 'button');
-      node.setAttribute('tabindex', '0');
-      node.setAttribute('aria-haspopup', 'dialog');
-      node.setAttribute('aria-expanded', activeSpeciesAnchorRef.current === node && activeSpeciesPopup ? 'true' : 'false');
-      node.setAttribute('title', species.primaryName);
+        if (!species) {
+          node.removeAttribute('data-species-lookup-key');
+          node.removeAttribute('role');
+          node.removeAttribute('tabindex');
+          node.removeAttribute('aria-haspopup');
+          node.removeAttribute('aria-expanded');
+          return;
+        }
+
+        node.dataset.speciesLookupKey = lookupKey;
+        node.setAttribute('role', 'button');
+        node.setAttribute('tabindex', '0');
+        node.setAttribute('aria-haspopup', 'dialog');
+        node.setAttribute('aria-expanded', activeSpeciesAnchorRef.current === node && activeSpeciesPopup ? 'true' : 'false');
+        node.setAttribute('title', species.primaryName);
+      });
     });
-  }, [html, speciesLookup, activeSpeciesPopup]);
+  }, [getInteractiveRoots, html, speciesLookup, activeSpeciesPopup]);
 
   useEffect(() => {
-    const container = htmlContainerRef.current;
-    if (!container) return;
+    const roots = getInteractiveRoots();
+    if (roots.length === 0) return;
 
     const handleSpeciesClick = (event: MouseEvent) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-species-lookup-key]');
-      if (!target || !container.contains(target)) return;
-
+      const clickedEl = event.target as HTMLElement;
+      
+      // Only handle clicks on highlighted species elements
+      if (!clickedEl.classList.contains('ent-species') && !clickedEl.closest('.ent-species')) {
+        return;
+      }
+      
+      // Get the text content and lookup in speciesLookup
+      const textContent = clickedEl.textContent?.trim();
+      if (!textContent) return;
+      
+      const normalizedKey = normalizeLookupText(textContent);
+      const species = speciesLookup.get(normalizedKey);
+      
+      if (!species) {
+        const species2 = speciesLookup.get(textContent.toLowerCase());
+        if (!species2) return;
+      }
+      
       event.preventDefault();
 
-      if (activeSpeciesAnchorRef.current === target && activeSpeciesPopup) {
+      // Use clicked element directly
+      const targetEl = clickedEl.closest('.ent-species') || clickedEl;
+
+      if (activeSpeciesAnchorRef.current === targetEl && activeSpeciesPopup) {
         closeSpeciesPopup();
         return;
       }
 
-      openSpeciesPopup(target);
+      openSpeciesPopup(targetEl as HTMLElement);
     };
 
     const handleSpeciesKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-species-lookup-key]');
-      if (!target || !container.contains(target)) return;
+      const target = (event.target as HTMLElement).closest('.ent-species') as HTMLElement | null;
+      if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -589,14 +751,18 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       }
     };
 
-    container.addEventListener('click', handleSpeciesClick);
-    container.addEventListener('keydown', handleSpeciesKeyDown);
+    roots.forEach((container) => {
+      container.addEventListener('click', handleSpeciesClick);
+      container.addEventListener('keydown', handleSpeciesKeyDown);
+    });
 
     return () => {
-      container.removeEventListener('click', handleSpeciesClick);
-      container.removeEventListener('keydown', handleSpeciesKeyDown);
+      roots.forEach((container) => {
+        container.removeEventListener('click', handleSpeciesClick);
+        container.removeEventListener('keydown', handleSpeciesKeyDown);
+      });
     };
-  }, [activeSpeciesPopup, closeSpeciesPopup, openSpeciesPopup]);
+  }, [activeSpeciesPopup, closeSpeciesPopup, getInteractiveRoots, openSpeciesPopup]);
 
   useEffect(() => {
     if (!activeSpeciesPopup) return;
@@ -643,58 +809,82 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   // Chemical popup - add data attributes to highlighted chemicals
   useEffect(() => {
-    const container = htmlContainerRef.current;
-    if (!container) return;
+    const roots = getInteractiveRoots();
+    if (roots.length === 0) return;
 
-    const chemicalNodes = container.querySelectorAll<HTMLElement>(CHEMICAL_SELECTOR);
-    chemicalNodes.forEach((node) => {
-      const lookupKey = normalizeLookupText(node.textContent);
-      const chemical = chemicalLookup.get(lookupKey);
+    roots.forEach((container) => {
+      const chemicalNodes = container.matches(CHEMICAL_SELECTOR)
+        ? [container as HTMLElement]
+        : Array.from(container.querySelectorAll<HTMLElement>(CHEMICAL_SELECTOR));
 
-      // Fallback: try with text content directly if not found
-      const fallbackKey = normalizeLookupText(node.textContent || '');
-      const chemicalFallback = !chemical ? chemicalLookup.get(fallbackKey) : chemical;
+      chemicalNodes.forEach((node) => {
+        const lookupKey = normalizeLookupText(node.textContent);
+        const chemical = chemicalLookup.get(lookupKey);
 
-      if (!chemicalFallback) {
-        node.removeAttribute('data-chemical-lookup-key');
-        node.removeAttribute('role');
-        node.removeAttribute('tabindex');
-        node.removeAttribute('aria-haspopup');
-        node.removeAttribute('aria-expanded');
-        return;
-      }
+        const fallbackKey = normalizeLookupText(node.textContent || '');
+        const chemicalFallback = !chemical ? chemicalLookup.get(fallbackKey) : chemical;
 
-      node.dataset.chemicalLookupKey = lookupKey;
-      node.setAttribute('role', 'button');
-      node.setAttribute('tabindex', '0');
-      node.setAttribute('aria-haspopup', 'dialog');
-      node.setAttribute('aria-expanded', activeChemicalAnchorRef.current === node && activeChemicalPopup ? 'true' : 'false');
-      node.setAttribute('title', chemicalFallback.primaryName);
+        if (!chemicalFallback) {
+          node.removeAttribute('data-chemical-lookup-key');
+          node.removeAttribute('role');
+          node.removeAttribute('tabindex');
+          node.removeAttribute('aria-haspopup');
+          node.removeAttribute('aria-expanded');
+          return;
+        }
+
+        node.dataset.chemicalLookupKey = lookupKey;
+        node.setAttribute('role', 'button');
+        node.setAttribute('tabindex', '0');
+        node.setAttribute('aria-haspopup', 'dialog');
+        node.setAttribute('aria-expanded', activeChemicalAnchorRef.current === node && activeChemicalPopup ? 'true' : 'false');
+        node.setAttribute('title', chemicalFallback.primaryName);
+      });
     });
-  }, [html, chemicalLookup, activeChemicalPopup]);
+  }, [getInteractiveRoots, html, chemicalLookup, activeChemicalPopup]);
 
   // Chemical popup click/key handlers
   useEffect(() => {
-    const container = htmlContainerRef.current;
-    if (!container) return;
+    const roots = getInteractiveRoots();
+    if (roots.length === 0) return;
 
     const handleChemicalClick = (event: MouseEvent) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key]');
-      if (!target || !container.contains(target)) return;
-
+      const clickedEl = event.target as HTMLElement;
+      
+      // Only handle clicks on highlighted chemical elements
+      if (!clickedEl.classList.contains('ent-chemical') && !clickedEl.closest('.ent-chemical')) {
+        return;
+      }
+      
+      // Get the text content and lookup in chemicalLookup
+      const textContent = clickedEl.textContent?.trim();
+      if (!textContent) return;
+      
+      const normalizedKey = normalizeLookupText(textContent);
+      const chemical = chemicalLookup.get(normalizedKey);
+      
+      if (!chemical) {
+        // Try with original text as fallback
+        const chemical2 = chemicalLookup.get(textContent.toLowerCase());
+        if (!chemical2) return;
+      }
+      
       event.preventDefault();
 
-      if (activeChemicalAnchorRef.current === target && activeChemicalPopup) {
+      // Use clicked element directly - wrap to provide needed interface
+      const targetEl = clickedEl.closest('.ent-chemical') || clickedEl;
+      
+      if (activeChemicalAnchorRef.current === targetEl && activeChemicalPopup) {
         closeChemicalPopup();
         return;
       }
 
-      openChemicalPopup(target);
+      openChemicalPopup(targetEl as HTMLElement);
     };
 
     const handleChemicalKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key]');
-      if (!target || !container.contains(target)) return;
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key], .ent-chemical');
+      if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
@@ -707,22 +897,24 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       }
     };
 
-    container.addEventListener('click', handleChemicalClick);
-    container.addEventListener('keydown', handleChemicalKeyDown);
+    roots.forEach((container) => {
+      container.addEventListener('click', handleChemicalClick);
+      container.addEventListener('keydown', handleChemicalKeyDown);
+    });
 
     return () => {
-      container.removeEventListener('click', handleChemicalClick);
-      container.removeEventListener('keydown', handleChemicalKeyDown);
+      roots.forEach((container) => {
+        container.removeEventListener('click', handleChemicalClick);
+        container.removeEventListener('keydown', handleChemicalKeyDown);
+      });
     };
-  }, [activeChemicalPopup, closeChemicalPopup, openChemicalPopup]);
+  }, [activeChemicalPopup, closeChemicalPopup, getInteractiveRoots, openChemicalPopup]);
 
   // Chemical popup repositioning
   useEffect(() => {
-    if (!activeChemicalPopup) return;
-
     const repositionPopup = () => {
       const anchor = activeChemicalAnchorRef.current;
-      if (!anchor) return;
+      if (!anchor || !activeChemicalPopup) return;
 
       const nextPosition = getSpeciesPopupPosition(anchor);
       setActiveChemicalPopup((current) => {
@@ -733,8 +925,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
+      const activeAnchor = activeChemicalAnchorRef.current;
+      if (!activeAnchor) return;
       if (chemicalPopupRef.current?.contains(target)) return;
-      if (activeChemicalAnchorRef.current?.contains(target)) return;
+      if (activeAnchor.contains(target)) return;
       closeChemicalPopup();
     };
 
@@ -888,7 +1082,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     { label: 'BIOACTIVITY', className: 'legend-bioactivity' },
     { label: 'ANALYTICAL TECHNIQUE', className: 'legend-analytical-technique' },
     { label: 'DISEASE', className: 'legend-disease' },
-    { label: 'DRUG', className: 'legend-drug' },
   ];
 
   return (
@@ -981,7 +1174,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 </span>
               )}
             </div>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight title-font" dangerouslySetInnerHTML={{ __html: sanitizeHtml(title || 'Untitled Paper') }} />
+              <h1 ref={titleContainerRef} className="text-3xl font-bold text-slate-900 tracking-tight title-font" dangerouslySetInnerHTML={{ __html: sanitizeHtml(title || 'Untitled Paper') }} />
             {(paperAuthors.length > 0 || paperJournal) && (
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
                 {paperAuthors.length > 0 && (
@@ -1111,15 +1304,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               </button>
             </div>
 
-            {/* Molecular Structure Image */}
-            {activeChemicalPopup.chemical.imageData && (
+            {/* Molecular Structure - SVG from RDKit.js */}
+            {activeChemicalPopup.chemical.svgData ? (
               <div className="mt-3 flex justify-center">
-                <img 
-                  src={`data:image/png;base64,${activeChemicalPopup.chemical.imageData}`}
-                  alt="Molecular structure"
-                  className="max-w-full h-auto rounded-lg border border-slate-100"
-                />
+                <div dangerouslySetInnerHTML={{ __html: activeChemicalPopup.chemical.svgData }} />
               </div>
+            ) : (
+              <div className="mt-3 text-xs text-slate-400">No structure</div>
             )}
 
             <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
@@ -1272,11 +1463,11 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     {ents.map((ent, eIdx) => {
                       const expandKey = `${label}-${ent.text.toLowerCase()}-${eIdx}`;
                       const isExpanded = expandedChemical === expandKey;
-                      const hasChemicalMeta = label === 'CHEMICAL' && (
+                      const hasChemicalMeta = isChemicalLikeLabel(label) && (
                         ent.molecular_formula || ent.inchikey || ent.smiles || ent.source_db
                       );
 
-                      if (label === 'CHEMICAL' && hasChemicalMeta) {
+                      if (isChemicalLikeLabel(label) && hasChemicalMeta) {
                         return (
                           <div key={eIdx} className="bg-white border border-slate-100 rounded-xl overflow-hidden transition-all hover:border-blue-200">
                             {/* Collapsed / header row */}
@@ -1356,7 +1547,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         );
                       }
 
-                      // Default card for non-CHEMICAL entities
+                      // Default card for non chemical-like entities
                       return (
                         <div
                           key={eIdx}

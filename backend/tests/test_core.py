@@ -161,6 +161,11 @@ def test_highlight_different_types():
     assert "ent-plant-part" in result
 
 
+def test_color_map_no_drug_label():
+    """DRUG should not remain a distinct highlight class."""
+    assert "DRUG" not in Highlighter.COLOR_MAP
+
+
 def test_highlight_entity_not_found():
     """Entity not in text returns original."""
     html = "<p>No match here.</p>"
@@ -194,7 +199,7 @@ def test_highlight_preserves_cite():
 
 def test_color_map_all_types():
     """All entity types have colors."""
-    expected = ["CHEMICAL", "SPECIES", "DISEASE", "PLANT PART", "DRUG", "LOCATION"]
+    expected = ["CHEMICAL", "SPECIES", "DISEASE", "PLANT PART", "LOCATION"]
     for et in expected:
         assert et in Highlighter.COLOR_MAP
 

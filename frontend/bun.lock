@@ -6,6 +6,7 @@
       "name": "frontend",
       "dependencies": {
         "@phosphor-icons/react": "^2.1.10",
+        "@rdkit/rdkit": "^2025.3.4-1.0.0",
         "@tailwindcss/vite": "^4.2.2",
         "@types/dompurify": "^3.2.0",
         "axios": "^1.15.0",
@@ -114,6 +115,8 @@
     "@oxc-project/types": ["@oxc-project/types@0.124.0", "", {}, "sha512-VBFWMTBvHxS11Z5Lvlr3IWgrwhMTXV+Md+EQF0Xf60+wAdsGFTBx7X7K/hP4pi8N7dcm1RvcHwDxZ16Qx8keUg=="],
 
     "@phosphor-icons/react": ["@phosphor-icons/react@2.1.10", "", { "peerDependencies": { "react": ">= 16.8", "react-dom": ">= 16.8" } }, "sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA=="],
+
+    "@rdkit/rdkit": ["@rdkit/rdkit@2025.3.4-1.0.0", "", {}, "sha512-MJzNoeW2SWt2KCdIibfY213uLWyHZjFfS2ntJ/HuYNHdu6dEiim7jb6ZMU9wnt9Oovkc85BHMuupxkufIMvftQ=="],
 
     "@rolldown/binding-android-arm64": ["@rolldown/binding-android-arm64@1.0.0-rc.15", "", { "os": "android", "cpu": "arm64" }, "sha512-YYe6aWruPZDtHNpwu7+qAHEMbQ/yRl6atqb/AhznLTnD3UY99Q1jE7ihLSahNWkF4EqRPVC4SiR4O0UkLK02tA=="],
 

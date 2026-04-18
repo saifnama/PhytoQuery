@@ -16,8 +16,9 @@ import {
   SidebarSimple,
   Eye,
   X,
+  ArrowsOutSimple,
 } from '@phosphor-icons/react';
-import { ragApi } from '../../lib/api';
+import { buildChatFileContentUrl, ragApi } from '../../lib/api';
 
 interface Source {
   source: string;
@@ -98,6 +99,21 @@ function CustomCheckbox({
   );
 }
 
+function SimplePdfViewer({
+  pdfUrl,
+}: {
+  pdfUrl: string;
+}) {
+  return (
+    <iframe
+      key={pdfUrl}
+      src={pdfUrl}
+      title="PDF"
+      className="h-full w-full rounded-xl border-0"
+    />
+  );
+}
+
 const SESSION_KEYS = {
   MESSAGES: 'pq_chat_messages',
   FILES: 'pq_chat_files',
@@ -131,6 +147,8 @@ const RagPage: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
+  const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
+  const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
 
   // Auto-expand textarea
   useEffect(() => {
@@ -169,6 +187,16 @@ const RagPage: React.FC = () => {
     }
   }, []);
 
+  const closePdfViewer = useCallback(() => {
+    setActivePdfFile(null);
+    setActivePdfUrl(null);
+  }, []);
+
+  const openPdfViewer = useCallback((file: UploadedFile) => {
+    setActivePdfFile(file);
+    setActivePdfUrl(buildChatFileContentUrl(file.name));
+  }, []);
+
   // Persist state changes to sessionStorage
   useEffect(() => {
     sessionStorage.setItem(SESSION_KEYS.MESSAGES, JSON.stringify(messages));
@@ -189,6 +217,14 @@ const RagPage: React.FC = () => {
   useEffect(() => {
     loadIndexedFiles();
   }, [loadIndexedFiles]);
+
+  useEffect(() => {
+    if (!activePdfFile) return;
+    const stillExists = uploadedFiles.some((file) => file.name === activePdfFile.name);
+    if (!stillExists) {
+      closePdfViewer();
+    }
+  }, [activePdfFile, closePdfViewer, uploadedFiles]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -251,6 +287,9 @@ const RagPage: React.FC = () => {
     e.stopPropagation(); // Don't toggle checkbox
     try {
       await ragApi.deleteFile(filename);
+      if (activePdfFile?.name === filename) {
+        closePdfViewer();
+      }
       setUploadedFiles((prev) => prev.filter((f) => f.name !== filename));
     } catch (error) {
       console.error('Delete failed:', error);
@@ -310,6 +349,7 @@ const RagPage: React.FC = () => {
     if (window.confirm(confirmMessage)) {
       try {
         await ragApi.resetChat();
+        closePdfViewer();
         setMessages([]);
         setUploadedFiles([]);
         sessionStorage.removeItem(SESSION_KEYS.MESSAGES);
@@ -434,11 +474,13 @@ const RagPage: React.FC = () => {
             {uploadedFiles.map((file) => (
               <button
                 key={file.name}
-                onClick={() => toggleFile(file.name)}
+                onClick={() => openPdfViewer(file)}
                 className={`p-1.5 rounded-lg transition-colors ${
-                  file.selected
-                    ? 'bg-slate-100 text-blue-500'
-                    : 'text-slate-300 hover:text-slate-500'
+                  activePdfFile?.name === file.name
+                    ? 'bg-blue-50 text-blue-500 ring-1 ring-blue-200'
+                    : file.selected
+                      ? 'bg-slate-100 text-blue-500'
+                      : 'text-slate-300 hover:text-slate-500'
                 }`}
                 title={file.name}
               >
@@ -542,8 +584,12 @@ const RagPage: React.FC = () => {
                     {uploadedFiles.map((file) => (
                       <div
                         key={file.name}
-                        onClick={() => toggleFile(file.name)}
-                        className="w-full flex items-center space-x-3 px-5 py-2.5 hover:bg-slate-50 transition-colors group cursor-pointer"
+                        onClick={() => openPdfViewer(file)}
+                        className={`w-full flex items-center space-x-3 px-5 py-2.5 transition-colors group cursor-pointer ${
+                          activePdfFile?.name === file.name
+                            ? 'bg-blue-50/80 ring-1 ring-inset ring-blue-100'
+                            : 'hover:bg-slate-50'
+                        }`}
                       >
                         <FileTypeIcon ext={file.fileType} size={20} />
                         <div className="flex-1 min-w-0 text-left">
@@ -563,6 +609,7 @@ const RagPage: React.FC = () => {
                             </p>
                           )}
                         </div>
+                        <Eye size={14} className={`flex-shrink-0 transition-colors ${activePdfFile?.name === file.name ? 'text-blue-500' : 'text-slate-300 group-hover:text-slate-500'}`} />
                         <button
                           onClick={(e) => handleDeleteFile(file.name, e)}
                           className="text-slate-300 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
@@ -570,10 +617,12 @@ const RagPage: React.FC = () => {
                         >
                           <Trash size={14} />
                         </button>
-                        <CustomCheckbox
-                          checked={file.selected}
-                          onChange={() => toggleFile(file.name)}
-                        />
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <CustomCheckbox
+                            checked={file.selected}
+                            onChange={() => toggleFile(file.name)}
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -625,7 +674,7 @@ const RagPage: React.FC = () => {
               <div className="w-16 h-16 bg-blue-50 text-blue-300 rounded-2xl flex items-center justify-center mx-auto mb-6">
                 <Chats size={32} weight="thin" />
               </div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">RAG Assistant</h2>
+              
               <p className="text-sm text-slate-500">
                 Upload research papers and ask questions about them
               </p>
@@ -737,6 +786,49 @@ const RagPage: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {activePdfFile && (
+        <aside className="w-[min(32rem,42vw)] min-w-[22rem] border-l border-slate-200 bg-white flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+            <div className="min-w-0">
+              <h3 className="mt-1 text-sm font-semibold text-slate-800 truncate" title={activePdfFile.name}>
+                {displayName(activePdfFile.name)}
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              {activePdfUrl && (
+                <a
+                  href={activePdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                  title="Open PDF in new tab"
+                >
+                  <ArrowsOutSimple size={18} />
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={closePdfViewer}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                title="Close PDF viewer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto bg-slate-100 p-2">
+            {activePdfUrl ? (
+              <SimplePdfViewer pdfUrl={activePdfUrl} />
+            ) : (
+              <div className="h-full min-h-[16rem] flex items-center justify-center text-sm text-slate-500">
+                Select a PDF to preview it here.
+              </div>
+            )}
+          </div>
+        </aside>
+      )}
 
       {/* ─── Source Preview Panel ─── */}
       {previewSource && (

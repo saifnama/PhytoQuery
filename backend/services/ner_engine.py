@@ -90,16 +90,10 @@ ENTITY TYPES & DEFINITIONS
    - Medical condition, disease, or pathological state
    - Examples: malaria, diabetes, tuberculosis, leishmaniasis, oxidative stress
 
-9. DRUG
-   - Named pharmaceutical drug or traditional medicine formulation
-   - Use DRUG (not CHEMICAL) when clinical or therapeutic context is dominant
-   - Examples: aspirin, artemisinin, Chyawanprash formulation, morphine
-
 ════════════════════════════════════════
 DISAMBIGUATION RULES
 ════════════════════════════════════════
 
-- CHEMICAL vs DRUG: If the compound is discussed in a clinical/therapeutic treatment context, label it DRUG. If discussed as a constituent or in activity screening, label it CHEMICAL.
 - ANALYTICAL TECHNIQUE vs EXTRACTION METHOD: Always prefer ANALYTICAL TECHNIQUE when the technique is a specific separation process (e.g., steam distillation, HPLC). Use EXTRACTION METHOD for bulk crude extraction processes (e.g., Soxhlet, maceration).
 - SPECIES (scientific) vs SPECIES (common): Same entity type — distinguish only via the "name_type" field. Both "tulsi" and "Ocimum sanctum" → SPECIES.
 - Nested entities are allowed. Extract overlapping entities separately.
@@ -170,8 +164,8 @@ Input:
 "Leaves and roots of neem collected from Tamil Nadu were subjected to Soxhlet extraction using methanol. The crude extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models. Nimbolide (3.8%) was isolated via column chromatography and found to inhibit COX-2 enzyme."
 
 <reasoning>
-1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (bioactivity), Candida albicans (species), antidiabetic (bioactivity), diabetes (disease), streptozotocin (drug), Nimbolide (chemical), column chromatography (isolation method)
-2. Ambiguities: streptozotocin — used as pharmacological tool to induce diabetes, label DRUG.
+1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (bioactivity), Candida albicans (species), antidiabetic (bioactivity), diabetes (disease), streptozotocin (chemical), Nimbolide (chemical), column chromatography (isolation method)
+2. Ambiguities: streptozotocin — even in pharmacological model context, normalize compounds to CHEMICAL.
 </reasoning>
 
 [
@@ -182,7 +176,7 @@ Input:
   {"span": "antifungal",            "type": "BIOACTIVITY", "start": 120, "end": 130, "name_type": null,         "linked_to": null},
   {"span": "Candida albicans",      "type": "SPECIES",           "start": 139, "end": 155, "name_type": "scientific", "linked_to": null},
   {"span": "antidiabetic",          "type": "BIOACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
-  {"span": "streptozotocin",        "type": "DRUG",              "start": 176, "end": 190, "name_type": null,         "linked_to": null},
+  {"span": "streptozotocin",        "type": "CHEMICAL",          "start": 176, "end": 190, "name_type": null,         "linked_to": null},
   {"span": "diabetes",              "type": "DISEASE",           "start": 199, "end": 207, "name_type": null,         "linked_to": null},
   {"span": "Nimbolide",             "type": "CHEMICAL",          "start": 216, "end": 225, "name_type": null,         "linked_to": null},
   {"span": "column chromatography", "type": "ANALYTICAL TECHNIQUE",  "start": 247, "end": 267, "name_type": null,         "linked_to": null}
@@ -199,12 +193,26 @@ LABEL_DEFINITIONS = {
     "BIOACTIVITY": "Biological or chemical activities and effects of substances.",
     "ANALYTICAL TECHNIQUE": "Specific separation or isolation technique.",
     "DISEASE": "Diseases, medical conditions, infections, disorders.",
-    "DRUG": "Pharmaceutical drugs and synthetic medicines.",
 }
 
 RULER_PATTERNS = [
     # ANALYTICAL TECHNIQUE patterns removed - now handled by dictionary
 ]
+
+
+def enrich_chemical_like_entity(entity: Dict[str, Any], chemical_matcher: Any) -> None:
+    chemical_metadata = chemical_matcher.lookup(entity.get("text", ""))
+    if chemical_metadata:
+        for key, value in chemical_metadata.items():
+            if key in {"text", "span", "start", "end"}:
+                continue
+            if value not in (None, "", []):
+                entity[key] = value
+    if not entity.get("canonical"):
+        text_lower = entity.get("text", "").lower()
+        entity["canonical"] = chemical_matcher.canonical_map.get(
+            text_lower, entity.get("text", "")
+        )
 
 
 class NERService:
@@ -424,17 +432,7 @@ class NERService:
                         text_lower, e.get("text", "")
                     )
             elif label == "CHEMICAL":
-                chemical_metadata = chemical_matcher.lookup(e.get("text", ""))
-                if chemical_metadata:
-                    for key, value in chemical_metadata.items():
-                        if key in {"text", "span", "start", "end"}:
-                            continue
-                        if value not in (None, "", []):
-                            e[key] = value
-                if not e.get("canonical"):
-                    e["canonical"] = chemical_matcher.canonical_map.get(
-                        text_lower, e.get("text", "")
-                    )
+                enrich_chemical_like_entity(e, chemical_matcher)
             elif e.get("canonical"):
                 continue
             elif label == "PLANT PART":
@@ -596,6 +594,7 @@ class NERService:
                     "EXTRACTION_METHOD": "EXTRACTION METHOD",
                     "BIOACTIVITY": "BIOACTIVITY",
                     "ANALYTICAL_TECHNIQUE": "ANALYTICAL TECHNIQUE",
+                    "DRUG": "CHEMICAL",
                 }
                 label = remap.get(label, label)
 

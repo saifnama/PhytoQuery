@@ -19,6 +19,7 @@ PhytoQuery is a research paper reader that retrieves papers from Europe PMC, par
 
 ### Chat / RAG
 - Upload PDFs and query them with AI
+- Inline PDF viewer — click any uploaded PDF to view it in the side panel
 - Citations with source references
 
 ### Named Entity Recognition (NER)
@@ -96,6 +97,13 @@ bun run build
 ```bash
 cd PhytoQuery
 phytovenv\Scripts\activate
+uvicorn backend.app:app --reload
+```
+
+Or directly:
+```bash
+cd PhytoQuery
+phytovenv\Scripts\activate
 python -m backend.app
 ```
 
@@ -104,7 +112,7 @@ Open browser at `http://localhost:8000`
 ## 6. Tech Stack
 
 - **Backend:** FastAPI (Python)
-- **Frontend:** React + Tailwind CSS + Vite
+- **Frontend:** React + Tailwind CSS + Vite + Phosphor Icons
 - **Sanitization:** nh3 (server) + DOMPurify (client)
 - **Paper Source:** Europe PMC API
 - **LLM:** Ollama, OpenRouter

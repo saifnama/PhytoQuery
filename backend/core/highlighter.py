@@ -15,7 +15,6 @@ class Highlighter:
         "SEASON": "ent-season",
         "ANALYTICAL TECHNIQUE": "ent-analytical-technique",
         "ISOLATION METHOD": "ent-isolation-method",
-        "DRUG": "ent-drug",
         "DISEASE": "ent-disease",
     }
 

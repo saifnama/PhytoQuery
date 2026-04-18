@@ -45,8 +45,6 @@
     --entity-analytical-technique-rgb: 100 116 139;
     --entity-disease: #DC2626;
     --entity-disease-rgb: 220 38 38;
-    --entity-drug: #0D9488;
-    --entity-drug-rgb: 13 148 136;
     
     /* Typography & Sizing Tokens (design-system-friendly) */
     --heading-h2-size: 1.75rem;
@@ -298,13 +296,6 @@ mark.ner-disease,
     --entity-accent-rgb: var(--entity-disease-rgb);
 }
 
-.ent-drug,
-mark.ner-drug,
-.legend-drug {
-    --entity-accent: var(--entity-drug);
-    --entity-accent-rgb: var(--entity-drug-rgb);
-}
-
 .legend-chemical,
 .legend-species,
 .legend-plant-part,
@@ -315,7 +306,6 @@ mark.ner-drug,
 .legend-bioactivity,
 .legend-analytical-technique,
 .legend-isolation-method,
-.legend-drug,
 .legend-disease,
 .article-prose :is(
     .ent-chemical,
@@ -328,7 +318,6 @@ mark.ner-drug,
     .ent-bioactivity,
     .ent-analytical-technique,
     .ent-isolation-method,
-    .ent-drug,
     .ent-disease,
     mark.ner-chemical,
     mark.ner-species,
@@ -340,7 +329,30 @@ mark.ner-drug,
     mark.ner-bioactivity,
     mark.ner-analytical-technique,
     mark.ner-isolation-method,
-    mark.ner-drug,
+    mark.ner-disease
+),
+.title-font :is(
+    .ent-chemical,
+    .ent-species,
+    .ent-plant-part,
+    .ent-extraction-method,
+    .ent-development-stage,
+    .ent-season,
+    .ent-location,
+    .ent-bioactivity,
+    .ent-analytical-technique,
+    .ent-isolation-method,
+    .ent-disease,
+    mark.ner-chemical,
+    mark.ner-species,
+    mark.ner-plant-part,
+    mark.ner-extraction-method,
+    mark.ner-development-stage,
+    mark.ner-season,
+    mark.ner-location,
+    mark.ner-bioactivity,
+    mark.ner-analytical-technique,
+    mark.ner-isolation-method,
     mark.ner-disease
 ) {
     color: var(--entity-accent, var(--entity-default)) !important;
@@ -357,7 +369,6 @@ mark.ner-drug,
     .ent-bioactivity,
     .ent-analytical-technique,
     .ent-isolation-method,
-    .ent-drug,
     .ent-disease,
     mark.ner-chemical,
     mark.ner-species,
@@ -369,7 +380,30 @@ mark.ner-drug,
     mark.ner-bioactivity,
     mark.ner-analytical-technique,
     mark.ner-isolation-method,
-    mark.ner-drug,
+    mark.ner-disease
+),
+.title-font :is(
+    .ent-chemical,
+    .ent-species,
+    .ent-plant-part,
+    .ent-extraction-method,
+    .ent-development-stage,
+    .ent-season,
+    .ent-location,
+    .ent-bioactivity,
+    .ent-analytical-technique,
+    .ent-isolation-method,
+    .ent-disease,
+    mark.ner-chemical,
+    mark.ner-species,
+    mark.ner-plant-part,
+    mark.ner-extraction-method,
+    mark.ner-development-stage,
+    mark.ner-season,
+    mark.ner-location,
+    mark.ner-bioactivity,
+    mark.ner-analytical-technique,
+    mark.ner-isolation-method,
     mark.ner-disease
 ) {
     background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;

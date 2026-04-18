@@ -37,7 +37,6 @@ const NerPage: React.FC = () => {
 
     try {
       const data = await nerApi.search(query, filters, cursorMark);
-      console.log('[Search] Full response:', data);
       setResults(data.results || []);
       setPagination(data.pagination || null);
       setCurrentCursor(cursorMark);
@@ -45,7 +44,6 @@ const NerPage: React.FC = () => {
       setCursorHistory(prev => [...prev, cursorMark]);
       setLastQuery(query);
       setLastFilters(filters);
-      console.log('[Search] Results count:', (data.results || []).length, 'Pagination:', data.pagination);
 
       // Persist search query in URL for back navigation
       const params = new URLSearchParams();

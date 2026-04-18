@@ -23,7 +23,7 @@ DATA_DIR = BASE_DIR / "gazetteer" / "data"
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 DATA_FILE = DATA_DIR / "chemical.csv"
 CACHE_FILE = BUILD_DIR / "chemical_cache.pkl"
-CACHE_VERSION = "v4"
+CACHE_VERSION = "v5"
 
 
 def _normalize_alias(text: str) -> str:
@@ -80,19 +80,14 @@ def build_chemical_cache_data(
 
         primary_aliases = _alias_variants(preferred_name)
         synonyms = [s.strip() for s in synonyms_raw.split("|") if s.strip()]
-        synonym_aliases: List[str] = []
-        for alias in synonyms:
-            synonym_aliases.extend(_alias_variants(alias))
-        synonym_aliases = [
-            alias for alias in list(dict.fromkeys(synonym_aliases)) if alias not in primary_aliases
-        ]
-        aliases = primary_aliases + synonym_aliases
+        aliases = list(dict.fromkeys(primary_aliases + synonyms))
 
         prepared_rows.append(
             {
                 "canonical": canonical,
                 "preferred_name": preferred_name,
                 "aliases": aliases,
+                "match_aliases": primary_aliases,
                 "inchikey": inchikey,
                 "smiles": smiles,
                 "molecular_formula": molecular_formula,
@@ -109,11 +104,6 @@ def build_chemical_cache_data(
                     "priority": 2 if index == 0 else 1,
                 }
             )
-        for alias in synonym_aliases:
-            alias_candidates.setdefault(alias.lower(), []).append(
-                {"canonical": canonical, "alias": alias, "priority": 0}
-            )
-
     alias_owner: Dict[str, str] = {}
     invalid_alias_keys: set[str] = set()
 
@@ -148,7 +138,7 @@ def build_chemical_cache_data(
         canonical = prepared["canonical"]
         accepted_aliases = [
             alias
-            for alias in prepared["aliases"]
+            for alias in prepared["match_aliases"]
             if alias.lower() not in invalid_alias_keys
             and alias_owner.get(alias.lower()) == canonical
         ]
@@ -160,7 +150,7 @@ def build_chemical_cache_data(
         metadata = {
             "canonical": canonical,
             "preferred_name": prepared["preferred_name"],
-            "aliases": accepted_aliases,
+            "aliases": prepared["aliases"],
             "inchikey": prepared["inchikey"],
             "smiles": prepared["smiles"],
             "molecular_formula": prepared["molecular_formula"],
@@ -215,6 +205,12 @@ class ChemicalMatcher:
                     if not data.get("metadata_map") or not data.get("canonical_map"):
                         logger.info(
                             "[ChemicalMatcher] Cache schema is incomplete; rebuilding from CSV"
+                        )
+                        self._build_from_csv()
+                        return
+                    if data.get("source_mtime") != DATA_FILE.stat().st_mtime:
+                        logger.info(
+                            "[ChemicalMatcher] Cache source timestamp mismatch; rebuilding from CSV"
                         )
                         self._build_from_csv()
                         return

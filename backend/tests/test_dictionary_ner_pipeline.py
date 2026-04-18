@@ -34,6 +34,14 @@ def _write_chemical_csv(tmp_path) -> None:
     )
 
 
+def _write_variant_term_chemical_csv(tmp_path) -> None:
+    (tmp_path / "chemical.csv").write_text(
+        "term,synonyms,inchikey,smiles,molecular_formula,source_db,source_url\n"
+        "4-Allyl-2-methoxyphenol,Eugenol|Clove oil phenol,RNGBKPVMWVROLL-UHFFFAOYSA-N,COC1=C(C=CC=C1)CC=C,C10H12O2,PubChem,https://pubchem.ncbi.nlm.nih.gov/compound/3314\n",
+        encoding="utf-8",
+    )
+
+
 def _write_collision_chemical_csv(tmp_path) -> None:
     (tmp_path / "chemical.csv").write_text(
         "term,synonyms,inchikey,smiles,molecular_formula,source_db,source_url\n"
@@ -142,7 +150,7 @@ def test_species_matcher_supports_verified_species_metadata(tmp_path, monkeypatc
     assert target["name_type"] == "scientific"
 
 
-def test_chemical_matcher_supports_alias_matching_and_metadata(tmp_path, monkeypatch):
+def test_chemical_matcher_supports_term_matching_and_metadata(tmp_path, monkeypatch):
     import backend.gazetteer.chemical_matcher as chemical_matcher
 
     _write_chemical_csv(tmp_path)
@@ -151,14 +159,14 @@ def test_chemical_matcher_supports_alias_matching_and_metadata(tmp_path, monkeyp
     monkeypatch.setattr(chemical_matcher, "_matcher", None)
 
     matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
-    matches = matcher.match("4-Allyl-2-methoxyphenol was detected in the extract.")
+    matches = matcher.match("Eugenol was detected in the extract.")
 
     assert matches
     target = matches[0]
-    assert target["text"] == "4-Allyl-2-methoxyphenol"
+    assert target["text"] == "Eugenol"
     assert target["canonical"] == "Eugenol"
     assert target["preferred_name"] == "Eugenol"
-    assert "4-Allyl-2-methoxyphenol" in target["aliases"]
+    assert "Clove oil phenol" in target["aliases"]
     assert target["inchikey"] == "RNGBKPVMWVROLL-UHFFFAOYSA-N"
     assert target["smiles"] == "COC1=C(C=CC=C1)CC=C"
     assert target["molecular_formula"] == "C10H12O2"
@@ -166,10 +174,10 @@ def test_chemical_matcher_supports_alias_matching_and_metadata(tmp_path, monkeyp
     assert target["source_url"] == "https://pubchem.ncbi.nlm.nih.gov/compound/3314"
 
 
-def test_chemical_matcher_supports_normalized_alias_variants(tmp_path, monkeypatch):
+def test_chemical_matcher_supports_normalized_primary_term_variants(tmp_path, monkeypatch):
     import backend.gazetteer.chemical_matcher as chemical_matcher
 
-    _write_chemical_csv(tmp_path)
+    _write_variant_term_chemical_csv(tmp_path)
     monkeypatch.setattr(chemical_matcher, "DATA_FILE", tmp_path / "chemical.csv")
     monkeypatch.setattr(chemical_matcher, "CACHE_FILE", tmp_path / "chemical.pkl")
     monkeypatch.setattr(chemical_matcher, "_matcher", None)
@@ -179,24 +187,25 @@ def test_chemical_matcher_supports_normalized_alias_variants(tmp_path, monkeypat
 
     assert matches
     target = matches[0]
-    assert target["canonical"] == "Eugenol"
-    assert target["preferred_name"] == "Eugenol"
+    assert target["canonical"] == "4-Allyl-2-methoxyphenol"
+    assert target["preferred_name"] == "4-Allyl-2-methoxyphenol"
 
 
-def test_chemical_matcher_invalidates_shared_alias_collisions(tmp_path, monkeypatch):
+def test_chemical_matcher_does_not_match_synonyms(tmp_path, monkeypatch):
     import backend.gazetteer.chemical_matcher as chemical_matcher
 
-    _write_collision_chemical_csv(tmp_path)
+    _write_chemical_csv(tmp_path)
     monkeypatch.setattr(chemical_matcher, "DATA_FILE", tmp_path / "chemical.csv")
     monkeypatch.setattr(chemical_matcher, "CACHE_FILE", tmp_path / "chemical.pkl")
     monkeypatch.setattr(chemical_matcher, "_matcher", None)
 
     matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
-    match = matcher.lookup("Shared Alias")
+    matches = matcher.match("Clove oil phenol was detected in the extract.")
+    metadata = matcher.lookup("Eugenol")
 
-    assert match is None
-    assert "Shared Alias" not in matcher.aliases_by_canonical["Eugenol"]
-    assert "Shared Alias" not in matcher.aliases_by_canonical["Isoeugenol"]
+    assert matches == []
+    assert metadata is not None
+    assert "Clove oil phenol" in metadata["aliases"]
 
 
 def test_chemical_matcher_preserves_primary_term_over_synonym_collision(
@@ -225,7 +234,7 @@ def test_chemical_matcher_rebuilds_stale_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(chemical_matcher, "_matcher", None)
 
     matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
-    initial = matcher.lookup("Clove oil phenol")
+    initial = matcher.lookup("Eugenol")
     assert initial is not None
     assert initial["canonical"] == "Eugenol"
 
@@ -238,7 +247,7 @@ def test_chemical_matcher_rebuilds_stale_cache(tmp_path, monkeypatch):
 
     monkeypatch.setattr(chemical_matcher, "_matcher", None)
     rebuilt = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
-    rebuilt_lookup = rebuilt.lookup("Clove oil phenol")
+    rebuilt_lookup = rebuilt.lookup("Isoeugenol")
     assert rebuilt_lookup is not None
     assert rebuilt_lookup["canonical"] == "Isoeugenol"
 
@@ -261,7 +270,7 @@ def test_chemical_matcher_rebuilds_incomplete_legacy_cache(tmp_path, monkeypatch
         pickle.dump(legacy_cache, f)
 
     matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
-    lookup = matcher.lookup("4-Allyl-2-methoxyphenol")
+    lookup = matcher.lookup("Eugenol")
 
     assert lookup is not None
     assert lookup["canonical"] == "Eugenol"
@@ -300,6 +309,40 @@ def test_chemical_matcher_rebuilds_cache_on_version_mismatch(tmp_path, monkeypat
     assert lookup["canonical"] == "Eugenol"
 
 
+def test_chemical_matcher_rebuilds_cache_on_source_mtime_mismatch(tmp_path, monkeypatch):
+    import backend.gazetteer.chemical_matcher as chemical_matcher
+
+    _write_chemical_csv(tmp_path)
+    monkeypatch.setattr(chemical_matcher, "DATA_FILE", tmp_path / "chemical.csv")
+    monkeypatch.setattr(chemical_matcher, "CACHE_FILE", tmp_path / "chemical.pkl")
+    monkeypatch.setattr(chemical_matcher, "_matcher", None)
+
+    stale_cache = {
+        "CHEMICAL": {
+            "terms": ["eugenol"],
+            "canonical_map": {"eugenol": "Stale"},
+            "metadata_map": {
+                "eugenol": {
+                    "canonical": "Stale",
+                    "preferred_name": "Stale",
+                    "aliases": ["eugenol"],
+                }
+            },
+            "aliases_by_canonical": {"Stale": ["eugenol"]},
+            "cache_version": chemical_matcher.CACHE_VERSION,
+            "source_mtime": 0,
+        }
+    }
+    with open(tmp_path / "chemical.pkl", "wb") as f:
+        pickle.dump(stale_cache, f)
+
+    matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
+
+    lookup = matcher.lookup("Eugenol")
+    assert lookup is not None
+    assert lookup["canonical"] == "Eugenol"
+
+
 def test_build_chemical_matcher_reads_term_schema(tmp_path):
     from backend.gazetteer.build_matcher import build_chemical_matcher
     from backend.gazetteer.chemical_matcher import CACHE_VERSION
@@ -309,7 +352,8 @@ def test_build_chemical_matcher_reads_term_schema(tmp_path):
     cache = build_chemical_matcher(tmp_path / "chemical.csv")
 
     assert cache["canonical_map"]["eugenol"] == "Eugenol"
-    assert cache["metadata_map"]["clove oil phenol"]["preferred_name"] == "Eugenol"
+    assert cache["metadata_map"]["eugenol"]["preferred_name"] == "Eugenol"
+    assert "Clove oil phenol" in cache["metadata_map"]["eugenol"]["aliases"]
     assert cache["cache_version"] == CACHE_VERSION
 
 
@@ -357,7 +401,7 @@ async def test_ner_service_process_text_extracts_new_dictionary_entities(
     _, entities = cast(
         Tuple[Dict[str, Any], List[Dict[str, Any]]],
         await service.process_text(
-            "Leaves of Ocimum sanctum were collected in fall season at full bloom after hot continuous extraction and profiled by gc-ms. 4-Allyl-2-methoxyphenol was the major compound."
+            "Leaves of Ocimum sanctum were collected in fall season at full bloom after hot continuous extraction and profiled by gc-ms. Eugenol was the major compound."
         ),
     )
 
@@ -389,6 +433,52 @@ async def test_ner_service_process_text_extracts_new_dictionary_entities(
         chemical_entity["source_url"]
         == "https://pubchem.ncbi.nlm.nih.gov/compound/3314"
     )
+
+
+def test_enrich_chemical_like_entity_supports_chemical_metadata(tmp_path, monkeypatch):
+    import backend.services.ner_engine as ner_engine
+    import backend.gazetteer.chemical_matcher as chemical_matcher
+
+    _write_chemical_csv(tmp_path)
+    monkeypatch.setattr(chemical_matcher, "DATA_FILE", tmp_path / "chemical.csv")
+    monkeypatch.setattr(chemical_matcher, "CACHE_FILE", tmp_path / "chemical.pkl")
+    monkeypatch.setattr(chemical_matcher, "_matcher", None)
+
+    matcher = chemical_matcher.ChemicalMatcher(nlp=spacy.blank("en"))
+    chemical_entity = {
+        "text": "Eugenol",
+        "label": "CHEMICAL",
+        "score": 1.0,
+        "name_type": None,
+        "linked_to": None,
+    }
+
+    ner_engine.enrich_chemical_like_entity(chemical_entity, matcher)
+
+    assert chemical_entity["canonical"] == "Eugenol"
+    assert chemical_entity["preferred_name"] == "Eugenol"
+    assert chemical_entity["inchikey"] == "RNGBKPVMWVROLL-UHFFFAOYSA-N"
+    assert chemical_entity["smiles"] == "COC1=C(C=CC=C1)CC=C"
+    assert chemical_entity["molecular_formula"] == "C10H12O2"
+    assert chemical_entity["source_db"] == "PubChem"
+    assert (
+        chemical_entity["source_url"]
+        == "https://pubchem.ncbi.nlm.nih.gov/compound/3314"
+    )
+
+
+def test_parse_llm_response_normalizes_drug_to_chemical():
+    import backend.services.ner_engine as ner_engine
+
+    service = object.__new__(ner_engine.NERService)
+    service.all_labels = list(ner_engine.LABEL_DEFINITIONS.keys())
+
+    parsed = service.parse_llm_response(
+        '[{"span":"streptozotocin","type":"DRUG","start":0,"end":15,"name_type":null,"linked_to":null}]'
+    )
+
+    assert parsed
+    assert parsed[0]["label"] == "CHEMICAL"
 
 
 def test_highlighter_supports_new_dictionary_entity_classes():

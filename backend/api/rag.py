@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Header
+from fastapi.responses import FileResponse
 from typing import List, Optional
 import os
 import shutil
@@ -109,6 +110,30 @@ async def list_indexed_files(
     """List all documents currently indexed in the RAG vector store for the user."""
     user_id = get_user_id(x_user_id)
     return service.list_indexed_files(user_id)
+
+
+@router.get("/files/{filename}/content")
+async def get_uploaded_file_content(
+    filename: str,
+    user_id: Optional[str] = None,
+    x_user_id: Optional[str] = Header(None),
+):
+    """Return the uploaded PDF file for inline viewing for the current user."""
+    user_id = get_user_id(x_user_id or user_id)
+    safe_filename = os.path.basename(filename)
+    if safe_filename != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    file_path = os.path.join(UPLOAD_DIR, user_id, safe_filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=safe_filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.delete("/files/{filename}")
