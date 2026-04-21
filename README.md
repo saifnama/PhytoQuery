@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-PhytoQuery is a research paper reader that retrieves papers from Europe PMC, parses JATS XML, and renders the content with Named Entity Recognition (NER) highlights. The project uses a FastAPI backend, React frontend with Tailwind CSS, and DOMPurify for HTML sanitization.
+PhytoQuery is a research paper reader that retrieves papers from Europe PMC, parses JATS XML, and renders the content with Named Entity Recognition (NER) highlights. The project uses a FastAPI backend, React frontend with Tailwind CSS, and DOMPurify for HTML sanitization. Chemical popups in the paper reader can also render molecular structures client-side from SMILES strings using the local `smiles-drawer` npm package.
 
 ## 2. Features
 
@@ -11,6 +11,7 @@ PhytoQuery is a research paper reader that retrieves papers from Europe PMC, par
 - Continuous smooth scrolling — all sections rendered inline for seamless reading
 - Scroll-spy highlighting — active section is reflected in the TOC as you scroll
 - Wide tables displayed with horizontal scrolling
+- Chemical entity popups with client-side molecule rendering from SMILES strings
 
 ### Search
 - Search Europe PMC by keywords, DOI, PMCID, or PMID
@@ -93,6 +94,8 @@ bun install
 bun run build
 ```
 
+`bun install` pulls in all frontend dependencies, including `smiles-drawer` for local chemical structure rendering. No CDN or backend rendering fallback is required for the popup molecule view.
+
 ### Run Backend
 ```bash
 cd PhytoQuery
@@ -112,7 +115,7 @@ Open browser at `http://localhost:8000`
 ## 6. Tech Stack
 
 - **Backend:** FastAPI (Python)
-- **Frontend:** React + Tailwind CSS + Vite + Phosphor Icons
+- **Frontend:** React + Tailwind CSS + Vite + Phosphor Icons + smiles-drawer
 - **Sanitization:** nh3 (server) + DOMPurify (client)
 - **Paper Source:** Europe PMC API
 - **LLM:** Ollama, OpenRouter

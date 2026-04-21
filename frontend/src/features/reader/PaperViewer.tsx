@@ -2,79 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { sanitizeHtml } from '../../utils/sanitize';
 import { PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
-
-// RDKit.js types
-interface RDKitModule {
-  get_mol(smiles: string): { get_svg(): string; delete(): void } | null;
-  get_qmol(smarts: string): unknown;
-  version(): string;
-}
-
-// Declare global window.initRDKitModule
-declare global {
-  interface Window {
-    initRDKitModule(): Promise<RDKitModule>;
-  }
-}
-
-// RDKit.js module instance - loaded lazily on first use
-let RDKitModule: RDKitModule | null = null;
-let RDKitLoading = false;
-
-// Initialize RDKit.js - called on first molecules request
-async function loadRDKitJS(): Promise<RDKitModule | null> {
-  if (RDKitModule) return RDKitModule;
-  if (RDKitLoading) {
-    // Wait and retry
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    return RDKitModule;
-  }
-  
-  RDKitLoading = true;
-  
-  return new Promise((resolve) => {
-    // Load RDKit.js from CDN
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/@rdkit/rdkit/dist/RDKit_minimal.js';
-    script.async = true;
-    
-    script.onload = async () => {
-      // Poll for initRDKitModule to become available
-      let attempts = 0;
-      const waitForInit = async () => {
-        while (attempts < 20) {
-          if (typeof window.initRDKitModule === 'function') {
-            try {
-              RDKitModule = await window.initRDKitModule();
-              // RDKit.js ready
-              RDKitLoading = false;
-              resolve(RDKitModule);
-              return;
-            } catch (err) {
-              // init error
-              break;
-            }
-          }
-          await new Promise(r => setTimeout(r, 200));
-          attempts++;
-        }
-        // init not found
-        RDKitLoading = false;
-        resolve(null);
-      };
-      
-      waitForInit();
-    };
-    
-    script.onerror = () => {
-      // script load error
-      RDKitLoading = false;
-      resolve(null);
-    };
-    
-    document.head.appendChild(script);
-  });
-}
+import SmilesDrawer from 'smiles-drawer';
 
 const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
 const CHEMICAL_SELECTOR = '.ent-chemical, mark.ner-chemical';
@@ -110,8 +38,6 @@ type ChemicalPopupData = {
   preferredName?: string;
   synonyms?: string[];
   smiles?: string;
-  imageData?: string; // base64 encoded molecular structure image (deprecated)
-  svgData?: string; // SVG molecular structure from RDKit.js
   inchikey?: string;
   molecularFormula?: string;
   sourceDb?: string;
@@ -286,9 +212,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const observerRef = useRef<IntersectionObserver | null>(null);
   const speciesPopupRef = useRef<HTMLDivElement>(null);
   const chemicalPopupRef = useRef<HTMLDivElement>(null);
+  const chemicalStructureSvgRef = useRef<SVGSVGElement | null>(null);
+  const chemicalStructureRenderIdRef = useRef(0);
   const activeSpeciesAnchorRef = useRef<HTMLElement | null>(null);
   const activeChemicalAnchorRef = useRef<HTMLElement | null>(null);
   const chemicalPopupRequestIdRef = useRef(0);
+  const [isRenderingChemicalStructure, setIsRenderingChemicalStructure] = useState(false);
+  const [chemicalStructureError, setChemicalStructureError] = useState(false);
 
   const getInteractiveRoots = useCallback(() => {
     const roots: HTMLElement[] = [];
@@ -309,6 +239,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const closeChemicalPopup = useCallback(() => {
     chemicalPopupRequestIdRef.current += 1;
     activeChemicalAnchorRef.current = null;
+    setIsRenderingChemicalStructure(false);
+    setChemicalStructureError(false);
     setActiveChemicalPopup(null);
   }, []);
 
@@ -467,7 +399,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     return lookup;
   }, [entities]);
 
-  const openChemicalPopup = useCallback(async (target: HTMLElement) => {
+  const openChemicalPopup = useCallback((target: HTMLElement) => {
     const requestId = chemicalPopupRequestIdRef.current + 1;
     chemicalPopupRequestIdRef.current = requestId;
     activeChemicalAnchorRef.current = target;
@@ -493,40 +425,89 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       }
     }
     if (!chemical) return;
-    // Generate molecular structure locally using RDKit.js
-    let svgData: string | undefined;
-    if (chemical.smiles) {
-      try {
-        // Load RDKit.js if not loaded yet
-        const rdkit = await loadRDKitJS();
-        
-        if (rdkit) {
-          const mol = rdkit.get_mol(chemical.smiles);
-          
-          if (mol) {
-            svgData = mol.get_svg();
-            mol.delete();
-          }
-        }
-      } catch (e) {
-        console.error('Failed to generate molecule with RDKit.js:', e);
-      }
-    } else {
-      // No SMILES available
-    }
-
     if (requestId !== chemicalPopupRequestIdRef.current || !target.isConnected) {
       return;
     }
 
-    const chemicalWithImage = { ...chemical, svgData };
-
+    setIsRenderingChemicalStructure(!!chemical.smiles);
+    setChemicalStructureError(false);
     setActiveChemicalPopup({
-      chemical: chemicalWithImage,
+      chemical,
       anchorText: stripHtml(target.textContent),
       position: getSpeciesPopupPosition(target),
     });
   }, [chemicalLookup]);
+
+  useEffect(() => {
+    const svgElement = chemicalStructureSvgRef.current;
+    const smiles = activeChemicalPopup?.chemical.smiles;
+    const renderId = chemicalStructureRenderIdRef.current + 1;
+    chemicalStructureRenderIdRef.current = renderId;
+
+    if (svgElement) {
+      while (svgElement.firstChild) {
+        svgElement.removeChild(svgElement.firstChild);
+      }
+    }
+
+    if (!activeChemicalPopup || !smiles || !svgElement) {
+      setIsRenderingChemicalStructure(false);
+      setChemicalStructureError(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsRenderingChemicalStructure(true);
+    setChemicalStructureError(false);
+
+    const drawer = new SmilesDrawer.SvgDrawer({ width: 400, height: 300 });
+
+    SmilesDrawer.parse(
+      smiles,
+      (tree: unknown) => {
+        if (cancelled || chemicalStructureRenderIdRef.current !== renderId || !chemicalStructureSvgRef.current) {
+          return;
+        }
+
+        const currentSvg = chemicalStructureSvgRef.current;
+        while (currentSvg.firstChild) {
+          currentSvg.removeChild(currentSvg.firstChild);
+        }
+
+        try {
+          drawer.draw(tree, currentSvg, 'light');
+          const hasVisibleStructure = currentSvg.querySelector('path, text, line, circle, polygon, rect') !== null;
+          if (cancelled || chemicalStructureRenderIdRef.current !== renderId) {
+            return;
+          }
+          setChemicalStructureError(!hasVisibleStructure);
+          setIsRenderingChemicalStructure(false);
+        } catch (error) {
+          console.error('Failed to draw molecule:', error, 'SMILES:', smiles);
+          if (cancelled || chemicalStructureRenderIdRef.current !== renderId) {
+            return;
+          }
+          setIsRenderingChemicalStructure(false);
+          setChemicalStructureError(true);
+        }
+      },
+      (error: unknown) => {
+        if (cancelled || chemicalStructureRenderIdRef.current !== renderId) {
+          return;
+        }
+        console.error('Failed to parse molecule:', error, 'SMILES:', smiles);
+        setIsRenderingChemicalStructure(false);
+        setChemicalStructureError(true);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      if (chemicalStructureRenderIdRef.current === renderId) {
+        chemicalStructureRenderIdRef.current += 1;
+      }
+    };
+  }, [activeChemicalPopup]);
 
   // Group entities by label and calculate true frequency from frontend HTML
   const groupedEntities = useCallback(() => {
@@ -654,11 +635,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   const normalizedEntitySearch = entitySearch.trim().toLowerCase();
   
-  // Pre-load RDKit.js on mount so it's ready before first click
-  useEffect(() => {
-    // Pre-load RDKit.js on mount for instant rendering
-    loadRDKitJS();
-  }, []);
+  
   
   useEffect(() => {
     setEntitySearch('');
@@ -1304,14 +1281,31 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               </button>
             </div>
 
-            {/* Molecular Structure - SVG from RDKit.js */}
-            {activeChemicalPopup.chemical.svgData ? (
-              <div className="mt-3 flex justify-center">
-                <div dangerouslySetInnerHTML={{ __html: activeChemicalPopup.chemical.svgData }} />
-              </div>
-            ) : (
-              <div className="mt-3 text-xs text-slate-400">No structure</div>
-            )}
+            {/* Molecular Structure */}
+            <div className="mt-3 min-h-[19rem] rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-4">
+              {activeChemicalPopup.chemical.smiles ? (
+                <div className="relative flex min-h-[17rem] items-center justify-center">
+                  {isRenderingChemicalStructure && (
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-white/75 backdrop-blur-[1px]">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" />
+                      <p className="text-xs font-medium text-slate-500">Rendering structure…</p>
+                    </div>
+                  )}
+                  {!chemicalStructureError ? (
+                    <svg
+                      ref={chemicalStructureSvgRef}
+                      className="h-auto max-h-[18rem] w-full max-w-[24rem]"
+                      viewBox="0 0 400 300"
+                      aria-label={`${activeChemicalPopup.chemical.primaryName} molecular structure`}
+                    />
+                  ) : (
+                    <div className="text-xs text-slate-400">No structure</div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex min-h-[17rem] items-center justify-center text-xs text-slate-400">No structure</div>
+              )}
+            </div>
 
             <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
               {/* Molecular Formula */}
