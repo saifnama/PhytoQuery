@@ -27,12 +27,20 @@ async def process_text_ner(
     service: NERService = Depends(get_ner_service),
 ):
     """
-    Standalone NER endpoint: takes raw text, returns extracted entities.
+    Standalone NER endpoint: takes raw text or sections, returns extracted entities.
     Can be used on any text, not just papers.
 
-    Request body:
+    Request body option 1 (plain text):
     {
         "text": "raw text to extract entities from"
+    }
+
+    Request body option 2 (sections - better for papers):
+    {
+        "sections": [
+            {"title": "Abstract", "content": "..."},
+            {"title": "Methods", "content": "..."}
+        ]
     }
 
     Response:
@@ -41,11 +49,15 @@ async def process_text_ner(
         "entities": [ ... ]
     }
     """
-    text = request.get("text", "")
-    if not text:
-        return {"error": "No text provided", "entities": [], "summary": {}}
+    sections = request.get("sections", [])
+    if sections:
+        summary, entities = await service.process_sections(sections)
+    else:
+        text = request.get("text", "")
+        if not text:
+            return {"error": "No text provided", "entities": [], "summary": {}}
+        summary, entities = await service.process_text(text)
 
-    summary, entities = await service.process_text(text)
     return {
         "summary": summary,
         "entities": entities,

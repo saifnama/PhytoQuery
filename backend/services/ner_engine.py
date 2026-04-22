@@ -1,10 +1,8 @@
 import os
 import json
-import spacy
 import re
 import asyncio
 import logging
-import warnings
 from typing import List, Dict, Any
 from collections import defaultdict
 from backend.core.http_client import HttpClientManager
@@ -15,9 +13,6 @@ from backend.gazetteer.analytical_technique_matcher import match_analytical_tech
 from backend.gazetteer.species_matcher import match_species
 from backend.gazetteer.chemical_matcher import match_chemicals
 from backend.gazetteer.bioactivity_matcher import match_bioactivities
-
-# Suppress spaCy FutureWarning about set union in tokenizer
-warnings.filterwarnings("ignore", category=FutureWarning, module="spacy.language")
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +48,9 @@ SYSTEM_PROMPT = """You are a highly precise Named Entity Recognition (NER) speci
 
 Your task is to extract named entities from scientific text and return them as a structured JSON array.
 
-════════════════════════════════════════
-ENTITY TYPES & DEFINITIONS
-════════════════════════════════════════
+═══════════════════════════════════════
+ENTITY TYPES TO EXTRACT
+═══════════════════════════════════════
 
 1. CHEMICAL
    - Any chemical compound, constituent, or substance
@@ -69,24 +64,16 @@ ENTITY TYPES & DEFINITIONS
    - Examples (scientific): Ocimum sanctum, Cinnamomum verum, Azadirachta indica, Candida albicans, Staphylococcus aureus
    - Examples (common): tulsi, neem, basil, yeast, staph bacteria
 
-3. EXTRACTION METHOD
-   - Physical or mechanical process used to obtain crude extract
-   - Examples: maceration, cold percolation, Soxhlet extraction, cold press, solvent extraction
-
-5. LOCATION
+3. LOCATION
    - Geographic region where organism was collected, studied, or reported
    - Includes: countries, states, districts, forest names, altitude descriptions
    - Examples: Western Ghats, Wayanad, Kerala, Himalayan foothills
 
-6. BIOACTIVITY
+4. BIOACTIVITY
    - Biological, pharmacological, or chemical activity/property of a compound.
    - Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal
 
-7. ANALYTICAL TECHNIQUE
-   - Specific separation or isolation technique (more specific than EXTRACTION METHOD)
-   - Examples: steam distillation, hydrodistillation, supercritical CO₂ extraction, column chromatography, HPLC, fractional distillation, liquid-liquid partitioning
-
-8. DISEASE
+5. DISEASE
    - Medical condition, disease, or pathological state
    - Examples: malaria, diabetes, tuberculosis, leishmaniasis, oxidative stress
 
@@ -183,22 +170,21 @@ Input:
 ]
 """
 
-# --- Label Definitions (Exactly as requested: Spaces instead of underscores) ---
+# --- Label Definitions ---
 LABEL_DEFINITIONS = {
-    "CHEMICAL": "Chemical compounds, natural molecules, phytochemicals, metabolites.",
-    "SPECIES": "Any living organism (plants, bacteria, fungi, animals, parasites) and taxonomic groups.",
-    # PLANT PART - handled by dictionary matching (no LLM needed)
-    "EXTRACTION METHOD": "Physical or mechanical process used to obtain crude extract.",
-    "LOCATION": "Geographic locations, countries, regions, institutions.",
-    "BIOACTIVITY": "Biological or chemical activities and effects of substances.",
-    "ANALYTICAL TECHNIQUE": "Specific separation or isolation technique.",
-    "DISEASE": "Diseases, medical conditions, infections, disorders.",
+    # Dictionary-only types (handled by gazetteer, no LLM needed)
+    "PLANT PART": "Plant morphological structures (leaf, bark, root, flower, etc.).",
+    "ANALYTICAL TECHNIQUE": "Specific separation or analytical technique.",
+    "EXTRACTION METHOD": "Physical or mechanical extraction process.",
+    "DEVELOPMENT STAGE": "Plant development stage (seedling, flowering, etc.).",
+    "SEASON": "Seasonal reference (monsoon, winter, etc.).",
+    # LLM-extracted types (no dictionary or requires context)
+    "CHEMICAL": "Chemical compounds, natural molecules, phytochemicals.",
+    "SPECIES": "Living organisms (plants, bacteria, fungi, animals).",
+    "LOCATION": "Geographic locations, regions, institutions.",
+    "BIOACTIVITY": "Biological or chemical activity of substances.",
+    "DISEASE": "Medical conditions, diseases, disorders.",
 }
-
-RULER_PATTERNS = [
-    # ANALYTICAL TECHNIQUE patterns removed - now handled by dictionary
-]
-
 
 def enrich_chemical_like_entity(entity: Dict[str, Any], chemical_matcher: Any) -> None:
     chemical_metadata = chemical_matcher.lookup(entity.get("text", ""))
@@ -217,14 +203,6 @@ def enrich_chemical_like_entity(entity: Dict[str, Any], chemical_matcher: Any) -
 
 class NERService:
     def __init__(self):
-        # Load SciSpaCy base once
-        self.nlp = spacy.load("en_core_sci_md", disable=["ner", "parser"])
-        if "sentencizer" not in self.nlp.pipe_names:
-            self.nlp.add_pipe("sentencizer", first=True)
-
-        ruler = self.nlp.add_pipe("entity_ruler", after="sentencizer")
-        ruler.add_patterns(RULER_PATTERNS)
-
         self.all_labels = list(LABEL_DEFINITIONS.keys())
         self.result_cache = {}  # Cache: DOI -> list of entities
 
@@ -358,7 +336,7 @@ class NERService:
             text = text  # Keep original text reference
 
         # 4. LLM extraction (sequential to avoid rate limiting)
-        # Even if LLM fails, we still have dictionary + ruler entities
+        # Even if LLM fails, we still have dictionary entities
         llm_entities = []
         try:
             for chunk in chunks:
@@ -367,7 +345,7 @@ class NERService:
                 llm_entities.extend(parsed)
         except Exception as e:
             logger.warning(
-                f"LLM extraction failed: {e}. Using dictionary + ruler entities only."
+                f"LLM extraction failed: {e}. Using dictionary entities only."
             )
 
         # 5. Combine and deduplicate (only dictionary + LLM)
@@ -459,9 +437,206 @@ class NERService:
         summary, filtered = self.deduplicate(all_entities, text)
         return summary, filtered
 
-    def apply_entity_ruler(self, text: str) -> List[Dict[str, Any]]:
-        """Disabled - using dictionary matchers instead."""
-        return []
+    async def process_sections(
+        self, sections: List[Dict[str, str]]
+    ) -> tuple:
+        """Process paper by sections for better entity locality.
+
+        Args:
+            sections: List of dicts with 'title' and 'content' keys.
+                     E.g., [{"title": "Abstract", "content": "..."}, {"title": "Methods", "content": "..."}]
+
+        Returns:
+            (summary, entities) - same as process_text()
+        """
+        if not sections:
+            return {}, []
+
+        # Run dictionary matching on full text (no section tracking for dict)
+        all_dict_entities = []
+
+        # Run LLM per section for better context
+        all_llm_entities = []
+        for section in sections:
+            section_title = section.get("title", "Unknown")
+            section_text = section.get("content", "")
+
+            if not section_text or not section_text.strip():
+                continue
+
+            # Dictionary matching on this section
+            for ent in self._match_dictionary_in_text(section_text):
+                ent["section"] = section_title
+                all_dict_entities.append(ent)
+
+            # LLM extraction on this section
+            try:
+                raw_response = await self.call_llm(section_text)
+                parsed = self.parse_llm_response(raw_response)
+                for e in parsed:
+                    e["section"] = section_title
+                    all_llm_entities.append(e)
+            except Exception as e:
+                logger.warning(f"LLM extraction failed for section '{section_title}': {e}")
+
+        # Normalize entities
+        normalized = self._normalize_entities(all_dict_entities + all_llm_entities)
+
+        # Reconstruct full text for hallucination checking
+        full_text = " ".join([s.get("content", "") for s in sections])
+
+        summary, filtered = self.deduplicate(normalized, full_text)
+        return summary, filtered
+
+    def _match_dictionary_in_text(self, text: str) -> List[Dict[str, Any]]:
+        """Run all dictionary matchers on text and return normalized entities."""
+        entities = []
+
+        # 1. Plant parts
+        for e in match_plant_parts(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "PLANT PART")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            })
+
+        # 2. Analytical techniques
+        for e in match_analytical_techniques(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "ANALYTICAL TECHNIQUE")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            })
+
+        # 3. Extraction methods
+        from backend.gazetteer.extraction_method_matcher import match_extraction_methods
+        for e in match_extraction_methods(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "EXTRACTION METHOD")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            })
+
+        # 4. Development stages
+        from backend.gazetteer.development_stage_matcher import match_development_stages
+        for e in match_development_stages(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "DEVELOPMENT STAGE")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            })
+
+        # 5. Seasons
+        from backend.gazetteer.season_matcher import match_seasons
+        for e in match_seasons(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "SEASON")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+            })
+
+        # 6. Species
+        for e in match_species(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "SPECIES")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+            })
+
+        # 7. Chemicals
+        for e in match_chemicals(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "CHEMICAL")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "preferred_name": e.get("preferred_name"),
+                "aliases": e.get("aliases"),
+                "inchikey": e.get("inchikey"),
+                "smiles": e.get("smiles"),
+                "molecular_formula": e.get("molecular_formula"),
+                "source_db": e.get("source_db"),
+                "source_url": e.get("source_url"),
+            })
+
+        # 8. Bioactivities
+        from backend.gazetteer.bioactivity_matcher import match_bioactivities
+        for e in match_bioactivities(text):
+            entities.append({
+                "text": e.get("span", e.get("text", "")),
+                "label": e.get("type", e.get("label", "BIOACTIVITY")),
+                "score": e.get("score", 1.0),
+                "canonical": e.get("canonical"),
+                "synonyms": e.get("synonyms"),
+            })
+
+        return entities
+
+    def _normalize_entities(self, all_entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Normalize entities to canonical forms."""
+        from backend.gazetteer.plant_part_matcher import get_matcher as get_plant_matcher
+        from backend.gazetteer.analytical_technique_matcher import get_matcher as get_analytical_matcher
+        from backend.gazetteer.extraction_method_matcher import get_matcher as get_extraction_matcher
+        from backend.gazetteer.development_stage_matcher import get_matcher as get_development_matcher
+        from backend.gazetteer.season_matcher import get_matcher as get_season_matcher
+        from backend.gazetteer.species_matcher import get_matcher as get_species_matcher
+        from backend.gazetteer.chemical_matcher import get_matcher as get_chemical_matcher
+
+        plant_matcher = get_plant_matcher()
+        analytical_matcher = get_analytical_matcher()
+        extraction_matcher = get_extraction_matcher()
+        development_matcher = get_development_matcher()
+        season_matcher = get_season_matcher()
+        species_matcher = get_species_matcher()
+        chemical_matcher = get_chemical_matcher()
+
+        for e in all_entities:
+            text_lower = e.get("text", "").lower()
+            label = e.get("label", "")
+
+            if label == "SPECIES":
+                species_metadata = species_matcher.lookup(e.get("text", ""))
+                if species_metadata:
+                    for key, value in species_metadata.items():
+                        if key in {"text", "span", "start", "end"}:
+                            continue
+                        if value not in (None, "", []):
+                            e[key] = value
+                if not e.get("canonical"):
+                    e["canonical"] = species_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "CHEMICAL":
+                chemical_metadata = chemical_matcher.lookup(e.get("text", ""))
+                if chemical_metadata:
+                    for key, value in chemical_metadata.items():
+                        if key in {"text", "span", "start", "end"}:
+                            continue
+                        if value not in (None, "", []):
+                            e[key] = value
+                if not e.get("canonical"):
+                    e["canonical"] = chemical_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "PLANT PART":
+                e["canonical"] = plant_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "ANALYTICAL TECHNIQUE":
+                e["canonical"] = analytical_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "EXTRACTION METHOD":
+                e["canonical"] = extraction_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "DEVELOPMENT STAGE":
+                e["canonical"] = development_matcher.canonical_map.get(text_lower, e.get("text", ""))
+            elif label == "SEASON":
+                e["canonical"] = season_matcher.canonical_map.get(text_lower, e.get("text", ""))
+
+        return all_entities
 
     def split_into_word_chunks(
         self, text: str, chunk_size: int = NER_CHUNK_SIZE_WORDS
@@ -589,17 +764,17 @@ class NERService:
                 # Handle both new format (span/type) and legacy format (text/label)
                 text = str(e.get("span", e.get("text", ""))).strip()
                 label = str(e.get("type", e.get("label", ""))).strip().upper()
-                # Remap system prompt labels to webapp labels (exact requested spaces)
+                # Remap LLM labels to webapp labels
                 remap = {
-                    "EXTRACTION_METHOD": "EXTRACTION METHOD",
-                    "BIOACTIVITY": "BIOACTIVITY",
-                    "ANALYTICAL_TECHNIQUE": "ANALYTICAL TECHNIQUE",
                     "DRUG": "CHEMICAL",
                 }
                 label = remap.get(label, label)
 
-                if label == "PERCENTAGE":
-                    continue  # Skip percentages, not displayed in webapp
+                # Only accept LLM-extracted types
+                llm_types = {"CHEMICAL", "SPECIES", "LOCATION", "BIOACTIVITY", "DISEASE"}
+                if label not in llm_types:
+                    continue
+
                 score = float(e.get("score", 1.0))
                 if text and label in self.all_labels:
                     result.append(

@@ -368,9 +368,6 @@ async def test_ner_service_process_text_extracts_new_dictionary_entities(
     import backend.gazetteer.season_matcher as season_matcher
     import backend.gazetteer.species_matcher as species_matcher
 
-    blank_nlp = spacy.blank("en")
-    monkeypatch.setattr(ner_engine.spacy, "load", lambda *args, **kwargs: blank_nlp)
-
     for module, cache_name in [
         (extraction_method_matcher, "extraction.pkl"),
         (development_stage_matcher, "development.pkl"),
@@ -518,3 +515,47 @@ def test_entity_schema_preserves_chemical_metadata_fields():
     assert entity.inchikey == "RNGBKPVMWVROLL-UHFFFAOYSA-N"
     assert entity.smiles == "COC1=C(C=CC=C1)CC=C"
     assert entity.molecular_formula == "C10H12O2"
+
+
+@pytest.mark.asyncio
+async def test_process_sections_tracks_section_field(tmp_path, monkeypatch):
+    """Test that process_sections adds section field to entities."""
+    import backend.services.ner_engine as ner_engine
+    import backend.gazetteer.chemical_matcher as chemical_matcher
+
+    monkeypatch.setattr(chemical_matcher, "_matcher", None)
+
+    async def fake_call_llm(self, text_chunk: str) -> str:
+        return ""
+
+    def fake_deduplicate(self, entities, text):
+        return {}, entities
+
+    monkeypatch.setattr(ner_engine.NERService, "call_llm", fake_call_llm)
+    monkeypatch.setattr(ner_engine.NERService, "deduplicate", fake_deduplicate)
+
+    service = ner_engine.NERService()
+    sections = [
+        {"title": "Abstract", "content": "Eugenol is a phenylpropene."},
+        {"title": "Methods", "content": "Leaves were collected."},
+    ]
+    _, entities = await service.process_sections(sections)
+
+    # All entities should have a section field
+    for entity in entities:
+        assert "section" in entity, f"Entity {entity['text']} missing section field"
+        assert entity["section"] in ["Abstract", "Methods"]
+
+
+@pytest.mark.asyncio
+async def test_process_sections_handles_empty():
+    """Test that process_sections handles empty sections gracefully."""
+    import backend.services.ner_engine as ner_engine
+
+    service = ner_engine.NERService()
+    summary, entities = await service.process_sections([])
+    assert summary == {}
+    assert entities == []
+
+    summary, entities = await service.process_sections([{"title": "Empty", "content": ""}])
+    assert summary == {}

@@ -123,11 +123,28 @@ async def analyze_paper_json(
             entities, summary = _coerce_cached_ner_payload(cached)
             is_extracted = True
         elif run_ner:
-            # Include title + sections for NER
+            # Process by sections for better entity locality
+            sections = paper_data.get("sections", [])
             title = paper_data.get("title", "")
-            sections_text = "\n\n".join([s["content"] for s in paper_data["sections"]])
-            full_text = f"{title}\n\n{sections_text}" if title else sections_text
-            summary, entities = await service.process_text(full_text)
+            abstract = paper_data.get("abstract", "")
+
+            if sections and len(sections) > 0:
+                # Europe PMC - has structured sections already
+                # Add title as first section if present
+                if title:
+                    sections = [{"title": "Title", "content": title}] + sections
+                summary, entities = await service.process_sections(sections)
+            elif title or abstract:
+                # OpenAlex/Semantic Scholar - build sections from title + abstract
+                sections = []
+                if title:
+                    sections.append({"title": "Title", "content": title})
+                if abstract:
+                    sections.append({"title": "Abstract", "content": abstract})
+                summary, entities = await service.process_sections(sections)
+            else:
+                # No content - skip NER
+                summary, entities = {}, []
             cache_payload = {"entities": entities, "summary": summary}
             service.result_cache[clean_id] = cache_payload
             ner_cache.set(clean_id, cache_payload)
