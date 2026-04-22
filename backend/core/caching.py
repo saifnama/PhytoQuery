@@ -83,6 +83,14 @@ class SimpleCache:
 
         return None
 
+    def delete(self, identifier: str) -> None:
+        """Remove a specific cache entry."""
+        key = self._get_key(identifier)
+        cache_file = self._get_path(key)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+            self._cleanup_empty_dirs(os.path.dirname(cache_file))
+
     def _is_valid(self, data: dict) -> bool:
         """Check if cache entry is valid (version + TTL)."""
         # Version check

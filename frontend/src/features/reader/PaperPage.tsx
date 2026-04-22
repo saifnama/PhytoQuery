@@ -87,7 +87,7 @@ const PaperPage: React.FC = () => {
 
     try {
       const data = await nerApi.analyzePaper(doi, true);
-      
+
       if (!data || 'error' in data) {
         throw new Error(data.error || 'Extraction failed');
       }
@@ -104,6 +104,21 @@ const PaperPage: React.FC = () => {
       setIsExtracting(false);
     }
   };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'e' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (!isExtracted && !isExtracting) {
+          e.preventDefault();
+          handleExtract();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [doi, isExtracted, isExtracting]);
 
   if (isLoading) {
     return (

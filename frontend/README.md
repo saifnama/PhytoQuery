@@ -9,7 +9,7 @@ bun install
 bun run dev
 ```
 
-`bun install` installs all local frontend dependencies, including `smiles-drawer`. No CDN script is used for molecule rendering.
+`bun install` installs all local frontend dependencies, including `smiles-drawer`.
 
 ## Build
 

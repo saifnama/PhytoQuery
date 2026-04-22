@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml } from '../../utils/sanitize';
-import { PencilSimple } from '@phosphor-icons/react';
+import { DownloadSimple, PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 
@@ -197,10 +197,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
    fallbackSource,
    isFetchingFallback = false,
    paperAuthors = [],
-   paperJournal,
-   paperDate,
-   onExtract,
-  }) => {
+    paperJournal,
+    paperDate,
+    onExtract,
+   }) => {
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
   const [entitySearch, setEntitySearch] = useState('');
@@ -241,8 +241,15 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     activeChemicalAnchorRef.current = null;
     setIsRenderingChemicalStructure(false);
     setChemicalStructureError(false);
+    setExpandedChemical(null);
     setActiveChemicalPopup(null);
   }, []);
+
+  const toggleExpandedChemical = useCallback((key: string) => {
+    setExpandedChemical(prev => prev === key ? null : key);
+  }, []);
+
+  const isExpandedChemical = activeChemicalPopup && expandedChemical === activeChemicalPopup.chemical.primaryName;
 
   const speciesLookup = useMemo(() => {
     const groupedSpecies = new Map<string, { representative: Entity; aliases: Set<string> }>();
@@ -1266,10 +1273,33 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   </p>
                 )}
                 {activeChemicalPopup.chemical.synonyms && activeChemicalPopup.chemical.synonyms.length > 0 && (
-                  <p className="mt-1 text-[10px] font-medium text-slate-400 normal-case">
-                    Also: {activeChemicalPopup.chemical.synonyms.slice(0, 5).join(', ')}
-                    {activeChemicalPopup.chemical.synonyms.length > 5 ? ` +${activeChemicalPopup.chemical.synonyms.length - 5} more` : ''}
-                  </p>
+                  <div className="mt-1 text-[10px] font-medium text-slate-400 normal-case">
+                    Also: {isExpandedChemical ? (
+                      <>
+                        {activeChemicalPopup.chemical.synonyms.join(', ')}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
+                          className="ml-1 font-semibold text-blue-600 hover:underline"
+                        >
+                          Show less
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {activeChemicalPopup.chemical.synonyms.slice(0, 3).join(', ')}
+                        {activeChemicalPopup.chemical.synonyms.length > 3 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
+                            className="ml-1 font-semibold text-blue-600 hover:underline"
+                          >
+                            +{activeChemicalPopup.chemical.synonyms.length - 3} more
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
               <button
@@ -1380,6 +1410,46 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             {isExtracted ? 'Entities Extracted' : isExtracting ? 'Extracting Terms...' : 'Find Key Terms'}
           </span>
         </button>
+
+        {/* Export CSV */}
+        {isExtracted && entities.length > 0 && (
+          <button
+            onClick={() => {
+              const escape = (val: string | number | undefined | null) => {
+                if (val == null) return '';
+                const str = String(val);
+                return str.includes(',') || str.includes('"') || str.includes('\n')
+                  ? `"${str.replace(/"/g, '""')}"`
+                  : str;
+              };
+              // Build grouped data from existing grouping logic
+              const grouped = groupedEntities();
+              // Sort groups alphabetically (already alphabetical by label names)
+              const sortedLabels = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+              const rows: string[] = [];
+              for (const label of sortedLabels) {
+                const items = grouped[label].sort((a, b) => a.text.localeCompare(b.text));
+                for (const item of items) {
+                  rows.push(
+                    [label, item.text, String(item.count), item.aliases.slice(0, 5).join('; ')].map(escape).join(',')
+                  );
+                }
+              }
+              const csv = `# DOI: ${doi}\nType,Name,Count,Variants\n${rows.join('\n')}`;
+              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `entities-${doi.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-100 cursor-pointer"
+          >
+            <DownloadSimple size={16} weight="bold" />
+            <span>Export CSV</span>
+          </button>
+        )}
 
         {extractionError && (
           <div className="p-4 bg-red-50 border border-red-100 rounded-xl">

@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from backend.app import app
 from backend.api.paper import get_ner_service, get_pmc_service
 from backend.api.rag import get_rag_service
-from backend.core.caching import ner_cache, pmc_cache
+from backend.core.caching import doi_cache, ner_cache, pmc_cache
 
 import asyncio
 
@@ -187,6 +187,7 @@ def clear_caches_before_test():
     """Ensure a clean state by clearing global caches."""
     ner_cache.clear()
     pmc_cache.clear()
+    doi_cache.clear()
     yield
 
 

@@ -86,6 +86,18 @@ def test_cache_clear(temp_cache_dir):
     assert cache.get("key2") is None
 
 
+def test_cache_delete(temp_cache_dir):
+    """Delete removes only the targeted entry."""
+    cache = SimpleCache(temp_cache_dir, ttl=3600, max_files=10)
+    cache.set("key1", {"data": "1"})
+    cache.set("key2", {"data": "2"})
+
+    cache.delete("key1")
+
+    assert cache.get("key1") is None
+    assert cache.get("key2") is not None
+
+
 def test_cache_compression(temp_cache_dir):
     """Cache files are gzip compressed."""
     cache = SimpleCache(temp_cache_dir, ttl=3600, max_files=10)

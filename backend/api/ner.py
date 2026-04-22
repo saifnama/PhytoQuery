@@ -60,80 +60,41 @@ async def process_doi_json(
     request: NERRequest, service: NERService = Depends(get_ner_service)
 ):
     doi = request.doi
-    cached = ner_cache.get(doi)
-    if cached:
-        return NERResponse(**cached)
+    _, clean_id = EuropePMCService.parse_identifier(doi)
+    cache_key = f"doi_json::{clean_id}"
 
-    text, mode = await EuropePMCService.fetch_paper_data(doi)
+    cached = ner_cache.get(cache_key)
+    if cached:
+        return NERResponse(
+            **{k: v for k, v in cached.items() if not k.startswith("_")}
+        )
+
+    text, mode = await EuropePMCService.fetch_paper_data(clean_id)
     if not text:
         raise HTTPException(status_code=404, detail="Paper not found")
 
     summary, entities_data = await service.process_text(text)
     entities = [Entity(**e) for e in entities_data]
 
-    response = NERResponse(doi=doi, mode=mode, text=text[:1000], entities=entities)
-    ner_cache.set(doi, {"entities": response.dict(), "summary": summary})
+    response = NERResponse(doi=clean_id, mode=mode, text=text[:1000], entities=entities)
+    ner_cache.set(cache_key, response.dict())
     return response
 
 
-# --- Molecular Structure Image Endpoint ---
+# --- Clear NER Cache ---
 
+@router.delete("/cache/{doi}")
+async def clear_ner_cache(doi: str):
+    """Clear NER cache for a specific DOI (both disk cache and in-memory)."""
+    try:
+        _, clean_id = EuropePMCService.parse_identifier(doi)
+    except Exception:
+        clean_id = doi
 
-@router.get("/molecule/image")
-async def get_molecule_image(
-    smiles: str,
-    width: int = 300,
-    height: int = 200,
-):
-    """
-    Generate a molecular structure image from a SMILES string.
-    
-    Args:
-        smiles: SMILES string representing the molecule
-        width: Image width in pixels (default 300)
-        height: Image height in pixels (default 200)
-    
-    Returns:
-        JSON with base64-encoded PNG image
-    """
-    from backend.core.rdkit_utils import smiles_to_image_base64
-    
-    image_b64 = smiles_to_image_base64(
-        smiles=smiles,
-        width=width,
-        height=height
-    )
-    
-    if not image_b64:
-        raise HTTPException(status_code=400, detail="Invalid SMILES string")
-    
-    return {
-        "smiles": smiles,
-        "image": image_b64,
-        "width": width,
-        "height": height
-    }
-
-
-@router.get("/molecule/info")
-async def get_molecule_info(smiles: str):
-    """
-    Get molecular information from a SMILES string.
-    
-    Args:
-        smiles: SMILES string
-    
-    Returns:
-        JSON with molecular weight, formula, etc.
-    """
-    from backend.core.rdkit_utils import get_mol_info
-    
-    info = get_mol_info(smiles)
-    
-    if not info:
-        raise HTTPException(status_code=400, detail="Invalid SMILES string")
-    
-    return {
-        "smiles": smiles,
-        **info
-    }
+    ner_cache.delete(doi)
+    ner_cache.delete(clean_id)
+    ner_cache.delete(f"doi_json::{clean_id}")
+    ner_cache.delete(f"doi_json::{doi}")
+    ner_service.result_cache.pop(doi, None)
+    ner_service.result_cache.pop(clean_id, None)
+    return {"status": "cleared", "doi": doi}

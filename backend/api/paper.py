@@ -12,6 +12,21 @@ router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger(__name__)
 
 
+def _normalize_identifier(identifier: str) -> str:
+    id_type, clean_id = EuropePMCService.parse_identifier(identifier)
+    if id_type == "doi":
+        return clean_id.lower()
+    return clean_id
+
+
+def _coerce_cached_ner_payload(cached):
+    if not cached:
+        return [], {}
+    if isinstance(cached, dict):
+        return cached.get("entities", []), cached.get("summary", {})
+    return cached, {}
+
+
 def get_ner_service() -> NERService:
     return ner_service
 
@@ -35,6 +50,8 @@ async def analyze_paper_json(
     """
     try:
         id_type, clean_id = EuropePMCService.parse_identifier(doi)
+        if id_type == "doi":
+            clean_id = clean_id.lower()
         paper_data = await EuropePMCService.fetch_structured_data(clean_id)
 
         if not paper_data["sections"]:
@@ -103,10 +120,7 @@ async def analyze_paper_json(
         summary = {}
         cached = service.result_cache.get(clean_id) or ner_cache.get(clean_id)
         if cached:
-            entities = (
-                cached.get("entities", []) if isinstance(cached, dict) else cached
-            )
-            summary = cached.get("summary", {}) if isinstance(cached, dict) else {}
+            entities, summary = _coerce_cached_ner_payload(cached)
             is_extracted = True
         elif run_ner:
             # Include title + sections for NER
@@ -114,8 +128,9 @@ async def analyze_paper_json(
             sections_text = "\n\n".join([s["content"] for s in paper_data["sections"]])
             full_text = f"{title}\n\n{sections_text}" if title else sections_text
             summary, entities = await service.process_text(full_text)
-            service.result_cache[clean_id] = entities
-            ner_cache.set(clean_id, {"entities": entities, "summary": summary})
+            cache_payload = {"entities": entities, "summary": summary}
+            service.result_cache[clean_id] = cache_payload
+            ner_cache.set(clean_id, cache_payload)
             is_extracted = True
 
         # Highlight title and ALL sections if NER was run
@@ -166,17 +181,18 @@ async def switch_section_json(
 ):
     """JSON endpoint for switching sections."""
     try:
-        paper_data = await EuropePMCService.fetch_structured_data(doi)
+        clean_id = _normalize_identifier(doi)
+        paper_data = await EuropePMCService.fetch_structured_data(clean_id)
         sections = paper_data["sections"]
         if section_idx >= len(sections):
             return {"error": "Section not found"}
 
         current_section = sections[section_idx]
 
-        entities = service.result_cache.get(doi, [])
+        cached = service.result_cache.get(clean_id) or ner_cache.get(clean_id)
+        entities, _ = _coerce_cached_ner_payload(cached)
         if not entities:
-            cached = ner_cache.get(doi)
-            entities = cached.get("entities", []) if cached else []
+            entities = []
 
         try:
             highlighted = Highlighter.highlight(current_section["content"], entities)
