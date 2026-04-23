@@ -12,6 +12,11 @@ import type {
 
 type PaperApiResponse = (PaperData & { entities?: Entity[] }) | { error: string; sections: unknown[] };
 
+export interface PaperPdfResponse {
+  blob: Blob;
+  filename: string;
+}
+
 const API_BASE = ''; // Uses Vite proxy in dev, same origin in production
 
 const api = axios.create({
@@ -90,6 +95,49 @@ export const nerApi = {
     return response.data;
   },
 
+};
+
+const extractFilenameFromDisposition = (contentDisposition?: string): string => {
+  if (!contentDisposition) return 'paper.pdf';
+  const match = contentDisposition.match(/filename="?([^";]+)"?/i);
+  return match?.[1]?.trim() || 'paper.pdf';
+};
+
+export const paperApi = {
+  getPdfUrl(identifier: string): string {
+    return `/paper/pdf?identifier=${encodeURIComponent(identifier)}`;
+  },
+
+  async fetchPdf(identifier: string): Promise<PaperPdfResponse> {
+    const response = await api.get('/paper/pdf', {
+      params: { identifier },
+      responseType: 'blob',
+      timeout: 120000,
+    });
+
+    return {
+      blob: response.data,
+      filename: extractFilenameFromDisposition(response.headers['content-disposition']),
+    };
+  },
+
+  /**
+   * Fetch PDF and upload it directly to RAG for indexing.
+   * Used for silent "Upload to RAG" from paper page without navigation.
+   */
+  async fetchAndUploadToRag(identifier: string): Promise<{ status: string; message: string; filename?: string }> {
+    const { blob, filename } = await paperApi.fetchPdf(identifier);
+    const file = new File([blob], filename || `${identifier}.pdf`, { type: 'application/pdf' });
+    
+    const result = await ragApi.uploadFiles([file], 'pymupdf');
+    // result.files is string[] - get first file
+    const fileList = result.files || [];
+    return {
+      status: result.status,
+      message: result.message,
+      filename: fileList[0],
+    };
+  },
 };
 
 // RAG API

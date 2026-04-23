@@ -53,6 +53,10 @@ class EuropePMCService:
         return await EuropePMCClient.fetch_paper_data(doi)
 
     @classmethod
+    async def resolve_pdf_url(cls, identifier: str) -> Optional[Dict[str, str]]:
+        return await EuropePMCClient.resolve_pdf_url(identifier)
+
+    @classmethod
     async def search_literature(
         cls,
         query: str,

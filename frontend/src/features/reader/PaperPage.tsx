@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
-import { doiApi, nerApi } from '../../lib/api';
+import { doiApi, nerApi, paperApi } from '../../lib/api';
 import type { PaperData, Entity } from '../../types';
 
 const PaperPage: React.FC = () => {
@@ -17,10 +17,23 @@ const PaperPage: React.FC = () => {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [fallbackSource, setFallbackSource] = useState<{ source: string; url: string } | null>(null);
   const [fallbackLoading, setFallbackLoading] = useState(false);
+  const [pdfActionError, setPdfActionError] = useState<string | null>(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isUploadingToRag, setIsUploadingToRag] = useState(false);
 
   const isExplicitDoi = (value: string) => {
     const trimmed = value.trim();
     return /^10\.\d{4,}/i.test(trimmed) || /^https?:\/\/(dx\.)?doi\.org\//i.test(trimmed) || /^doi:/i.test(trimmed);
+  };
+
+  const normalizeDoi = (value: string): string => {
+    const trimmed = value.trim();
+    // Extract DOI from full URLs: https://doi.org/10.xxxx/xxx or https://dx.doi.org/10.xxxx/xxx
+    const urlMatch = trimmed.match(/^https?:\/\/(?:dx\.)?doi\.org\/(.+)$/i);
+    if (urlMatch) return urlMatch[1];
+    // Strip doi: prefix
+    if (/^doi:/i.test(trimmed)) return trimmed.substring(4).trim();
+    return trimmed;
   };
 
   const getLookupIdentifier = () => {
@@ -44,10 +57,11 @@ const PaperPage: React.FC = () => {
     }
 
     if (isExplicitDoi(raw)) {
+      const normalized = normalizeDoi(raw);
       return {
         type: 'doi' as const,
-        value: raw,
-        href: `https://doi.org/${raw}`,
+        value: normalized,
+        href: `https://doi.org/${normalized}`,
       };
     }
 
@@ -203,6 +217,52 @@ const PaperPage: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [doi, isExtracted, isExtracting]);
 
+  const pdfIdentifier = getPaperIdentifier()?.value || paperData?.pmcid || paperData?.doi || doi;
+  const canUsePdfActions = paperData?.mode === 'full_text' && Boolean(pdfIdentifier);
+
+  const handleDownloadPdf = async () => {
+    if (!pdfIdentifier || isDownloadingPdf) return;
+    setPdfActionError(null);
+    setIsDownloadingPdf(true);
+
+    try {
+      const { blob, filename } = await paperApi.fetchPdf(pdfIdentifier);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error('PDF download failed:', err);
+      setPdfActionError(err?.response?.data?.detail || 'PDF download is not available for this paper.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleSendPdfToRag = async () => {
+    if (!pdfIdentifier || isUploadingToRag) return;
+    setPdfActionError(null);
+    setIsUploadingToRag(true);
+
+    try {
+      const result = await paperApi.fetchAndUploadToRag(pdfIdentifier);
+      if (result.status === 'success') {
+        setPdfActionError(null); // Success - no error message
+      } else {
+        setPdfActionError(result.message || 'Failed to upload to RAG');
+      }
+    } catch (err: any) {
+      console.error('PDF upload to RAG failed:', err);
+      setPdfActionError(err?.message || 'Failed to upload PDF to RAG');
+    } finally {
+      setIsUploadingToRag(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -247,22 +307,14 @@ const PaperPage: React.FC = () => {
       : '');
   const tocList = paperData.toc ?? (paperData.sections?.map((s, i) => ({ id: `section-${i}`, text: s.title, level: 1 })) ?? []);
 
-  // Add spaces around inline tags when touching letters
-  // e.g. "of<i>Lantana</i>L." → "of <i>Lantana</i> L."
-  // Works for any tag: <i>, <b>, <em>, <sub>, <sup>, etc.
-  const formattedTitle = paperData.title
-    ? (paperData.title.includes('<')
-        ? paperData.title
-        : paperData.title
-            .replace(/([a-zA-Z])(<[a-zA-Z])/g, '$1 $2')
-            .replace(/(<\/[a-zA-Z]+>)([a-zA-Z])/g, '$1 $2'))
-    : '';
+  // Format title with preserved formatting (italic/bold) for display
+  const displayTitle = paperData.title || 'Untitled Paper';
 
   return (
     <PaperViewer
       paperIdentifier={getPaperIdentifier()}
       mode={paperData.mode}
-      title={formattedTitle || 'Untitled Paper'}
+      title={displayTitle}
       html={htmlBlob}
       toc={tocList}
       entities={entities}
@@ -274,6 +326,12 @@ const PaperPage: React.FC = () => {
       paperAuthors={paperData.authors || []}
       paperJournal={paperData.journal}
       paperDate={paperData.date}
+      canUsePdfActions={canUsePdfActions}
+      isDownloadingPdf={isDownloadingPdf}
+      isUploadingToRag={isUploadingToRag}
+      pdfActionError={pdfActionError}
+      onDownloadPdf={handleDownloadPdf}
+      onSendPdfToRag={handleSendPdfToRag}
       onExtract={handleExtract}
     />
   );

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Chats,
   Plus,
@@ -18,7 +19,7 @@ import {
   X,
   ArrowsOutSimple,
 } from '@phosphor-icons/react';
-import { buildChatFileContentUrl, ragApi } from '../../lib/api';
+import { buildChatFileContentUrl, paperApi, ragApi } from '../../lib/api';
 
 interface Source {
   source: string;
@@ -53,6 +54,13 @@ interface UploadedFile {
   doi?: string;
   journal?: string;
   summary?: string;
+}
+
+interface RagLocationState {
+  importPaperPdf?: {
+    identifier: string;
+    title?: string;
+  };
 }
 
 /** Return the correct Phosphor icon for a given file extension. */
@@ -122,6 +130,9 @@ const SESSION_KEYS = {
 };
 
 const RagPage: React.FC = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const locationState = location.state as RagLocationState | null;
   // Initialize state from sessionStorage
   const [messages, setMessages] = useState<Message[]>(() => {
     const saved = sessionStorage.getItem(SESSION_KEYS.MESSAGES);
@@ -149,6 +160,7 @@ const RagPage: React.FC = () => {
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
+  const importedPaperRef = useRef<string | null>(null);
 
   // Auto-expand textarea
   useEffect(() => {
@@ -192,6 +204,26 @@ const RagPage: React.FC = () => {
     setActivePdfUrl(null);
   }, []);
 
+  const applyUploadResult = useCallback((result: { files: string[]; summaries?: Record<string, string> }, activeParserType: 'pymupdf' | 'docling') => {
+    setUploadedFiles((prev) => {
+      const existingNames = new Set(prev.map((f) => f.name));
+      const newFiles: UploadedFile[] = result.files
+        .filter((name) => !existingNames.has(name))
+        .map((name) => {
+          const ext = name.lastIndexOf('.') !== -1 ? name.slice(name.lastIndexOf('.')) : '.pdf';
+          return {
+            name,
+            fileType: ext,
+            chunkCount: 0,
+            selected: true,
+            parserType: activeParserType,
+            summary: result.summaries?.[name] || '',
+          };
+        });
+      return [...prev, ...newFiles];
+    });
+  }, []);
+
   const openPdfViewer = useCallback((file: UploadedFile) => {
     setActivePdfFile(file);
     setActivePdfUrl(buildChatFileContentUrl(file.name));
@@ -226,6 +258,48 @@ const RagPage: React.FC = () => {
     }
   }, [activePdfFile, closePdfViewer, uploadedFiles]);
 
+  useEffect(() => {
+    const pendingImport = locationState?.importPaperPdf;
+    if (!pendingImport?.identifier) {
+      return;
+    }
+    if (importedPaperRef.current === pendingImport.identifier) {
+      return;
+    }
+
+    importedPaperRef.current = pendingImport.identifier;
+
+    const importPaperPdf = async () => {
+      setIsUploading(true);
+      setUploadStatus(`Importing PDF into RAG (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'})...`);
+
+      try {
+        const { blob, filename } = await paperApi.fetchPdf(pendingImport.identifier);
+        const safeBase = (pendingImport.title || filename || 'paper')
+          .replace(/<[^>]+>/g, '')
+          .replace(/[^a-zA-Z0-9._-]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 120) || 'paper';
+        const finalName = filename.toLowerCase().endsWith('.pdf') ? filename : `${safeBase}.pdf`;
+        const file = new File([blob], finalName, { type: 'application/pdf' });
+        const result = await ragApi.uploadFiles([file], parserType);
+        applyUploadResult(result, parserType);
+        await loadIndexedFiles();
+        setUploadStatus(
+          `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
+        );
+      } catch (error) {
+        console.error('Paper PDF import failed:', error);
+        setUploadStatus('Paper PDF import failed. Please try downloading it manually.');
+      } finally {
+        setIsUploading(false);
+        navigate(location.pathname, { replace: true, state: null });
+      }
+    };
+
+    importPaperPdf();
+  }, [applyUploadResult, loadIndexedFiles, location.pathname, locationState, navigate, parserType]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -244,25 +318,7 @@ const RagPage: React.FC = () => {
           parserType === 'pymupdf' ? 'Fast' : 'Detailed'
         }).`
       );
-
-      // Add newly uploaded files to the sidebar (avoid duplicates)
-      setUploadedFiles((prev) => {
-        const existingNames = new Set(prev.map((f) => f.name));
-        const newFiles: UploadedFile[] = result.files
-          .filter((name) => !existingNames.has(name))
-          .map((name) => {
-            const ext = name.lastIndexOf('.') !== -1 ? name.slice(name.lastIndexOf('.')) : '.pdf';
-            return {
-              name,
-              fileType: ext,
-              chunkCount: 0,
-              selected: true,
-              parserType,
-              summary: result.summaries?.[name] || '',
-            };
-          });
-        return [...prev, ...newFiles];
-      });
+      applyUploadResult(result, parserType);
 
       // Refresh from backend to get accurate chunk counts
       await loadIndexedFiles();
@@ -412,10 +468,13 @@ const RagPage: React.FC = () => {
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
       console.error('RAG query failed:', error);
+      const errorText =
+        (error as any)?.response?.data?.detail ||
+        'Sorry, I encountered an error. Please try again.';
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
+        content: errorText,
         timestamp: formatTimestamp(),
       };
       setMessages((prev) => [...prev, errorMessage]);

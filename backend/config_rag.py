@@ -10,10 +10,7 @@ import os
 # OPENROUTER (Primary for RAG)
 # =============================================================================
 
-RAG_OPENROUTER_API_KEY = os.getenv(
-    "RAG_OPENROUTER_API_KEY",
-    "sk-",
-)
+RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "").strip()
 RAG_OPENROUTER_MODEL = os.getenv(
     "RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
 )
@@ -38,7 +35,11 @@ RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.85"))
 
 def get_rag_provider() -> dict:
     """RAG: OpenRouter first (better quality), then Ollama as fallback."""
-    if RAG_OPENROUTER_API_KEY:
+    has_valid_openrouter_key = bool(RAG_OPENROUTER_API_KEY) and RAG_OPENROUTER_API_KEY not in {
+        "sk-",
+        "sk",
+    }
+    if has_valid_openrouter_key:
         return {
             "provider": "openrouter",
             "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -52,6 +53,9 @@ def get_rag_provider() -> dict:
             "model": RAG_OLLAMA_MODEL,
         }
     else:
-        raise ValueError(
-            "No RAG provider configured. Set RAG_OPENROUTER_API_KEY or RAG_OLLAMA_URL"
-        )
+        return {
+            "provider": "unconfigured",
+            "url": "",
+            "model": "",
+            "api_key": "",
+        }

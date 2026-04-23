@@ -10,6 +10,7 @@ from backend.schemas.schemas import (
     IndexedFileInfo,
 )
 from backend.services.rag_engine import RAGService, rag_service
+from backend.services.rag_engine import RAGProviderAuthError
 import logging
 
 
@@ -203,5 +204,7 @@ async def query_rag_json(
             chat_history=history,
         )
         return QueryResponse(**result)
+    except RAGProviderAuthError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")

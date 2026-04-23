@@ -1,167 +1,197 @@
 # PhytoQuery
 
-## 1. Project Overview
+A research paper reader with Named Entity Recognition (NER) for phytochemical and ethnobotanical research. Retrieves papers from Europe PMC, parses JATS XML, and renders content with dictionary-backed entity highlighting.
 
-PhytoQuery is a research paper reader that retrieves papers from Europe PMC, parses JATS XML, and renders the content with Named Entity Recognition (NER) highlights. The project uses a FastAPI backend, React frontend with Tailwind CSS, and DOMPurify for HTML sanitization. Chemical popups in the paper reader can also render molecular structures client-side from SMILES strings using the local `smiles-drawer` npm package.
-
-## 2. Features
+## Features
 
 ### Paper Reader
 - Auto-generated Table of Contents with 2-level hierarchy (H2 → H3)
-- Continuous smooth scrolling — all sections rendered inline for seamless reading
-- Scroll-spy highlighting — active section is reflected in the TOC as you scroll
-- Wide tables displayed with horizontal scrolling
+- Continuous smooth scrolling — all sections rendered inline
+- Scroll-spy highlighting — active section reflected in the sidebar
 - Chemical entity popups with client-side molecule rendering from SMILES strings
+- PDF download directly from paper page
 
 ### Search
 - Search Europe PMC by keywords, DOI, PMCID, or PMID
 - Filter by Open Access, Full Text, Article Type
-- Sort by Citations or Date
+- Sort by Relevance, Citations, or Date
+- Page size: 10/25/50/100 results per page
 
 ### Chat / RAG
-- Upload PDFs and query them with AI
-- Inline PDF viewer — click any uploaded PDF to view it in the side panel
+- Upload PDFs and query with AI
+- Inline PDF viewer
+- Upload to RAG directly from paper (stays on page, no navigation)
 - Citations with source references
 
 ### Named Entity Recognition (NER)
-- Extract entities from papers with dictionary-backed and LLM-assisted NER.
-- Dictionary-backed entity types currently include `PLANT PART`, `ANALYTICAL TECHNIQUE`, `EXTRACTION METHOD`, `DEVELOPMENT STAGE`, and `SEASON`.
-- Gazetteer entities are loaded from CSV dictionaries, matched with aliases, and normalized to canonical terms before sidebar grouping.
-- Click "Find Key Terms" to run NER extraction.
-- Entities are grouped by type in the sidebar and highlighted inline in the paper view.
+- **Dictionary-backed**: PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
+- **LLM-assisted** (requires OpenRouter/Ollama config)
+- Click "Find Key Terms" to run extraction
+- Entities highlighted inline and grouped in sidebar
+- Export to CSV
 
-### Security
-- HTML sanitization via nh3 (server-side) and DOMPurify (client-side)
-- XSS protection — script tags, inline handlers, and javascript: URLs are blocked
+### Source Fallbacks
+- DOI → Europe PMC → OpenAlex → Semantic Scholar
+- PMID → Europe PMC → PubMed
+- PMCID → Europe PMC → NCBI PMC
 
-## 3. Keyboard Shortcuts
+## Tech Stack
 
-| Shortcut | Action |
-|----------|--------|
-| `→` | Smooth scroll to next section |
-| `←` | Smooth scroll to previous section |
-| `↑` | Scroll up 100px |
-| `↓` | Scroll down 100px |
+| Layer | Technology |
+|-------|------------|
+| Backend | FastAPI (Python), uvicorn (dev server) |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS |
+| NLP | spaCy PhraseMatcher (dictionary-backed) |
+| RAG | LangChain, ChromaDB, sentence-transformers |
+| PDF | pymupdf (fitz), BeautifulSoup |
+| Sanitization | nh3 (server), DOMPurify (client) |
+| Paper Source | Europe PMC API |
+| LLM | OpenRouter / Ollama |
 
-## 4. Configuration
-
-### Separate Config Files
-
-- `backend/config_ner.py` - NER settings (Ollama → OpenRouter)
-- `backend/config_rag.py` - RAG settings (OpenRouter → Ollama)
-
-### Environment Variables
-
-```bash
-# NER config_ner.py (Ollama primary, OpenRouter fallback)
-export NER_OLLAMA_URL="https://..."
-export NER_OLLAMA_MODEL="llama3.1:8b"
-export NER_OPENROUTER_API_KEY="sk-or-..."
-export NER_OPENROUTER_MODEL="anthropic/claude-3-haiku:free"
-export NER_CONFIDENCE_THRESHOLD=0.7
-export NER_CHUNK_SIZE_WORDS=1000
-
-# RAG config_rag.py (OpenRouter primary, Ollama fallback)
-export RAG_OPENROUTER_API_KEY="sk-or-..."
-export RAG_OPENROUTER_MODEL="stepfun/step-3.5-flash:free"
-export RAG_OLLAMA_URL="https://..."
-export RAG_OLLAMA_MODEL="llama3.1:8b"
-export RAG_TEMPERATURE=0.1
-export RAG_TOP_K=10
-```
-
-Dictionary-backed NER does not introduce additional `NER_*` environment variables. Gazetteer behavior is driven by the CSV files in `backend/gazetteer/data/` and their matcher modules in `backend/gazetteer/`.
-
-## 5. Testing
-
-### Run Tests
-```bash
-cd PhytoQuery
-phytovenv\Scripts\python -m pytest backend/tests/ -v
-```
-
-### Test Scope
-- Backend tests live in `backend/tests/` and use `pytest` with async support from `backend/pytest.ini`.
-- Dictionary and NER pipeline coverage includes matcher alias normalization, canonical term mapping, highlighter class mapping, and end-to-end extraction checks in `backend/tests/test_dictionary_ner_pipeline.py`.
-- Existing backend tests also cover configuration, caching, sanitization, TOC generation, and RAG chunking.
-
-## 5. Quick Start
-
-### Build Frontend (first time)
-```bash
-cd frontend
-bun install
-bun run build
-```
-
-`bun install` pulls in all frontend dependencies, including `smiles-drawer` for local chemical structure rendering. No CDN or backend rendering fallback is required for the popup molecule view.
-
-### Run Backend
-```bash
-cd PhytoQuery
-phytovenv\Scripts\activate
-uvicorn backend.app:app --reload
-```
-
-Or directly:
-```bash
-cd PhytoQuery
-phytovenv\Scripts\activate
-python -m backend.app
-```
-
-Open browser at `http://localhost:8000`
-
-## 6. Tech Stack
-
-- **Backend:** FastAPI (Python)
-- **Frontend:** React + Tailwind CSS + Vite + Phosphor Icons + smiles-drawer
-- **Sanitization:** nh3 (server) + DOMPurify (client)
-- **Paper Source:** Europe PMC API
-- **LLM:** Ollama, OpenRouter
-- **Vector Store:** ChromaDB
-
-## 7. Project Structure
+## Project Structure
 
 ```
 PhytoQuery/
 ├── backend/
-│   ├── api/                    # API endpoints
-│   │   ├── paper.py
-│   │   ├── search.py
-│   │   ├── ner.py
-│   │   ├── rag.py
-│   │   ├── doi.py
-│   │   └── health.py
-│   ├── core/                   # Utilities
-│   │   ├── caching.py
-│   │   ├── sanitizer.py
-│   │   ├── highlighter.py
-│   │   └── http_client.py
-│   ├── schemas/                # Pydantic models
-│   │   └── schemas.py
-│   ├── services/
-│   │   ├── europe_pmc/        # Paper fetching & parsing
-│   │   ├── ner_engine.py      # NER extraction
-│   │   ├── rag_engine.py      # RAG chat
-│   │   └── doi_resolver.py    # DOI fallback sources
-│   ├── gazetteer/             # Dictionary-backed NER matchers and CSV data
-│   │   ├── data/              # Gazetteer CSV dictionaries
-│   │   ├── *_matcher.py       # PhraseMatcher-backed entity matchers
-│   │   └── build_matcher.py   # Gazetteer build/cache helpers
-│   └── tests/
-├── data/                       # Runtime data
-│   ├── cache/                  # Paper & NER cache
-│   ├── chroma_db/              # Vector store
-│   └── uploads/                # Uploaded PDFs
-├── frontend/src/
-│   ├── features/
-│   │   ├── search/             # Search page
-│   │   ├── reader/             # Paper reader
-│   │   └── chat/               # RAG chat
-│   ├── layout/                 # Header, Sidebar
-│   ├── ui/                     # ErrorBoundary
-│   ├── lib/                    # API client
-│   └── types/
+│   ├── api/           # FastAPI endpoints
+│   │   ├── paper.py    # Paper fetching with fallback
+│   │   ├── search.py   # Europe PMC search
+│   │   ├── rag.py       # RAG chat endpoints
+│   │   ├── ner.py       # Standalone NER
+│   │   └── doi.py      # DOI abstract fallback
+│   ├── core/           # Utilities
+│   │   ├── caching.py   # Simple file-based cache
+│   │   ├── sanitizer.py # HTML sanitization
+│   │   ├── highlighter.py # Entity highlighting
+│   │   └── http_client.py # HTTP abstraction
+│   ├── services/       # Business logic
+│   │   ├── europe_pmc/ # Paper fetching/parsing
+│   │   ├── ner_engine.py # NER pipeline
+│   │   ├── rag_engine.py # RAG + chat
+│   │   └── doi_resolver.py # DOI fallback sources
+│   ├── gazetteer/      # Dictionary matchers
+│   │   ├── data/       # CSV dictionaries
+│   │   └── *_matcher.py # spaCy PhraseMatcher
+│   └── tests/         # pytest tests
+├── frontend/           # React app
+│   ├── src/
+│   │   ├── features/  # Page components
+│   │   ├── layout/   # Header, Sidebar
+│   │   └── lib/     # API client
+│   └── dist/        # Built output
+├── data/             # Runtime data
+│   ├── cache/       # Paper & NER cache
+│   ├── chroma_db/  # Vector store
+│   └── uploads/     # Uploaded PDFs
 └── README.md
 ```
+
+## Quick Start
+
+### 1. Backend Setup
+
+```bash
+# Create and activate virtual environment
+python -m venv phytovenv
+
+# Windows (CMD)
+phytovenv\Scripts\activate
+
+# Windows (PowerShell)
+phytovenv\Scripts\Activate.ps1
+
+# Linux/Mac
+source phytovenv/bin/activate
+
+# Install dependencies
+pip install -r backend/requirements.txt
+
+# Download spaCy model (for dictionary matchers)
+python -m spacy download en_core_web_sm
+
+# Run backend (two options)
+
+# Option 1: Direct Python
+python -m backend.app
+
+# Option 2: Via uvicorn
+uvicorn backend.app:app --reload --port 8000
+```
+
+### 2. Frontend Setup
+
+```bash
+cd frontend
+bun install
+bun run dev
+```
+
+### 3. Access
+
+Open http://localhost:8000
+
+## Configuration
+
+### Environment Variables
+
+#### NER (Named Entity Recognition)
+```bash
+# Set OpenRouter key to enable LLM extraction
+export NER_OPENROUTER_API_KEY="sk-or-..."
+
+# Or use local Ollama
+export NER_OLLAMA_URL="http://localhost:11434"
+export NER_OLLAMA_MODEL="llama3.1:8b"
+```
+
+#### RAG (Chat)
+```bash
+export RAG_OPENROUTER_API_KEY="sk-or-..."
+
+# Optional: local Ollama fallback
+export RAG_OLLAMA_URL="http://localhost:11434"
+export RAG_OLLAMA_MODEL="llama3.1:8b"
+```
+
+### Dictionary Matchers
+
+Gazetteer CSV files in `backend/gazetteer/data/`:
+- `chemical.csv` — 107K+ compounds
+- `species.csv` — 235K+ species
+- `plant_part.csv` — ~345 terms
+- `analytical_technique.csv` — ~184 techniques
+- `extraction_method.csv` — ~77 methods
+- `development_stage.csv` — ~45 stages
+- `season.csv` — ~55 terms
+- `bioactivity.csv` — ~124 activities
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/paper/json` | POST | Fetch paper by DOI/PMCID/PMID |
+| `/search/json` | POST | Search Europe PMC |
+| `/api/chat/query/json` | POST | RAG chat |
+| `/api/chat/upload/json` | POST | Upload PDF to RAG |
+| `/ner/doi/json` | POST | Standalone NER |
+| `/paper/pdf` | GET | Download paper PDF |
+
+## Testing
+
+```bash
+pytest backend/tests/ -v
+```
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `→` | Next section |
+| `←` | Previous section |
+| `↑` | Scroll up 100px |
+| `↓` | Scroll down 100px |
+| `e` | Extract entities (on paper page) |
+
+## License
+
+MIT

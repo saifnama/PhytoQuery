@@ -340,83 +340,7 @@ class XMLParser:
                 JATSConverter.ensure_xmlns(xml_content).encode("utf-8")
             )
             sections = []
-            references = {}
-
-            # 0. Extract Bibliography (References) - Structured parsing
-            for ref in root.findall(".//ref-list/ref"):
-                ref_id = ref.get("id")
-                if not ref_id:
-                    continue
-
-                ref_data = {"id": ref_id}
-
-                # Extract citation element (contains structured reference data)
-                citation = ref.find(".//citation")
-                if citation is None:
-                    citation = ref.find(".//element-citation")
-                if citation is None:
-                    citation = ref.find(".//mixed-citation")
-                if citation is not None:
-                    # Authors
-                    authors = []
-                    person_group = citation.find(".//person-group")
-                    if person_group is not None:
-                        for name in person_group.findall(".//name"):
-                            surname = name.findtext("surname", "")
-                            given_names = name.findtext("given-names", "")
-                            if surname:
-                                authors.append(f"{surname} {given_names}".strip())
-                    ref_data["authors"] = authors
-
-                    # Article title
-                    article_title = citation.findtext(".//article-title", "")
-                    ref_data["title"] = article_title.strip() if article_title else ""
-
-                    # Journal/Source
-                    source = citation.findtext(".//source", "")
-                    ref_data["journal"] = source.strip() if source else ""
-
-                    # Year
-                    year = citation.findtext(".//year", "")
-                    ref_data["year"] = year.strip() if year else ""
-
-                    # Volume, Issue, Pages
-                    ref_data["volume"] = citation.findtext(".//volume", "").strip()
-                    ref_data["issue"] = citation.findtext(".//issue", "").strip()
-                    ref_data["fpage"] = citation.findtext(".//fpage", "").strip()
-                    ref_data["lpage"] = citation.findtext(".//lpage", "").strip()
-
-                    # DOI
-                    doi_elem = citation.find(".//pub-id[@pub-id-type='doi']")
-                    ref_data["doi"] = (
-                        doi_elem.text.strip()
-                        if doi_elem is not None and doi_elem.text
-                        else ""
-                    )
-
-                    # PMID
-                    pmid_elem = citation.find(".//pub-id[@pub-id-type='pmid']")
-                    ref_data["pmid"] = (
-                        pmid_elem.text.strip()
-                        if pmid_elem is not None and pmid_elem.text
-                        else ""
-                    )
-                else:
-                    # Fallback: extract as plain text
-                    ref_text = "".join(ref.itertext()).strip()
-                    ref_text = re.sub(r"^\[?\d+\]?[\s.]+", "", ref_text)
-                    ref_data["authors"] = []
-                    ref_data["title"] = ref_text
-                    ref_data["journal"] = ""
-                    ref_data["year"] = ""
-                    ref_data["volume"] = ""
-                    ref_data["issue"] = ""
-                    ref_data["fpage"] = ""
-                    ref_data["lpage"] = ""
-                    ref_data["doi"] = ""
-                    ref_data["pmid"] = ""
-
-                references[ref_id] = ref_data
+            references = {}  # Kept for API compatibility but not populated
 
             # Counter for generating unique heading IDs
             heading_counter = [0]
@@ -431,6 +355,36 @@ class XMLParser:
             def get_html_recursive(node, is_root=False):
                 parts = []
 
+                # --- Skip these elements entirely ---
+                
+                # Skip figures (image data) - no image to display
+                if node.tag == "fig":
+                    return ""
+                
+                # Skip media/videos
+                if node.tag == "media":
+                    return ""
+                
+                # Skip supplementary materials
+                if node.tag == "supplementary-material":
+                    return ""
+                
+                # Skip inline formulas (complex math)
+                if node.tag == "inline-formula":
+                    return ""
+                
+                # Skip footnotes
+                if node.tag in ("fn", "fn-group"):
+                    return ""
+                
+                # Skip acknowledgments
+                if node.tag == "ack":
+                    return ""
+                
+                # Skip references section
+                if node.tag == "ref-list":
+                    return ""
+                
                 # --- Block-level elements ---
 
                 # CASE: Nested section title -> <h3>
@@ -445,15 +399,7 @@ class XMLParser:
                     inner = _collect_children_html(node)
                     return f"<p>{inner}</p>"
 
-                # CASE: Citations (xref to bibliography)
-                if node.tag == "xref" and node.get("ref-type") == "bibr":
-                    rid = node.get("rid")
-                    return f'<cite class="citation" data-rid="{rid}">{"".join(node.itertext())}</cite>'
-
-                # CASE: Cross-references (figures, tables, etc.)
-                if node.tag == "xref":
-                    rid = node.get("rid", "")
-                    return f'<a href="#{rid}" class="xref-link">{"".join(node.itertext())}</a>'
+                
 
                 # CASE: Table
                 if node.tag == "table-wrap":
@@ -761,30 +707,8 @@ class XMLParser:
                             {"title": title, "content": content, "headings": headings}
                         )
 
-            # 3. Extract Back sections (excluding ref-list)
-            back = root.find(".//back")
-            if back is not None:
-                for sec in back.findall("./sec"):
-                    if sec.find(".//ref-list") is not None:
-                        continue
-                    label_node = sec.find("label")
-                    title_node = sec.find("title")
-                    label_text = (
-                        label_node.text.strip()
-                        if label_node is not None and label_node.text
-                        else ""
-                    )
-                    title = "Section"
-                    if title_node is not None:
-                        title = "".join(title_node.itertext()).strip()
-                    if label_text:
-                        title = f"{label_text} {title}"
-                    content = get_html_recursive(sec, is_root=True).strip()
-                    if content:
-                        headings = _extract_headings_from_html(content)
-                        sections.append(
-                            {"title": title, "content": content, "headings": headings}
-                        )
+            # NOTE: We only extract body sections. Back matter (references, 
+            # supplementary, acknowledgments) is skipped in get_html_recursive().
 
             return sections, references
         except Exception as e:

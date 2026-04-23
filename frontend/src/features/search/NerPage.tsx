@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { MagnifyingGlass } from '@phosphor-icons/react';
 import SearchForm from './SearchForm';
 import { nerApi } from '../../lib/api';
+import { formatTextWithFormatting } from '../../utils/sanitize';
 import type { SearchFilters, SearchResult } from '../../types';
 
 const NerPage: React.FC = () => {
@@ -181,7 +182,10 @@ const NerPage: React.FC = () => {
         )}
 
         {results.length === 0 && !isLoading && !error && (
-          <div className="saas-card p-20 text-center text-slate-400 border-dashed border-2">
+          <div
+            onClick={() => document.querySelector<HTMLInputElement>('input[type="text"]')?.focus()}
+            className="saas-card p-20 text-center text-slate-400 border-dashed border-2 cursor-text hover:border-blue-300 hover:bg-blue-50/30 transition-colors"
+          >
             <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center mx-auto mb-6">
               <MagnifyingGlass size={32} className="text-slate-200" weight="thin" />
             </div>
@@ -213,10 +217,14 @@ const NerPage: React.FC = () => {
                   }}
                   className="saas-card p-6 hover:shadow-md transition-shadow cursor-pointer"
                 >
-                  <h3 className="text-lg font-semibold text-slate-900 mb-2 title-font">
-                    {result.title}
-                  </h3>
-                  <p className="text-sm text-slate-600 mb-2">{result.authors}</p>
+                  <h3 
+                    className="text-lg font-semibold text-slate-900 mb-2 title-font"
+                    dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.title) }}
+                  />
+                  <p 
+                    className="text-sm text-slate-600 mb-2"
+                    dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.authors) }}
+                  />
                   <div className="flex items-center gap-4 text-xs text-slate-400">
                     <span>{result.journal}</span>
                     <span>•</span>
@@ -245,9 +253,10 @@ const NerPage: React.FC = () => {
                     )}
                   </div>
                   {result.abstract && (
-                    <p className="text-sm text-slate-500 mt-3 line-clamp-3">
-                      {result.abstract}
-                    </p>
+                    <p 
+                      className="text-sm text-slate-500 mt-3 line-clamp-3"
+                      dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
+                    />
                   )}
                 </div>
               ))}

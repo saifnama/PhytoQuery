@@ -16,10 +16,13 @@ const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="h-16 flex items-center px-8 bg-white border-b border-slate-100 sticky top-0 z-30 justify-between">
-      <div className="flex items-center space-x-3">
+      <button
+        onClick={() => navigate('/')}
+        className="flex items-center space-x-3 hover:opacity-80 transition-opacity"
+      >
         <FlowerTulip size={32} color="#db1f83" />
         <span className="text-xl font-bold text-slate-900 title-font">PhytoQuery</span>
-      </div>
+      </button>
 
       <div className="flex items-center space-x-4">
         {isLoading && (

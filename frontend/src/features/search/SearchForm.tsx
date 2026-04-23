@@ -75,15 +75,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           </button>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
-          <p className="font-semibold uppercase tracking-wider text-slate-600 mb-2">Advanced search examples</p>
-          <div className="space-y-1">
-            <p><code className="text-slate-700">"plant extract"</code> exact phrase</p>
-            <p><code className="text-slate-700">turmeric AND review</code> boolean search</p>
-            <p><code className="text-slate-700">(essential oil OR phytochemical) AND turmeric</code> grouped query</p>
-            <p><code className="text-slate-700">AUTHOR:"Smith J"</code> fielded search</p>
-          </div>
-        </div>
+
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-8 text-[11px] font-bold uppercase tracking-wider text-slate-400">

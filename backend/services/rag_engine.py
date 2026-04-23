@@ -62,6 +62,10 @@ config = RAGConfig()
 logger = logging.getLogger(__name__)
 
 
+class RAGProviderAuthError(Exception):
+    """Raised when the configured LLM provider rejects authentication/config."""
+
+
 class OllamaLLM:
     """Wrapper for Ollama or OpenRouter API"""
 
@@ -103,6 +107,11 @@ class OllamaLLM:
         else:
             raise ValueError("Either prompt or messages must be provided")
 
+        if self.provider == "unconfigured":
+            raise RAGProviderAuthError(
+                "RAG is not configured. Set a valid RAG_OPENROUTER_API_KEY or configure RAG_OLLAMA_URL."
+            )
+
         headers = {}
         if self.provider == "ollama":
             payload = {
@@ -127,6 +136,11 @@ class OllamaLLM:
                 if self.provider == "openrouter":
                     kwargs["headers"] = headers
                 response = await client.post(self.url, **kwargs)
+
+                if self.provider == "openrouter" and response.status_code == 401:
+                    raise RAGProviderAuthError(
+                        "OpenRouter authentication failed. Check RAG_OPENROUTER_API_KEY or configure RAG_OLLAMA_URL as a fallback provider."
+                    )
 
                 # Handle rate limiting (429) with retry
                 if response.status_code == 429:

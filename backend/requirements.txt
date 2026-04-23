@@ -1,39 +1,42 @@
-# --- Framework & Server ---
-fastapi==0.104.1
-uvicorn==0.24.0
-pydantic==2.5.2
-python-multipart==0.0.6
+# Install: pip install -r requirements.txt
 
-# --- HTTP & Async ---
-httpx==0.25.1
-aiofiles==23.2.1
+# === Core Framework ===
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+python-multipart>=0.0.6
 
-# --- NLP & RAG ---
-spacy>=3.7.2
-langchain>=0.0.350
+# === HTTP & Async ===
+httpx>=0.26.0
+aiofiles>=23.2.0
+
+# === NLP & Dictionary Matchers (spaCy) ===
+spacy>=3.7.0
+
+# === RAG & Embeddings ===
+langchain>=0.1.0
 langchain-community>=0.0.1
 langchain-core>=0.1.0
-langchain-huggingface
-langchain-chroma
-langchain-experimental
-langchain-text-splitters
-chromadb>=0.4.18
-sentence-transformers==2.2.2
-rank-bm25>=0.2.2
+langchain-huggingface>=0.0.1
+langchain-chroma>=0.1.0
+langchain-experimental>=0.0.1
+langchain-text-splitters>=0.0.1
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+rank-bm25>=0.2.0
 
-# --- Parsing & Extraction ---
-docling==1.0.0
-pymupdf
+# === PDF & Document Parsing ===
+pymupdf>=1.23.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 nh3>=0.2.0
 
-# --- Utils ---
+# === Utilities ===
 numpy<2.0
-openpyxl
-tqdm
-jinja2==3.1.2
+openpyxl>=3.1.0
+tqdm>=4.66.0
+jinja2>=3.1.0
 
-# --- Testing ---
+# === Testing ===
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

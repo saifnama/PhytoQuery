@@ -11,6 +11,7 @@ import asyncio
 import re
 import logging
 from typing import Optional, Tuple, Dict, Any, List
+from xml.etree import ElementTree
 
 import httpx
 
@@ -24,6 +25,30 @@ class EuropePMCClient:
     """HTTP client for Europe PMC API."""
 
     BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+
+    @staticmethod
+    def _build_search_query(id_type: str, id_value: str) -> str:
+        if id_type == "pmcid":
+            return f"PMCID:{id_value}"
+        if id_type == "pmid":
+            return f"EXT_ID:{id_value}"
+        return f"DOI:{id_value}"
+
+    @staticmethod
+    def _normalize_remote_url(url: str) -> str:
+        if url.startswith("ftp://"):
+            return "https://" + url[len("ftp://") :]
+        return url
+
+    @staticmethod
+    def _build_pdf_filename(
+        title: str, doi: str, pmcid: str, fallback_id: str
+    ) -> str:
+        base = title.strip() or doi.strip() or pmcid.strip() or fallback_id.strip() or "paper"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+        if not safe:
+            safe = "paper"
+        return f"{safe[:120]}.pdf"
 
     @staticmethod
     def parse_identifier(raw_input: str) -> Tuple[str, str]:
@@ -143,6 +168,71 @@ class EuropePMCClient:
                 return response.text
         except Exception as e:
             logger.debug(f"NCBI PMC full text failed for {pmcid}: {e}")
+
+        return None
+
+    @classmethod
+    async def resolve_pdf_url(cls, identifier: str) -> Optional[Dict[str, str]]:
+        """Resolve a downloadable PDF URL for a paper identifier."""
+        id_type, id_value = cls.parse_identifier(identifier)
+        search_url = f"{cls.BASE_URL}/search"
+        params = {
+            "query": cls._build_search_query(id_type, id_value),
+            "format": "json",
+            "resultType": "core",
+        }
+
+        client = await HttpClientManager.get_client()
+        response = await client.get(search_url, params=params, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("resultList", {}).get("result", [])
+        if not results:
+            return None
+
+        result = results[0]
+        pmcid = (result.get("pmcid") or "").strip()
+        doi = (result.get("doi") or "").strip()
+        title = (result.get("title") or "").strip()
+        filename = cls._build_pdf_filename(title, doi, pmcid, id_value)
+
+        full_text_urls = result.get("fullTextUrlList", {}).get("fullTextUrl", [])
+        if isinstance(full_text_urls, dict):
+            full_text_urls = [full_text_urls]
+
+        for item in full_text_urls:
+            document_style = str(item.get("documentStyle", "")).lower()
+            url = str(item.get("url", "")).strip()
+            if document_style == "pdf" and url:
+                return {
+                    "url": cls._normalize_remote_url(url),
+                    "filename": filename,
+                    "source": str(item.get("site", "Europe PMC")),
+                }
+
+        if not pmcid:
+            return None
+
+        oa_url = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi"
+        oa_response = await client.get(oa_url, params={"id": pmcid}, timeout=30.0)
+        if oa_response.status_code != 200 or not oa_response.text.strip():
+            return None
+
+        try:
+            root = ElementTree.fromstring(oa_response.text)
+        except ElementTree.ParseError:
+            return None
+
+        for link in root.findall(".//record/link"):
+            if str(link.get("format", "")).lower() != "pdf":
+                continue
+            href = (link.get("href") or "").strip()
+            if href:
+                return {
+                    "url": cls._normalize_remote_url(href),
+                    "filename": filename,
+                    "source": "PMC OA",
+                }
 
         return None
 

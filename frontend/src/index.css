@@ -117,7 +117,6 @@ aside {
 }
 
 main {
-    background-color: var(--bg-neutral) !important;
 }
 
 header {
@@ -407,29 +406,29 @@ mark.ner-disease,
     mark.ner-disease
 ) {
     background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;
-    border-radius: 0.25rem;
+    border-radius: 3px;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
-    box-shadow: inset 0 0 0 1px rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-border-alpha));
-    cursor: help;
+    cursor: pointer;
     font-weight: 600;
     line-height: inherit;
-    padding: 0.02em 0.18em;
+    padding: 1px 5px;
     text-decoration: none;
+    transition: all 0.15s;
 }
 
 mark.ner-default {
     background-color: rgb(var(--entity-default-rgb) / var(--entity-highlight-alpha)) !important;
-    border-radius: 0.25rem;
+    border-radius: 3px;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
-    box-shadow: inset 0 0 0 1px rgb(var(--entity-default-rgb) / var(--entity-highlight-border-alpha));
     color: var(--entity-default) !important;
-    cursor: help;
+    cursor: pointer;
     font-weight: 600;
     line-height: inherit;
-    padding: 0.02em 0.18em;
+    padding: 1px 5px;
     text-decoration: none;
+    transition: all 0.15s;
 }
 
 /* Reading Progress Bar */
@@ -471,7 +470,6 @@ mark.ner-default {
     font-size: 17px;
     line-height: 1.85;
     color: var(--text-primary);
-    max-width: 720px;
 }
 
 /* Spacing rhythm for paper sections: provide clear separation between top-level sections in the article blob */

@@ -1,6 +1,7 @@
 """Paper Router — Fetch paper data by DOI with multi-source fallback."""
 
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, HTTPException, Query
+from fastapi.responses import Response
 from backend.services.europe_pmc import EuropePMCService
 from backend.services.doi_resolver import (
     fetch_doi_abstract,
@@ -10,6 +11,7 @@ from backend.services.doi_resolver import (
 from backend.services.ner_engine import ner_service, NERService
 from backend.core.highlighter import Highlighter
 from backend.core.caching import ner_cache
+from backend.core.http_client import HttpClientManager
 import logging
 
 router = APIRouter(prefix="/paper", tags=["paper"])
@@ -37,6 +39,17 @@ def get_ner_service() -> NERService:
 
 def get_pmc_service():
     return EuropePMCService
+
+
+def _extract_filename_from_disposition(content_disposition: str | None) -> str | None:
+    if not content_disposition:
+        return None
+    import re
+
+    match = re.search(r'filename="?([^";]+)"?', content_disposition)
+    if match:
+        return match.group(1).strip()
+    return None
 
 
 async def _fetch_identifier_fallback(id_type: str, clean_id: str):
@@ -271,3 +284,46 @@ async def switch_section_json(
     except Exception as e:
         logger.error(f"Section switch error: {e}")
         return {"error": str(e)}
+
+
+@router.get("/pdf")
+async def download_paper_pdf(identifier: str = Query(...)):
+    """Resolve and stream a paper PDF when one is available."""
+    try:
+        clean_id = _normalize_identifier(identifier)
+        pdf_info = await EuropePMCService.resolve_pdf_url(clean_id)
+        if not pdf_info:
+            raise HTTPException(
+                status_code=404,
+                detail="No downloadable PDF found for this paper.",
+            )
+
+        client = await HttpClientManager.get_client()
+        upstream = await client.get(
+            pdf_info["url"], follow_redirects=True, timeout=60.0
+        )
+        upstream.raise_for_status()
+
+        if not upstream.content:
+            raise HTTPException(status_code=404, detail="PDF response was empty.")
+
+        content_disposition = upstream.headers.get("content-disposition")
+        filename = (
+            _extract_filename_from_disposition(content_disposition)
+            or pdf_info.get("filename")
+            or "paper.pdf"
+        )
+
+        return Response(
+            content=upstream.content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-PDF-Source": pdf_info.get("source", ""),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PDF download error for {identifier}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch paper PDF.")
