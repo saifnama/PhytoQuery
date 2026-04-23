@@ -28,6 +28,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 - **LLM-assisted** (requires OpenRouter/Ollama config)
 - Click "Find Key Terms" to run extraction
 - Entities highlighted inline and grouped in sidebar
+- **Graph View**: Interactive, physics-based knowledge graph linking DOI to extracted entities
 - Export to CSV
 
 ### Source Fallbacks
@@ -44,6 +45,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | NLP | spaCy PhraseMatcher (dictionary-backed) |
 | RAG | LangChain, ChromaDB, sentence-transformers |
 | PDF | pymupdf (fitz), BeautifulSoup |
+| Graph | vis-network |
 | Sanitization | nh3 (server), DOMPurify (client) |
 | Paper Source | Europe PMC API |
 | LLM | OpenRouter / Ollama |
