@@ -107,6 +107,7 @@ export interface Section {
 }
 
 export interface PaperData {
+  doi?: string;
   // HTML blob of the paper content (new shape)
   html?: string;
   // Optional table-of-contents items derived from API
@@ -150,6 +151,7 @@ export interface SearchFilters {
   has_full_text: boolean;
   article_type: string;
   sort: string;
+  page_size: number;
 }
 
 export interface RAGResult {

@@ -1,8 +1,11 @@
 """
-DOI Abstract Fetcher
----------------------
-Fetches abstract and metadata for DOIs when Europe PMC doesn't have them.
-Multi-source fallback: OpenAlex → PubMed.
+DOI / Identifier Metadata Fetcher
+---------------------------------
+Fetches metadata when Europe PMC does not return content.
+
+- DOI fallback: OpenAlex -> Semantic Scholar
+- PMID fallback: PubMed direct fetch
+- PMCID fallback: NCBI PMC fetch
 """
 
 import re
@@ -189,8 +192,104 @@ async def fetch_from_pubmed(doi: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def _fetch_pmc_fulltext(pmcid: str, doi: str) -> Optional[Dict[str, Any]]:
-    """Fetch full text XML from NCBI PMC using PMCID."""
+async def fetch_pubmed_by_pmid(pmid: str) -> Optional[Dict[str, Any]]:
+    """Fetch abstract/metadata from PubMed E-utilities API using PMID directly."""
+    fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    fetch_params = {
+        "db": "pubmed",
+        "id": pmid,
+        "rettype": "xml",
+        "retmode": "xml",
+    }
+    try:
+        client = await HttpClientManager.get_client()
+        fetch_resp = await client.get(fetch_url, params=fetch_params, timeout=15.0)
+        if fetch_resp.status_code != 200:
+            return None
+
+        from lxml import etree as ET
+
+        root = ET.fromstring(fetch_resp.content)
+
+        article = root.find(".//Article")
+        if article is None:
+            return None
+
+        # Extract real DOI from PubMed XML
+        real_doi = ""
+        article_ids = root.findall(".//ArticleId")
+        for aid in article_ids:
+            if aid.get("IdType") == "doi" and aid.text:
+                real_doi = aid.text.strip()
+                break
+
+        # Extract title
+        title_elem = article.find(".//ArticleTitle")
+        title = "".join(title_elem.itertext()).strip() if title_elem is not None else ""
+
+        # Extract abstract
+        abstract_parts = article.findall(".//Abstract/AbstractText")
+        abstract = ""
+        if len(abstract_parts) > 1:
+            abstract = "\n\n".join(
+                "".join(p.itertext()).strip() for p in abstract_parts
+            )
+        elif abstract_parts:
+            abstract = "".join(abstract_parts[0].itertext()).strip()
+
+        # Extract authors
+        authors = []
+        author_list = article.findall(".//AuthorList/Author")
+        for author in author_list:
+            last_name = author.findtext("LastName", "")
+            fore_name = author.findtext("ForeName", "")
+            initials = author.findtext("Initials", "")
+            name = (
+                f"{last_name} {fore_name}".strip() or f"{last_name} {initials}".strip()
+            )
+            if name:
+                authors.append(name)
+        authors = authors[:10]
+
+        # Extract journal name
+        journal = article.findtext(".//Journal/Title", "")
+        if not journal:
+            journal = article.findtext(".//Journal/ISOAbbreviation", "")
+
+        # Extract year
+        pub_date = article.find(".//Journal/JournalIssue/PubDate")
+        year = None
+        if pub_date is not None:
+            year_elem = pub_date.find("Year")
+            if year_elem is not None and year_elem.text:
+                try:
+                    year = int(year_elem.text)
+                except ValueError:
+                    pass
+            if year is None:
+                medline_date = pub_date.findtext("MedlineDate", "")
+                if medline_date:
+                    year_match = re.search(r"(\d{4})", medline_date)
+                    if year_match:
+                        year = int(year_match.group(1))
+
+        return {
+            "doi": real_doi,
+            "title": title,
+            "abstract": abstract,
+            "authors": authors,
+            "year": year,
+            "journal": journal,
+            "source": "PubMed",
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+        }
+    except Exception as e:
+        logger.error(f"PubMed fetch by PMID failed for {pmid}: {e}")
+        return None
+
+
+async def fetch_pmc_by_pmcid(pmcid: str) -> Optional[Dict[str, Any]]:
+    """Fetch metadata/full text XML from NCBI PMC using PMCID directly."""
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     params = {
         "db": "pmc",
@@ -245,16 +344,24 @@ async def _fetch_pmc_fulltext(pmcid: str, doi: str) -> Optional[Dict[str, Any]]:
             except ValueError:
                 pass
 
+        resolved_doi = ""
+        article_ids = root.findall(".//article-id")
+        for article_id in article_ids:
+            if article_id.get("pub-id-type") == "doi" and article_id.text:
+                resolved_doi = article_id.text.strip()
+                break
+
         return {
-            "doi": doi,
+            "doi": resolved_doi,
             "title": title,
-            "abstract": abstract or "Full text available — see sections.",
+            "abstract": abstract,
             "authors": authors,
             "year": year,
             "journal": journal,
-            "source": "PubMed",
-            "url": f"https://pubmed.ncbi.nlm.nih.gov/",
+            "source": "PMC",
+            "url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/",
             "full_text_xml": resp.text,
+            "pmcid": pmcid,
         }
     except Exception as e:
         logger.error(f"PMC full text fetch failed for {pmcid}: {e}")
@@ -380,11 +487,11 @@ async def fetch_from_semantic_scholar(doi: str) -> Optional[Dict[str, Any]]:
 async def fetch_doi_abstract(doi: str) -> Optional[Dict[str, Any]]:
     """
     Fetch metadata for a DOI with multi-source fallback.
-    Order: OpenAlex → Semantic Scholar → PubMed
+    Order: OpenAlex -> Semantic Scholar.
     Returns metadata (title, authors, journal, year) even if no abstract.
     """
-    # Normalize DOI
     doi = doi.strip().lower()
+
     if doi.startswith("https://doi.org/"):
         doi = doi.replace("https://doi.org/", "")
     elif doi.startswith("http://doi.org/"):
@@ -399,7 +506,6 @@ async def fetch_doi_abstract(doi: str) -> Optional[Dict[str, Any]]:
     sources = [
         fetch_from_openalex,
         fetch_from_semantic_scholar,
-        fetch_from_pubmed,
     ]
 
     best_result = None

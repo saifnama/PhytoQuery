@@ -15,11 +15,12 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
     has_full_text: defaultFilters?.has_full_text ?? false,
     article_type: defaultFilters?.article_type ?? '',
     sort: defaultFilters?.sort ?? '',
+    page_size: defaultFilters?.page_size ?? 25,
   });
 
   // Sync query from URL when navigating back
   React.useEffect(() => {
-    if (defaultQuery) setQuery(defaultQuery);
+    setQuery(defaultQuery);
   }, [defaultQuery]);
 
   // Sync filters from URL when navigating back
@@ -30,7 +31,8 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           prev.open_access === defaultFilters.open_access &&
           prev.has_full_text === defaultFilters.has_full_text &&
           prev.article_type === defaultFilters.article_type &&
-          prev.sort === defaultFilters.sort
+          prev.sort === defaultFilters.sort &&
+          prev.page_size === defaultFilters.page_size
         ) {
           return prev; // no change
         }
@@ -39,6 +41,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           has_full_text: defaultFilters.has_full_text ?? false,
           article_type: defaultFilters.article_type ?? '',
           sort: defaultFilters.sort ?? '',
+          page_size: defaultFilters.page_size ?? 25,
         };
       });
     }
@@ -59,7 +62,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search scholarly publications (DOI, PMCID, or keywords)..."
+            placeholder="Search scholarly publications (DOI, PMID, PMCID, or keywords)..."
             className="w-full bg-slate-50 border border-slate-200 rounded-xl py-4 px-6 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-lg text-slate-900 transition-all shadow-inner"
             required
           />
@@ -70,6 +73,16 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           >
             {isLoading ? 'Searching...' : 'Find'}
           </button>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+          <p className="font-semibold uppercase tracking-wider text-slate-600 mb-2">Advanced search examples</p>
+          <div className="space-y-1">
+            <p><code className="text-slate-700">"plant extract"</code> exact phrase</p>
+            <p><code className="text-slate-700">turmeric AND review</code> boolean search</p>
+            <p><code className="text-slate-700">(essential oil OR phytochemical) AND turmeric</code> grouped query</p>
+            <p><code className="text-slate-700">AUTHOR:"Smith J"</code> fielded search</p>
+          </div>
         </div>
 
         {/* Filters */}
@@ -113,13 +126,25 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
             <option value="Review">Review</option>
           </select>
           <select
+            value={filters.page_size}
+            onChange={(e) =>
+              setFilters({ ...filters, page_size: Number(e.target.value) })
+            }
+            className="bg-transparent border-none outline-none cursor-pointer hover:text-slate-600 transition-colors"
+          >
+            <option value={10}>10 / page</option>
+            <option value={25}>25 / page</option>
+            <option value={50}>50 / page</option>
+            <option value={100}>100 / page</option>
+          </select>
+          <select
             value={filters.sort}
             onChange={(e) =>
               setFilters({ ...filters, sort: e.target.value })
             }
             className="bg-transparent border-none outline-none cursor-pointer hover:text-slate-600 transition-colors"
           >
-            <option value="">Default Sort</option>
+            <option value="">Relevance</option>
             <option value="cited">Citations</option>
             <option value="date">Date</option>
           </select>

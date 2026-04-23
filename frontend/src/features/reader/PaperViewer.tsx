@@ -50,7 +50,7 @@ const ENTITY_GROUP_CONFIG: Record<EntityGroupLabel, {
   },
   'ANALYTICAL TECHNIQUE': {
     accentVar: '--entity-analytical-technique',
-    highlightSelector: '.ent-analytical-technique, mark.ner-analytical-technique',
+    highlightSelector: '.ent-analytical-technique, mark.ner-analytical-technique, .ent-isolation-method, mark.ner-isolation-method',
   },
   'BIOACTIVITY': {
     accentVar: '--entity-bioactivity',
@@ -84,7 +84,9 @@ const createInitialEnabledHighlightGroups = () => {
   }, {} as Record<EntityGroupLabel, boolean>);
 };
 
-const getEntityGroupPanelId = (label: EntityGroupLabel) => `entity-group-panel-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+const getEntityGroupToken = (label: EntityGroupLabel) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+const getEntityGroupPanelId = (label: EntityGroupLabel) => `entity-group-panel-${getEntityGroupToken(label)}`;
 
 type SpeciesPopupData = {
   primaryName: string;
@@ -226,7 +228,11 @@ const getSpeciesPopupPosition = (anchor: HTMLElement) => {
 
 
 interface PaperViewerProps {
-  doi: string;
+  paperIdentifier?: {
+    type: 'doi' | 'pmcid' | 'pmid';
+    value: string;
+    href: string;
+  };
   mode: 'full_text' | 'abstract';
   title: string;
   html: string;
@@ -262,7 +268,7 @@ interface GroupedEntities {
 const isChemicalLikeLabel = (label: string) => label === 'CHEMICAL';
 
 const PaperViewer: React.FC<PaperViewerProps> = ({
-   doi,
+   paperIdentifier,
    mode,
    title,
    html,
@@ -277,7 +283,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     paperJournal,
     paperDate,
     onExtract,
-   }) => {
+}) => {
+  const identifierValue = paperIdentifier?.value || 'paper';
+
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
   const [entitySearch, setEntitySearch] = useState('');
@@ -770,7 +778,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     return ENTITY_GROUP_ORDER.filter((label) => !enabledHighlightGroups[label]);
   }, [enabledHighlightGroups]);
 
-  const disabledHighlightGroupData = disabledHighlightGroups.join(' ') || undefined;
+  const disabledHighlightGroupData = disabledHighlightGroups.map(getEntityGroupToken).join(' ') || undefined;
   
   
   
@@ -789,7 +797,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     }, 0);
 
     return () => window.clearTimeout(resetTimer);
-  }, [doi, html, resetReaderUiState]);
+  }, [identifierValue, html, resetReaderUiState]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -1243,14 +1251,16 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     {fallbackSource.source}
                   </span>
                 )}
-                <a
-                  href={`https://doi.org/${doi}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[9px] text-slate-400 font-medium tracking-wider uppercase hover:text-blue-600 transition-colors"
-                >
-                  DOI: {doi}
-                </a>
+                {paperIdentifier && (
+                  <a
+                    href={paperIdentifier.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[9px] text-slate-400 font-medium tracking-wider uppercase hover:text-blue-600 transition-colors"
+                  >
+                    {paperIdentifier.type.toUpperCase()}: {paperIdentifier.value}
+                  </a>
+                )}
               </div>
               {paperDate && (
                 <span className="text-[9px] text-slate-400 font-medium tracking-wider ml-auto">
@@ -1541,12 +1551,12 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   );
                 }
               }
-              const csv = `# DOI: ${doi}\nType,Name,Count,Variants\n${rows.join('\n')}`;
+              const csv = `# ${paperIdentifier?.type?.toUpperCase() || 'PAPER'}: ${identifierValue}\nType,Name,Count,Variants\n${rows.join('\n')}`;
               const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `entities-${doi.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
+              a.download = `entities-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
               a.click();
               URL.revokeObjectURL(url);
             }}
@@ -1827,7 +1837,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           scroll-margin-top: 5rem;
         }
         ${ENTITY_GROUP_ORDER.map((label) => `
-          [data-disabled-entity-groups~="${label}"] :is(${ENTITY_GROUP_CONFIG[label].highlightSelector}) {
+          [data-disabled-entity-groups~="${getEntityGroupToken(label)}"] :is(${ENTITY_GROUP_CONFIG[label].highlightSelector}) {
             background-color: transparent !important;
             box-shadow: none !important;
             color: inherit !important;

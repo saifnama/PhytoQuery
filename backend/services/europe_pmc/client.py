@@ -7,9 +7,12 @@ Handles all network communication with Europe PMC:
 - Full text XML retrieval
 """
 
+import asyncio
 import re
 import logging
 from typing import Optional, Tuple, Dict, Any, List
+
+import httpx
 
 from backend.core.http_client import HttpClientManager
 from backend.core.caching import pmc_cache
@@ -313,10 +316,59 @@ class EuropePMCClient:
             "cursorMark": cursor_mark,
         }
 
+        max_retries = 3
+        base_delay = 1.5
+        max_retry_delay = 10.0
+
         try:
             client = await HttpClientManager.get_client()
-            response = await client.get(search_url, params=params, timeout=30.0)
-            response.raise_for_status()
+
+            response = None
+            for attempt in range(max_retries):
+                try:
+                    response = await client.get(search_url, params=params, timeout=30.0)
+                    response.raise_for_status()
+                    break
+                except httpx.HTTPStatusError as e:
+                    status_code = e.response.status_code if e.response is not None else None
+                    is_transient = status_code is not None and 500 <= status_code < 600
+                    if not is_transient or attempt == max_retries - 1:
+                        raise
+
+                    retry_after_header = e.response.headers.get("retry-after")
+                    if retry_after_header:
+                        try:
+                            delay = min(float(retry_after_header), max_retry_delay)
+                        except ValueError:
+                            delay = base_delay * (2**attempt)
+                    else:
+                        delay = base_delay * (2**attempt)
+
+                    logger.warning(
+                        "Europe PMC search failed with %s. Retrying in %.1fs (attempt %s/%s)",
+                        status_code,
+                        delay,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                except (httpx.TimeoutException, httpx.RequestError) as e:
+                    if attempt == max_retries - 1:
+                        raise
+
+                    delay = base_delay * (2**attempt)
+                    logger.warning(
+                        "Europe PMC search transient error (%s). Retrying in %.1fs (attempt %s/%s)",
+                        type(e).__name__,
+                        delay,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(delay)
+
+            if response is None:
+                raise RuntimeError("Europe PMC search returned no response after retries")
+
             data = response.json()
 
             # Pagination metadata from Europe PMC (cursor-based)
@@ -363,4 +415,4 @@ class EuropePMCClient:
             }
         except Exception as e:
             logger.error(f"Error in search_literature: {e}")
-            return {"results": [], "pagination": {}}
+            raise

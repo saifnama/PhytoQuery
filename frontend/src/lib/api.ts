@@ -42,13 +42,14 @@ export const nerApi = {
   /**
    * Search papers by query
    */
-  async search(query: string, filters: SearchFilters, cursorMark: string = '*'): Promise<{ results: SearchResult[]; pagination: { total: number; cursorMark: string; nextCursorMark: string; hasMore: boolean; pageSize: number } }> {
+  async search(query: string, filters: SearchFilters, cursorMark: string = '*'): Promise<{ results: SearchResult[]; pagination: { total: number; cursorMark: string; nextCursorMark: string; hasMore: boolean; pageSize: number } ; error?: string }> {
     const formData = new FormData();
     formData.append('query', query);
     formData.append('open_access', String(filters.open_access));
     formData.append('has_full_text', String(filters.has_full_text));
     formData.append('article_type', filters.article_type);
     formData.append('sort', filters.sort);
+    formData.append('page_size', String(filters.page_size));
     formData.append('cursor_mark', cursorMark);
 
     const response = await api.post('/search/json', formData);
@@ -174,8 +175,8 @@ export const healthApi = {
 // DOI Abstract Fallback API
 export const doiApi = {
   /**
-   * Fetch abstract for a DOI when Europe PMC doesn't have it.
-   * Multi-source fallback: OpenAlex → Semantic Scholar → Crossref
+ * Fetch abstract for a DOI when Europe PMC doesn't have it.
+ * Multi-source fallback: OpenAlex → Semantic Scholar
    */
   async getAbstract(doi: string): Promise<{
     doi: string;

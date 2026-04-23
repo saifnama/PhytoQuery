@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
-import { nerApi } from '../../lib/api';
+import { doiApi, nerApi } from '../../lib/api';
 import type { PaperData, Entity } from '../../types';
 
 const PaperPage: React.FC = () => {
@@ -17,6 +17,85 @@ const PaperPage: React.FC = () => {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [fallbackSource, setFallbackSource] = useState<{ source: string; url: string } | null>(null);
   const [fallbackLoading, setFallbackLoading] = useState(false);
+
+  const isExplicitDoi = (value: string) => {
+    const trimmed = value.trim();
+    return /^10\.\d{4,}/i.test(trimmed) || /^https?:\/\/(dx\.)?doi\.org\//i.test(trimmed) || /^doi:/i.test(trimmed);
+  };
+
+  const getLookupIdentifier = () => {
+    const raw = doi?.trim();
+    if (!raw) return undefined;
+
+    if (raw.toUpperCase().startsWith('PMC')) {
+      return {
+        type: 'pmcid' as const,
+        value: raw.toUpperCase(),
+        href: `https://pmc.ncbi.nlm.nih.gov/articles/${raw.toUpperCase()}/`,
+      };
+    }
+
+    if (/^\d+$/.test(raw)) {
+      return {
+        type: 'pmid' as const,
+        value: raw,
+        href: `https://pubmed.ncbi.nlm.nih.gov/${raw}/`,
+      };
+    }
+
+    if (isExplicitDoi(raw)) {
+      return {
+        type: 'doi' as const,
+        value: raw,
+        href: `https://doi.org/${raw}`,
+      };
+    }
+
+    return undefined;
+  };
+
+  const getPaperIdentifier = () => {
+    const lookupIdentifier = getLookupIdentifier();
+    if (lookupIdentifier) {
+      return lookupIdentifier;
+    }
+
+    const resolvedDoi = paperData?.doi?.trim();
+    if (resolvedDoi && isExplicitDoi(resolvedDoi)) {
+      return {
+        type: 'doi' as const,
+        value: resolvedDoi,
+        href: `https://doi.org/${resolvedDoi}`,
+      };
+    }
+
+    const resolvedPmcid = paperData?.pmcid?.trim();
+    if (resolvedPmcid) {
+      return {
+        type: 'pmcid' as const,
+        value: resolvedPmcid,
+        href: `https://pmc.ncbi.nlm.nih.gov/articles/${resolvedPmcid}/`,
+      };
+    }
+
+    if (doi?.trim().startsWith('PMC')) {
+      return {
+        type: 'pmcid' as const,
+        value: doi.trim(),
+        href: `https://pmc.ncbi.nlm.nih.gov/articles/${doi.trim()}/`,
+      };
+    }
+
+    if (doi && /^\d+$/.test(doi.trim())) {
+      return {
+        type: 'pmid' as const,
+        value: doi.trim(),
+        href: `https://pubmed.ncbi.nlm.nih.gov/${doi.trim()}/`,
+      };
+    }
+
+    return undefined;
+  };
 
   useEffect(() => {
     const fetchPaper = async () => {
@@ -46,25 +125,29 @@ const PaperPage: React.FC = () => {
         }
       } catch (err) {
         console.error('[PaperPage] Failed to fetch paper:', err);
-        // If request timed out, show fallback loading
+        if (!isExplicitDoi(doi)) {
+          setError('Failed to load paper from the primary source.');
+          return;
+        }
+
         setFallbackLoading(true);
         try {
-          const resp = await fetch(`/doi/abstract?doi=${encodeURIComponent(doi)}`);
+          const data = await doiApi.getAbstract(doi);
           setFallbackLoading(false);
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data?.abstract) {
-              setPaperData({
-                mode: 'abstract' as const,
-                title: data.title || '',
-                html: `<section id="section-0"><h2>Abstract</h2><p>${data.abstract}</p></section>`,
-                sections: [{ title: 'Abstract', content: data.abstract }],
-                references: {},
-                pmcid: '',
-              } as PaperData);
-              setFallbackSource({ source: data.source, url: data.url });
-              return;
-            }
+          if (data?.abstract) {
+            setPaperData({
+              doi: data.doi || doi,
+              mode: 'abstract' as const,
+              title: data.title || '',
+              html: `<section id="section-0"><h2>Abstract</h2><p>${data.abstract}</p></section>`,
+              sections: [{ title: 'Abstract', content: data.abstract, headings: [] }],
+              references: {},
+              pmcid: '',
+              authors: data.authors,
+              year: data.year,
+            } as PaperData);
+            setFallbackSource({ source: data.source, url: data.url });
+            return;
           }
           setError(`No abstract found. <a href="https://doi.org/${doi}" target="_blank" class="text-blue-600 underline">View on publisher</a>`);
         } catch {
@@ -136,7 +219,7 @@ const PaperPage: React.FC = () => {
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-emerald-600 mx-auto mb-4" />
-          <p className="text-sm text-slate-500">Fetching from OpenAlex...</p>
+          <p className="text-sm text-slate-500">Fetching DOI fallback sources...</p>
         </div>
       </div>
     );
@@ -177,7 +260,7 @@ const PaperPage: React.FC = () => {
 
   return (
     <PaperViewer
-      doi={doi || ''}
+      paperIdentifier={getPaperIdentifier()}
       mode={paperData.mode}
       title={formattedTitle || 'Untitled Paper'}
       html={htmlBlob}

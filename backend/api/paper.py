@@ -2,7 +2,11 @@
 
 from fastapi import APIRouter, Depends, Form
 from backend.services.europe_pmc import EuropePMCService
-from backend.services.doi_resolver import fetch_doi_abstract
+from backend.services.doi_resolver import (
+    fetch_doi_abstract,
+    fetch_pubmed_by_pmid,
+    fetch_pmc_by_pmcid,
+)
 from backend.services.ner_engine import ner_service, NERService
 from backend.core.highlighter import Highlighter
 from backend.core.caching import ner_cache
@@ -35,6 +39,16 @@ def get_pmc_service():
     return EuropePMCService
 
 
+async def _fetch_identifier_fallback(id_type: str, clean_id: str):
+    if id_type == "doi":
+        return await fetch_doi_abstract(clean_id)
+    if id_type == "pmid":
+        return await fetch_pubmed_by_pmid(clean_id)
+    if id_type == "pmcid":
+        return await fetch_pmc_by_pmcid(clean_id)
+    return None
+
+
 # --- JSON Endpoints ---
 
 
@@ -45,8 +59,11 @@ async def analyze_paper_json(
     service: NERService = Depends(get_ner_service),
 ):
     """
-    JSON endpoint for fetching paper data with sections.
-    Falls back to OpenAlex/Semantic Scholar/PubMed if Europe PMC doesn't have it.
+    JSON endpoint for fetching paper data with identifier-aware fallback.
+
+    - DOI: Europe PMC first, then OpenAlex/Semantic Scholar
+    - PMID: Europe PMC first, then PubMed
+    - PMCID: Europe PMC/PMC first, then direct PMC fetch
     """
     try:
         id_type, clean_id = EuropePMCService.parse_identifier(doi)
@@ -59,7 +76,36 @@ async def analyze_paper_json(
             logger.info(
                 f"Europe PMC has no content for {clean_id}, trying external sources..."
             )
-            fallback = await fetch_doi_abstract(clean_id)
+            fallback = await _fetch_identifier_fallback(id_type, clean_id)
+            if id_type == "pmcid" and fallback and fallback.get("full_text_xml"):
+                try:
+                    sections, references = EuropePMCService.parse_sections_from_xml(
+                        fallback["full_text_xml"], pmcid=clean_id
+                    )
+                    if sections:
+                        fallback_year = fallback.get("year")
+                        fallback_date = str(fallback_year) if fallback_year else ""
+                        return {
+                            "doi": fallback.get("doi", ""),
+                            "mode": "full_text",
+                            "title": fallback.get("title", ""),
+                            "html": "",
+                            "sections": sections,
+                            "references": references,
+                            "pmcid": fallback.get("pmcid", clean_id),
+                            "entities": [],
+                            "summary": {},
+                            "is_extracted": False,
+                            "fallback_source": fallback.get("source", ""),
+                            "fallback_url": fallback.get("url", ""),
+                            "authors": fallback.get("authors", []),
+                            "year": fallback_year,
+                            "journal": fallback.get("journal", ""),
+                            "date": fallback_date,
+                        }
+                except Exception as e:
+                    logger.error(f"PMCID fallback XML parsing failed for {clean_id}: {e}")
+
             if fallback and fallback.get("abstract"):
                 abstract_html = f"<section id='section-0'><h2>Abstract</h2><p>{fallback['abstract']}</p></section>"
                 fallback_year = fallback.get("year")
@@ -73,7 +119,7 @@ async def analyze_paper_json(
                         {"title": "Abstract", "content": fallback["abstract"]}
                     ],
                     "references": {},
-                    "pmcid": "",
+                    "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
                     "entities": [],
                     "summary": {},
                     "is_extracted": False,
@@ -94,7 +140,7 @@ async def analyze_paper_json(
                     "html": f"<section id='section-0'><h2>Abstract</h2><p class='text-slate-500'>Not available.</p></section>",
                     "sections": [],
                     "references": {},
-                    "pmcid": "",
+                    "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
                     "entities": [],
                     "summary": {},
                     "is_extracted": False,
@@ -104,14 +150,15 @@ async def analyze_paper_json(
                     "authors": fallback.get("authors", []),
                     "date": fallback_date,
                 }
+            identifier_label = id_type.upper()
             return {
-                "error": f"No data found for this DOI. Try viewing on publisher.",
+                "error": f"No data found for this {identifier_label}. Try viewing it on the source site.",
                 "sections": [],
             }
 
         # Europe PMC has content — but title might be missing. Try to fill it.
         if not paper_data.get("title"):
-            fallback = await fetch_doi_abstract(clean_id)
+            fallback = await _fetch_identifier_fallback(id_type, clean_id)
             if fallback and fallback.get("title"):
                 paper_data["title"] = fallback["title"]
 

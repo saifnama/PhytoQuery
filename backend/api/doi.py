@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional
 from backend.services.doi_resolver import fetch_doi_abstract
+from backend.services.europe_pmc import EuropePMCService
 from backend.core.caching import doi_cache
 
 router = APIRouter(prefix="/doi", tags=["doi"])
@@ -34,10 +35,14 @@ async def get_doi_abstract(
 ):
     """
     Fetch abstract for a DOI when Europe PMC doesn't have it.
-    Uses multi-source fallback: OpenAlex → Semantic Scholar → PubMed.
+    Uses DOI-oriented fallback: OpenAlex → Semantic Scholar.
     Results are cached for future requests.
     """
-    normalized_doi = _normalize_doi(doi)
+    id_type, clean_id = EuropePMCService.parse_identifier(doi)
+    if id_type != "doi":
+        raise HTTPException(status_code=400, detail="This endpoint only accepts DOI input")
+
+    normalized_doi = _normalize_doi(clean_id)
     if not normalized_doi:
         raise HTTPException(status_code=400, detail="Invalid DOI")
 

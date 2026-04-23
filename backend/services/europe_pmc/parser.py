@@ -479,34 +479,17 @@ class XMLParser:
                         )
                     return ""
 
-                # CASE: Figure
+                # CASE: Figure - skip image, show caption only (avoids Europe PMC image server issues)
                 if node.tag == "fig":
                     label = node.findtext("label") or "Figure"
                     cap_node = node.find("caption")
                     caption = (
                         "".join(cap_node.itertext()) if cap_node is not None else ""
                     )
-                    graphic = node.find(".//graphic")
-                    if graphic is not None:
-                        href = graphic.get("{http://www.w3.org/1999/xlink}href")
-                        img_url = (
-                            f"https://europepmc.org/articles/{pmcid}/bin/{href}"
-                            if pmcid
-                            else ""
-                        )
-                        if img_url:
-                            cap_html = (
-                                f'<figcaption><span class="fig-label">{label}</span> {caption}</figcaption>'
-                                if caption
-                                else f'<figcaption><span class="fig-label">{label}</span></figcaption>'
-                            )
-                            return (
-                                f'<figure class="article-figure">'
-                                f'<img src="{img_url}" alt="{label}" loading="lazy" />'
-                                f"{cap_html}"
-                                f"</figure>"
-                            )
-                    return ""
+                    # Show figure label and caption as text, skip the actual image
+                    if caption:
+                        return f'<div class="article-figure"><span class="fig-label">{label}</span>: {caption}</div>'
+                    return f'<div class="article-figure"><span class="fig-label">{label}</span></div>'
 
                 # CASE: Lists - preserve EXACTLY what Europe PMC provides
                 if node.tag == "list":

@@ -6,11 +6,19 @@ import { nerApi } from '../../lib/api';
 import type { SearchFilters, SearchResult } from '../../types';
 
 const NerPage: React.FC = () => {
+  const normalizePageSize = (value: string | null): 10 | 25 | 50 | 100 => {
+    const parsed = Number(value);
+    if (parsed === 10 || parsed === 25 || parsed === 50 || parsed === 100) {
+      return parsed;
+    }
+    return 25;
+  };
+
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pagination, setPagination] = useState<{ total: number; cursorMark: string; nextCursorMark: string; hasMore: boolean; pageSize: number } | null>(null);
-  const [_currentCursor, setCurrentCursor] = useState('*');
+  const [currentCursor, setCurrentCursor] = useState('*');
   const [cursorHistory, setCursorHistory] = useState<string[]>(['*']);
   const [lastQuery, setLastQuery] = useState('');
   const [lastFilters, setLastFilters] = useState<SearchFilters | null>(null);
@@ -26,22 +34,37 @@ const NerPage: React.FC = () => {
         has_full_text: searchParams.get('ft') === '1',
         article_type: searchParams.get('type') || '',
         sort: searchParams.get('sort') || '',
+        page_size: normalizePageSize(searchParams.get('ps')),
       };
-      doSearch(q, filters);
+      doSearch(q, filters, '*', { resetHistory: true });
     }
   }, []);
 
-  const doSearch = async (query: string, filters: SearchFilters, cursorMark: string = '*') => {
+  const doSearch = async (
+    query: string,
+    filters: SearchFilters,
+    cursorMark: string = '*',
+    options?: { resetHistory?: boolean; historyOverride?: string[] },
+  ) => {
     setIsLoading(true);
     setError(null);
 
     try {
       const data = await nerApi.search(query, filters, cursorMark);
+      if ('error' in data && data.error) {
+        throw new Error(data.error);
+      }
+
       setResults(data.results || []);
       setPagination(data.pagination || null);
       setCurrentCursor(cursorMark);
-      // Push cursor to history stack for proper "Previous" navigation
-      setCursorHistory(prev => [...prev, cursorMark]);
+      if (options?.historyOverride) {
+        setCursorHistory(options.historyOverride);
+      } else if (options?.resetHistory || cursorMark === '*') {
+        setCursorHistory(['*']);
+      } else {
+        setCursorHistory(prev => prev[prev.length - 1] === cursorMark ? prev : [...prev, cursorMark]);
+      }
       setLastQuery(query);
       setLastFilters(filters);
 
@@ -52,11 +75,13 @@ const NerPage: React.FC = () => {
       if (filters.has_full_text) params.set('ft', '1');
       if (filters.article_type) params.set('type', filters.article_type);
       if (filters.sort) params.set('sort', filters.sort);
-      if (cursorMark !== '*') params.set('cursor', cursorMark);
+      if (filters.page_size !== 25) params.set('ps', String(filters.page_size));
       navigate(`/?${params.toString()}`, { replace: true });
     } catch (err: any) {
       console.error('Search failed:', err);
-      setError(err?.response?.data?.error || 'Search failed. Please try again.');
+      setError(err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Search failed. Please try again.');
+      setResults([]);
+      setPagination(null);
     } finally {
       setIsLoading(false);
     }
@@ -68,10 +93,10 @@ const NerPage: React.FC = () => {
       const trimmed = q.trim();
       return (
         /^10\.\d{4,}/.test(trimmed) || // DOI
-        /^https?:\/\/doi\.org\//.test(trimmed) || // DOI URL
+        /^https?:\/\/(dx\.)?doi\.org\//.test(trimmed) || // DOI URL
         /^doi:/i.test(trimmed) || // doi: prefix
         /^PMC\d+/i.test(trimmed) || // PMCID
-        /^https?:\/\/pubmed\.ncbi\.nlm\.nih\.gov\//.test(trimmed) || // PubMed URL
+        /^https?:\/\/(www\.)?pubmed\.ncbi\.nlm\.nih\.gov\//.test(trimmed) || // PubMed URL
         /^https?:\/\/www\.ncbi\.nlm\.nih\.gov\/pmc\//.test(trimmed) || // NCBI PMC URL
         /^https?:\/\/pmc\.ncbi\.nlm\.nih\.gov\/articles\//.test(trimmed) || // PMC NCBI URL
         /^https?:\/\/europepmc\.org\/article\//.test(trimmed) || // Europe PMC URL
@@ -83,11 +108,11 @@ const NerPage: React.FC = () => {
     if (isIdentifier(query.trim())) {
       let cleanID = query.trim();
       // DOI URL
-      if (cleanID.startsWith('http') && /doi\.org\//.test(cleanID)) {
-        cleanID = cleanID.replace(/^https?:\/\/doi\.org\//, '');
+      if (cleanID.startsWith('http') && /(dx\.)?doi\.org\//.test(cleanID)) {
+        cleanID = cleanID.replace(/^https?:\/\/(dx\.)?doi\.org\//, '');
       } else if (cleanID.toLowerCase().startsWith('doi:')) {
         cleanID = cleanID.substring(4).trim();
-      } else if (/pubmed\.ncbi\.nlm\.nih\.gov/.test(cleanID)) {
+      } else if (/(www\.)?pubmed\.ncbi\.nlm\.nih\.gov/.test(cleanID)) {
         // Extract PMID from PubMed URL
         const m = cleanID.match(/\/(\d+)/);
         if (m) cleanID = m[1];
@@ -106,7 +131,7 @@ const NerPage: React.FC = () => {
       return;
     }
 
-    doSearch(query, filters);
+    doSearch(query, filters, '*', { resetHistory: true });
   };
 
   const handleNextPage = () => {
@@ -117,12 +142,11 @@ const NerPage: React.FC = () => {
   };
 
   const handlePrevPage = () => {
-    if (lastQuery && lastFilters && cursorHistory.length > 1) {
+    if (lastQuery && lastFilters && currentCursor !== '*' && cursorHistory.length > 1) {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      // Pop current cursor, get previous
-      const prevCursor = cursorHistory[cursorHistory.length - 2];
-      setCursorHistory(prev => prev.slice(0, -1));
-      doSearch(lastQuery, lastFilters, prevCursor);
+      const nextHistory = cursorHistory.slice(0, -1);
+      const prevCursor = nextHistory[nextHistory.length - 1] || '*';
+      doSearch(lastQuery, lastFilters, prevCursor, { historyOverride: nextHistory });
     }
   };
 
@@ -137,6 +161,7 @@ const NerPage: React.FC = () => {
           has_full_text: searchParams.get('ft') === '1',
           article_type: searchParams.get('type') || '',
           sort: searchParams.get('sort') || '',
+          page_size: normalizePageSize(searchParams.get('ps')),
         }}
       />
 
@@ -181,7 +206,7 @@ const NerPage: React.FC = () => {
                 <div
                   key={result.id}
                   onClick={() => {
-                    const paperId = result.pmcid || result.doi || result.pmid;
+                    const paperId = result.doi || result.pmcid || result.pmid;
                     if (paperId) {
                       navigate(`/paper/${encodeURIComponent(paperId)}`);
                     }

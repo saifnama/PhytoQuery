@@ -1,6 +1,6 @@
 """Search Router — Europe PMC literature search."""
 
-from fastapi import APIRouter, Form
+from fastapi import APIRouter, Form, HTTPException
 from backend.services.europe_pmc import EuropePMCService
 import logging
 
@@ -15,6 +15,7 @@ async def search_papers_json(
     has_full_text: bool = Form(False),
     article_type: str = Form(""),
     sort: str = Form(""),
+    page_size: int = Form(25),
     page: int = Form(1),
     cursor_mark: str = Form("*"),
 ):
@@ -28,10 +29,10 @@ async def search_papers_json(
         return await EuropePMCService.search_literature(
             query=query,
             filters=filters,
-            max_results=25,
+            max_results=max(10, min(page_size, 100)),
             sort=sort,
             cursor_mark=cursor_mark,
         )
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        return {"error": str(e), "results": [], "pagination": {}}
+        raise HTTPException(status_code=502, detail=str(e))
