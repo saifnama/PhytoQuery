@@ -116,8 +116,12 @@ python -m spacy download en_core_web_sm
 # Option 1: Direct Python
 python -m backend.app
 
-# Option 2: Via uvicorn
-uvicorn backend.app:app --reload --port 8000
+# Option 2: Via uvicorn (network accessible)
+# Bind to all interfaces for access from other devices on your WiFi
+uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
+
+# Or with direct Python  
+python -m backend.app --host 0.0.0.0 --port 8000
 ```
 
 ### 2. Frontend Setup
