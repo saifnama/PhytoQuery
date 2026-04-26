@@ -124,11 +124,14 @@ export interface PaperData {
   is_extracted?: boolean;
   fallback_source?: string;
   fallback_url?: string;
-  // Metadata from fallback sources (OpenAlex, Semantic Scholar, PubMed)
+  // Metadata from fallback sources (OpenAlex, Semantic Scholar, PMC)
   authors?: string[];
   year?: number | null;
   journal?: string;
   date?: string;
+  // PDF links (from OpenAlex or Semantic Scholar)
+  pdfUrl?: string;
+  openAccessPdf?: { url: string } | null;
 }
 
 export interface SearchResult {
@@ -143,7 +146,11 @@ export interface SearchResult {
   citationCount?: number;
   isOpenAccess?: boolean;
   hasTextMinedTerms?: boolean;
+  hasFullText?: boolean;
+  hasPdfUrl?: boolean;
+  pdfUrl?: string;
   abstract?: string;
+  source?: string;
 }
 
 export interface SearchFilters {
@@ -151,7 +158,7 @@ export interface SearchFilters {
   has_full_text: boolean;
   article_type: string;
   sort: string;
-  page_size: number;
+  source: string;  // "europepmc" or "openalex"
 }
 
 export interface RAGResult {

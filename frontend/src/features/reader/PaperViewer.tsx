@@ -1177,27 +1177,25 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           <div>
             <div className="flex items-center mb-2">
               <div className="flex items-center space-x-3">
-                <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-widest">
-                  {mode}
-                </span>
-                {fallbackSource && (
-                  <span
-                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest ${
-                      fallbackSource.source.toLowerCase().includes('openalex')
-                        ? 'bg-slate-100 text-slate-700'
-                        : fallbackSource.source.toLowerCase().includes('semantic')
-                        ? 'bg-yellow-50 text-yellow-700'
-                        : fallbackSource.source.toLowerCase().includes('pubmed')
-                        ? 'bg-blue-50 text-blue-700'
-                        : fallbackSource.source.toLowerCase().includes('europe')
-                        ? 'bg-emerald-50 text-emerald-600'
-                        : 'bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    {fallbackSource.source}
-                  </span>
-                )}
-                {paperIdentifier && (
+                 <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-widest">
+                   {mode}
+                 </span>
+                  {fallbackSource && (
+                    <span
+                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest ${
+                        fallbackSource.source.toLowerCase().includes('openalex')
+                          ? 'bg-slate-100 text-slate-700'
+                          : fallbackSource.source.toLowerCase().includes('semantic')
+                          ? 'bg-yellow-50 text-yellow-700'
+                          : fallbackSource.source.toLowerCase().includes('europe')
+                          ? 'bg-emerald-50 text-emerald-600'
+                          : 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {fallbackSource.source}
+                    </span>
+                  )}
+                 {paperIdentifier && (
                   <a
                     href={paperIdentifier.href}
                     target="_blank"

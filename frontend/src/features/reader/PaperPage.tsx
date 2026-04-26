@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
 import { doiApi, nerApi, paperApi } from '../../lib/api';
@@ -8,6 +8,8 @@ import type { PaperData, Entity } from '../../types';
 const PaperPage: React.FC = () => {
   const { doi } = useParams<{ doi: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const searchSource = searchParams.get('src') || '';
   const [paperData, setPaperData] = useState<PaperData | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [isExtracted, setIsExtracted] = useState(false);
@@ -119,7 +121,8 @@ const PaperPage: React.FC = () => {
       setError(null);
 
       try {
-        const data = await nerApi.analyzePaper(doi, false);
+        console.log('[PaperPage] Calling analyzePaper with source:', searchSource);
+        const data = await nerApi.analyzePaper(doi, false, searchSource);
         
         if (!data || 'error' in data) {
           setError(data.error || 'Paper not found');
@@ -183,7 +186,7 @@ const PaperPage: React.FC = () => {
     setExtractionError(null);
 
     try {
-      const data = await nerApi.analyzePaper(doi, true);
+      const data = await nerApi.analyzePaper(doi, true, searchSource);
 
       if (!data || 'error' in data) {
         throw new Error(data.error || 'Extraction failed');
@@ -218,9 +221,17 @@ const PaperPage: React.FC = () => {
   }, [doi, isExtracted, isExtracting]);
 
   const pdfIdentifier = getPaperIdentifier()?.value || paperData?.pmcid || paperData?.doi || doi;
-  const canUsePdfActions = paperData?.mode === 'full_text' && Boolean(pdfIdentifier);
+  console.log('[PaperPage] pdfIdentifier:', pdfIdentifier, 'pdfUrl:', paperData?.pdfUrl, 'mode:', paperData?.mode);
+  // Allow PDF if: full_text mode, OR OpenAlex has direct PDF URL
+  const canUsePdfActions = (paperData?.mode === 'full_text' || Boolean(paperData?.pdfUrl)) && Boolean(pdfIdentifier);
 
   const handleDownloadPdf = async () => {
+    // OpenAlex has direct PDF URL - open in new tab
+    if (paperData?.pdfUrl) {
+      window.open(paperData.pdfUrl, '_blank');
+      return;
+    }
+    
     if (!pdfIdentifier || isDownloadingPdf) return;
     setPdfActionError(null);
     setIsDownloadingPdf(true);

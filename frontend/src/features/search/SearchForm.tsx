@@ -15,7 +15,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
     has_full_text: defaultFilters?.has_full_text ?? false,
     article_type: defaultFilters?.article_type ?? '',
     sort: defaultFilters?.sort ?? '',
-    page_size: defaultFilters?.page_size ?? 25,
+    source: defaultFilters?.source ?? 'europepmc',
   });
 
   // Sync query from URL when navigating back
@@ -32,7 +32,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           prev.has_full_text === defaultFilters.has_full_text &&
           prev.article_type === defaultFilters.article_type &&
           prev.sort === defaultFilters.sort &&
-          prev.page_size === defaultFilters.page_size
+          prev.source === defaultFilters.source
         ) {
           return prev; // no change
         }
@@ -41,7 +41,7 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
           has_full_text: defaultFilters.has_full_text ?? false,
           article_type: defaultFilters.article_type ?? '',
           sort: defaultFilters.sort ?? '',
-          page_size: defaultFilters.page_size ?? 25,
+          source: defaultFilters.source ?? 'europepmc',
         };
       });
     }
@@ -113,22 +113,22 @@ const SearchForm: React.FC<SearchFormProps> = ({ onSearch, isLoading = false, de
             }
             className="bg-transparent border-none outline-none cursor-pointer hover:text-slate-600 transition-colors"
           >
-            <option value="">Any Type</option>
+<option value="">Any Type</option>
             <option value="Research-article">Research Article</option>
             <option value="Review">Review</option>
           </select>
+          <div className="h-4 w-px bg-slate-200" />
           <select
-            value={filters.page_size}
+            value={filters.source || 'europepmc'}
             onChange={(e) =>
-              setFilters({ ...filters, page_size: Number(e.target.value) })
+              setFilters({ ...filters, source: e.target.value })
             }
             className="bg-transparent border-none outline-none cursor-pointer hover:text-slate-600 transition-colors"
           >
-            <option value={10}>10 / page</option>
-            <option value={25}>25 / page</option>
-            <option value={50}>50 / page</option>
-            <option value={100}>100 / page</option>
+            <option value="europepmc">Europe PMC</option>
+            <option value="openalex">OpenAlex</option>
           </select>
+          <div className="h-4 w-px bg-slate-200" />
           <select
             value={filters.sort}
             onChange={(e) =>

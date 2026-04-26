@@ -1,11 +1,12 @@
 """Paper Router — Fetch paper data by DOI with multi-source fallback."""
 
+import urllib.parse
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from fastapi.responses import Response
 from backend.services.europe_pmc import EuropePMCService
+from backend.services.openalex import OpenAlexService
 from backend.services.doi_resolver import (
     fetch_doi_abstract,
-    fetch_pubmed_by_pmid,
     fetch_pmc_by_pmcid,
 )
 from backend.services.ner_engine import ner_service, NERService
@@ -55,8 +56,6 @@ def _extract_filename_from_disposition(content_disposition: str | None) -> str |
 async def _fetch_identifier_fallback(id_type: str, clean_id: str):
     if id_type == "doi":
         return await fetch_doi_abstract(clean_id)
-    if id_type == "pmid":
-        return await fetch_pubmed_by_pmid(clean_id)
     if id_type == "pmcid":
         return await fetch_pmc_by_pmcid(clean_id)
     return None
@@ -69,111 +68,171 @@ async def _fetch_identifier_fallback(id_type: str, clean_id: str):
 async def analyze_paper_json(
     doi: str = Form(...),
     run_ner: bool = Form(False),
+    source: str = Form(""),  # "europepmc", "openalex", or "" - case insensitive
     service: NERService = Depends(get_ner_service),
 ):
+    """JSON endpoint for fetching paper data with identifier-aware fallback.
+    
+    If source="openalex", skip Europe PMC fallback - only return OpenAlex metadata.
     """
-    JSON endpoint for fetching paper data with identifier-aware fallback.
-
-    - DOI: Europe PMC first, then OpenAlex/Semantic Scholar
-    - PMID: Europe PMC first, then PubMed
-    - PMCID: Europe PMC/PMC first, then direct PMC fetch
-    """
+    # Normalize source: "Europe PMC" → "europepmc", "OpenAlex" → "openalex"
+    source = source.lower().strip() if source else ""
+    print(f">>> paper.py: source='{source}', doi='{doi}'")
+    
     try:
         id_type, clean_id = EuropePMCService.parse_identifier(doi)
         if id_type == "doi":
             clean_id = clean_id.lower()
-        paper_data = await EuropePMCService.fetch_structured_data(clean_id)
-
-        if not paper_data["sections"]:
-            # Europe PMC doesn't have it — try external sources
-            logger.info(
-                f"Europe PMC has no content for {clean_id}, trying external sources..."
-            )
-            fallback = await _fetch_identifier_fallback(id_type, clean_id)
-            if id_type == "pmcid" and fallback and fallback.get("full_text_xml"):
-                try:
-                    sections, references = EuropePMCService.parse_sections_from_xml(
-                        fallback["full_text_xml"], pmcid=clean_id
-                    )
-                    if sections:
-                        fallback_year = fallback.get("year")
-                        fallback_date = str(fallback_year) if fallback_year else ""
-                        return {
-                            "doi": fallback.get("doi", ""),
-                            "mode": "full_text",
-                            "title": fallback.get("title", ""),
-                            "html": "",
-                            "sections": sections,
-                            "references": references,
-                            "pmcid": fallback.get("pmcid", clean_id),
-                            "entities": [],
-                            "summary": {},
-                            "is_extracted": False,
-                            "fallback_source": fallback.get("source", ""),
-                            "fallback_url": fallback.get("url", ""),
-                            "authors": fallback.get("authors", []),
-                            "year": fallback_year,
-                            "journal": fallback.get("journal", ""),
-                            "date": fallback_date,
-                        }
-                except Exception as e:
-                    logger.error(f"PMCID fallback XML parsing failed for {clean_id}: {e}")
-
-            if fallback and fallback.get("abstract"):
-                abstract_html = f"<section id='section-0'><h2>Abstract</h2><p>{fallback['abstract']}</p></section>"
-                fallback_year = fallback.get("year")
-                fallback_date = str(fallback_year) if fallback_year else ""
-                return {
-                    "doi": fallback.get("doi", clean_id),
+        
+        # If source is openalex, use OpenAlex service directly
+        if source == "openalex":
+            paper = await OpenAlexService.fetch_paper(clean_id)
+            
+            if paper:
+                abstract = paper.get("abstract", "")
+                pdf_url = paper.get("pdfUrl")
+                paper_data = {
+                    "doi": paper.get("doi", clean_id),
                     "mode": "abstract",
-                    "title": fallback.get("title", ""),
-                    "html": abstract_html,
-                    "sections": [
-                        {"title": "Abstract", "content": fallback["abstract"]}
-                    ],
-                    "references": {},
-                    "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
+                    "title": paper.get("title", ""),
+                    "authors": paper.get("authors", []),
+                    "year": paper.get("year"),
+                    "journal": paper.get("journal", ""),
+                    "date": str(paper.get("year", "")),
+                    "abstract": abstract,
+                    "sections": [{"title": "Abstract", "content": abstract, "headings": []}] if abstract else [],
+                    "references": [],
+                    "pmcid": paper.get("pmcid", ""),
+                    "pmid": paper.get("pmid", ""),
+                    "fallback_source": "OpenAlex",
+                    "fallback_url": paper.get("url", ""),
                     "entities": [],
-                    "summary": {},
-                    "is_extracted": False,
-                    "fallback_source": fallback.get("source", ""),
-                    "fallback_url": fallback.get("url", ""),
-                    "authors": fallback.get("authors", []),
-                    "year": fallback_year,
-                    "journal": fallback.get("journal", ""),
-                    "date": fallback_date,
+                    "pdfUrl": pdf_url,
                 }
-            if fallback and fallback.get("title"):
-                fallback_year = fallback.get("year")
-                fallback_date = str(fallback_year) if fallback_year else ""
-                return {
-                    "doi": fallback.get("doi", clean_id),
+                if abstract:
+                    paper_data["html"] = f"<section id='section-0'><h2>Abstract</h2><p>{abstract}</p></section>"
+                elif paper_data.get("title"):
+                    paper_data["html"] = "<section id='section-0'><h2>Abstract</h2><p class='text-slate-500'>Not available.</p></section>"
+                    paper_data["sections"] = [{"title": "Abstract", "content": "Not available.", "headings": []}]
+            else:
+                paper_data = {
+                    "doi": clean_id,
                     "mode": "abstract",
-                    "title": fallback["title"],
-                    "html": f"<section id='section-0'><h2>Abstract</h2><p class='text-slate-500'>Not available.</p></section>",
+                    "title": "",
+                    "authors": [],
+                    "year": None,
+                    "journal": "",
+                    "date": "",
+                    "abstract": "",
                     "sections": [],
-                    "references": {},
-                    "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
+                    "references": [],
+                    "pmcid": "",
+                    "pmid": "",
+                    "fallback_source": "OpenAlex",
+                    "fallback_url": "",
+                    "error": "No data found for this DOI in OpenAlex.",
                     "entities": [],
-                    "summary": {},
-                    "is_extracted": False,
-                    "fallback_source": fallback.get("source", ""),
-                    "fallback_url": fallback.get("url", ""),
-                    "journal": fallback.get("journal", ""),
-                    "authors": fallback.get("authors", []),
-                    "date": fallback_date,
                 }
-            identifier_label = id_type.upper()
-            return {
-                "error": f"No data found for this {identifier_label}. Try viewing it on the source site.",
-                "sections": [],
-            }
+        else:
+            # Europe PMC (default) path
+            paper_data = await EuropePMCService.fetch_structured_data(clean_id)
 
-        # Europe PMC has content — but title might be missing. Try to fill it.
-        if not paper_data.get("title"):
-            fallback = await _fetch_identifier_fallback(id_type, clean_id)
-            if fallback and fallback.get("title"):
-                paper_data["title"] = fallback["title"]
+            # If Europe PMC has no content, try fallback sources (unless source is "europepmc")
+            if not paper_data["sections"]:
+                fallback = None
+                if source != "europepmc":
+                    # Only try external sources if not in exclusive Europe PMC mode
+                    fallback = await _fetch_identifier_fallback(id_type, clean_id)
+                if id_type == "pmcid" and fallback and fallback.get("full_text_xml"):
+                    try:
+                        sections, references = EuropePMCService.parse_sections_from_xml(
+                            fallback["full_text_xml"], pmcid=clean_id
+                        )
+                        if sections:
+                            fallback_year = fallback.get("year")
+                            fallback_date = str(fallback_year) if fallback_year else ""
+                            paper_data = {
+                                "doi": fallback.get("doi", ""),
+                                "mode": "full_text",
+                                "title": fallback.get("title", ""),
+                                "html": "",
+                                "sections": sections,
+                                "references": references,
+                                "pmcid": fallback.get("pmcid", clean_id),
+                                "fallback_source": fallback.get("source", ""),
+                                "fallback_url": fallback.get("url", ""),
+                                "authors": fallback.get("authors", []),
+                                "year": fallback_year,
+                                "journal": fallback.get("journal", ""),
+                                "date": fallback_date,
+                            }
+                    except Exception as e:
+                        logger.error(f"PMCID fallback XML parsing failed for {clean_id}: {e}")
+
+                if not paper_data.get("sections") and fallback and fallback.get("abstract"):
+                    abstract_text = fallback["abstract"]
+                    abstract_html = f"<section id='section-0'><h2>Abstract</h2><p>{abstract_text}</p></section>"
+                    fallback_year = fallback.get("year")
+                    fallback_date = str(fallback_year) if fallback_year else ""
+                    paper_data = {
+                        "doi": fallback.get("doi", clean_id),
+                        "mode": "abstract",
+                        "title": fallback.get("title", ""),
+                        "html": abstract_html,
+                        "sections": [
+                            {"title": "Abstract", "content": abstract_text}
+                        ],
+                        "references": {},
+                        "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
+                        "abstract": abstract_text,
+                        "fallback_source": fallback.get("source", ""),
+                        "fallback_url": fallback.get("url", ""),
+                        "authors": fallback.get("authors", []),
+                        "year": fallback_year,
+                        "journal": fallback.get("journal", ""),
+                        "date": fallback_date,
+                        "pdfUrl": fallback.get("pdfUrl"),
+                        "openAccessPdf": fallback.get("openAccessPdf"),
+                    }
+                if not paper_data.get("sections") and fallback and fallback.get("title"):
+                    fallback_year = fallback.get("year")
+                    fallback_date = str(fallback_year) if fallback_year else ""
+                    paper_data = {
+                        "doi": fallback.get("doi", clean_id),
+                        "mode": "abstract",
+                        "title": fallback["title"],
+                        "html": f"<section id='section-0'><h2>Abstract</h2><p class='text-slate-500'>Not available.</p></section>",
+                        "sections": [],
+                        "references": {},
+                        "pmcid": fallback.get("pmcid", clean_id) if id_type == "pmcid" else "",
+                        "fallback_source": fallback.get("source", ""),
+                        "fallback_url": fallback.get("url", ""),
+                        "journal": fallback.get("journal", ""),
+                        "authors": fallback.get("authors", []),
+                        "year": fallback_year,
+                        "date": fallback_date,
+                        "pdfUrl": fallback.get("pdfUrl"),
+                        "openAccessPdf": fallback.get("openAccessPdf"),
+                    }
+                if not paper_data.get("title") and not paper_data.get("sections"):
+                    identifier_label = id_type.upper()
+                    return {
+                        "error": f"No data found for this {identifier_label}. Try viewing it on the source site.",
+                        "sections": [],
+                    }
+
+            # For Europe PMC exclusive mode: if no sections but title exists, show "Abstract not available" placeholder
+            if source == "europepmc" and not paper_data.get("sections") and paper_data.get("title"):
+                paper_data["mode"] = "abstract"
+                paper_data["html"] = "<section id='section-0'><h2>Abstract</h2><p class='text-slate-500'>Not available.</p></section>"
+                paper_data["fallback_source"] = "Europe PMC"
+                paper_data["abstract"] = ""
+
+            # Europe PMC has content — but title might be missing. Try to fill it ONLY if allowed
+            if not paper_data.get("title") and source != "europepmc":
+                fallback = await _fetch_identifier_fallback(id_type, clean_id)
+                if fallback and fallback.get("title"):
+                    paper_data["title"] = fallback["title"]
 
         entities = []
         is_extracted = False
@@ -190,18 +249,17 @@ async def analyze_paper_json(
 
             if sections and len(sections) > 0:
                 # Europe PMC - has structured sections already
-                # Add title as first section if present
-                if title:
-                    sections = [{"title": "Title", "content": title}] + sections
-                summary, entities = await service.process_sections(sections)
+                # Build a temporary list for NER: prepend title if present (title not added to paper_data["sections"])
+                ner_sections = [{"title": "Title", "content": title}] + sections if title else sections
+                summary, entities = await service.process_sections(ner_sections)
             elif title or abstract:
-                # OpenAlex/Semantic Scholar - build sections from title + abstract
-                sections = []
+                # OpenAlex/Semantic Scholar - build NER sections list: title + existing sections
+                ner_sections = []
                 if title:
-                    sections.append({"title": "Title", "content": title})
-                if abstract:
-                    sections.append({"title": "Abstract", "content": abstract})
-                summary, entities = await service.process_sections(sections)
+                    ner_sections.append({"title": "Title", "content": title})
+                # Include existing paper_data sections (abstract or placeholder) by reference
+                ner_sections.extend(paper_data.get("sections", []))
+                summary, entities = await service.process_sections(ner_sections)
             else:
                 # No content - skip NER
                 summary, entities = {}, []
@@ -226,11 +284,19 @@ async def analyze_paper_json(
                 logger.info(
                     f"Successfully highlighted {len(paper_data['sections'])} sections for {clean_id}"
                 )
+                # Rebuild html from highlighted sections to match frontend's fallback construction
+                if paper_data.get("sections"):
+                    html_parts = []
+                    for idx, s in enumerate(paper_data["sections"]):
+                        section_html = f'<section id="section-{idx}"><h2>{s.get("title", "")}</h2>{s.get("content", "")}</section>'
+                        html_parts.append(section_html)
+                    paper_data["html"] = "".join(html_parts)
             except Exception as e:
                 logger.error(f"Highlighting failed for {clean_id}: {e}")
 
         return {
             "doi": paper_data.get("doi", clean_id),
+            "html": paper_data.get("html", ""),
             "mode": paper_data["mode"],
             "title": paper_data.get("title", ""),
             "sections": paper_data["sections"],
@@ -242,8 +308,12 @@ async def analyze_paper_json(
             "journal": paper_data.get("journal", ""),
             "authors": paper_data.get("authors", []),
             "date": paper_data.get("date", ""),
-            "fallback_source": "Europe PMC",
-            "fallback_url": f"https://europepmc.org/article/{clean_id}",
+            "fallback_source": paper_data.get("fallback_source", "Europe PMC"),
+            "fallback_url": paper_data.get(
+                "fallback_url", f"https://europepmc.org/article/{clean_id}"
+            ),
+            "pdfUrl": paper_data.get("pdfUrl"),
+            "openAccessPdf": paper_data.get("openAccessPdf"),
         }
     except Exception as e:
         logger.error(f"Paper JSON Error: {e}")
@@ -327,3 +397,41 @@ async def download_paper_pdf(identifier: str = Query(...)):
     except Exception as e:
         logger.error(f"PDF download error for {identifier}: {e}")
         raise HTTPException(status_code=502, detail="Failed to fetch paper PDF.")
+
+
+@router.get("/pdf-proxy")
+async def proxy_pdf(url: str = Query(...)):
+    """Proxy PDF download from external URL (bypasses CORS)."""
+    try:
+        decoded_url = urllib.parse.unquote(url)
+        logger.info(f"[pdf-proxy] Fetching: {decoded_url[:120]}")
+        
+        client = await HttpClientManager.get_client()
+        # Use browser-like headers to avoid publisher blocks
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/pdf",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        resp = await client.get(decoded_url, follow_redirects=True, timeout=60.0, headers=headers)
+        resp.raise_for_status()
+
+        content = resp.content
+        if not content:
+            raise HTTPException(status_code=404, detail="Empty PDF response.")
+
+        content_disposition = resp.headers.get("content-disposition")
+        filename = _extract_filename_from_disposition(content_disposition) or "paper.pdf"
+        media_type = resp.headers.get("content-type", "application/pdf")
+
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PDF proxy error for url={url[:100]}: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch PDF: {str(e)}")
+

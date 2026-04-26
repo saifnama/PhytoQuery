@@ -46,16 +46,19 @@ api.interceptors.request.use((config) => {
 export const nerApi = {
   /**
    * Search papers by query
+   * @param source - "europepmc", "openalex", or "" (both/merged)
    */
-  async search(query: string, filters: SearchFilters, cursorMark: string = '*'): Promise<{ results: SearchResult[]; pagination: { total: number; cursorMark: string; nextCursorMark: string; hasMore: boolean; pageSize: number } ; error?: string }> {
+  async search(query: string, filters: SearchFilters, page: number = 1, source: string = ""): Promise<{ results: SearchResult[]; pagination: { total: number; page: number; hasMore: boolean; pageSize: number } ; error?: string }> {
     const formData = new FormData();
     formData.append('query', query);
     formData.append('open_access', String(filters.open_access));
     formData.append('has_full_text', String(filters.has_full_text));
     formData.append('article_type', filters.article_type);
     formData.append('sort', filters.sort);
-    formData.append('page_size', String(filters.page_size));
-    formData.append('cursor_mark', cursorMark);
+    formData.append('page', String(page));
+    if (source) {
+      formData.append('source', source);
+    }
 
     const response = await api.post('/search/json', formData);
     return response.data;
@@ -64,10 +67,13 @@ export const nerApi = {
   /**
    * Fetch paper data with optional NER extraction
    */
-  async analyzePaper(doi: string, runNer: boolean = false): Promise<PaperApiResponse> {
+  async analyzePaper(doi: string, runNer: boolean = false, source: string = ""): Promise<PaperApiResponse> {
     const formData = new FormData();
     formData.append('doi', doi);
     formData.append('run_ner', String(runNer));
+    if (source) {
+      formData.append('source', source);
+    }
 
     const response = await api.post<PaperApiResponse>('/paper/json', formData, {
       timeout: runNer ? 600000 : 120000,
@@ -121,24 +127,54 @@ export const paperApi = {
     };
   },
 
-  /**
-   * Fetch PDF and upload it directly to RAG for indexing.
-   * Used for silent "Upload to RAG" from paper page without navigation.
-   */
-  async fetchAndUploadToRag(identifier: string): Promise<{ status: string; message: string; filename?: string }> {
-    const { blob, filename } = await paperApi.fetchPdf(identifier);
-    const file = new File([blob], filename || `${identifier}.pdf`, { type: 'application/pdf' });
-    
-    const result = await ragApi.uploadFiles([file], 'pymupdf');
-    // result.files is string[] - get first file
-    const fileList = result.files || [];
-    return {
-      status: result.status,
-      message: result.message,
-      filename: fileList[0],
-    };
-  },
-};
+   /**
+    * Fetch PDF and upload it directly to RAG for indexing.
+    * Used for silent "Upload to RAG" from paper page without navigation.
+    */
+   async fetchAndUploadToRag(identifier: string): Promise<{ status: string; message: string; filename?: string }> {
+     const { blob, filename } = await paperApi.fetchPdf(identifier);
+     const file = new File([blob], filename || `${identifier}.pdf`, { type: 'application/pdf' });
+     
+     const result = await ragApi.uploadFiles([file], 'pymupdf');
+     // result.files is string[] - get first file
+     const fileList = result.files || [];
+     return {
+       status: result.status,
+       message: result.message,
+       filename: fileList[0],
+     };
+   },
+
+    /**
+     * Upload an already-fetched PDF File to RAG.
+     * Used when we have a direct PDF URL (OpenAlex/Semantic Scholar) and want to upload it.
+     */
+    async uploadPdfToRag(file: File): Promise<{ status: string; message: string; filename?: string }> {
+      const result = await ragApi.uploadFiles([file], 'pymupdf');
+      const fileList = result.files || [];
+      return {
+        status: result.status,
+        message: result.message,
+        filename: fileList[0],
+      };
+    },
+
+    /**
+     * Fetch PDF from an external URL via backend proxy (bypasses CORS).
+     * Used for OpenAlex/Semantic Scholar direct PDF URLs.
+     */
+    async fetchPdfFromUrl(pdfUrl: string): Promise<PaperPdfResponse> {
+      const response = await api.get('/paper/pdf-proxy', {
+        params: { url: pdfUrl },
+        responseType: 'blob',
+        timeout: 120000,
+      });
+      return {
+        blob: response.data,
+        filename: extractFilenameFromDisposition(response.headers['content-disposition']),
+      };
+    },
+  };
 
 // RAG API
 export const ragApi = {

@@ -7,20 +7,11 @@ import { formatTextWithFormatting } from '../../utils/sanitize';
 import type { SearchFilters, SearchResult } from '../../types';
 
 const NerPage: React.FC = () => {
-  const normalizePageSize = (value: string | null): 10 | 25 | 50 | 100 => {
-    const parsed = Number(value);
-    if (parsed === 10 || parsed === 25 || parsed === 50 || parsed === 100) {
-      return parsed;
-    }
-    return 25;
-  };
-
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pagination, setPagination] = useState<{ total: number; cursorMark: string; nextCursorMark: string; hasMore: boolean; pageSize: number } | null>(null);
-  const [currentCursor, setCurrentCursor] = useState('*');
-  const [cursorHistory, setCursorHistory] = useState<string[]>(['*']);
+  const [pagination, setPagination] = useState<{ total: number; page: number; hasMore: boolean; pageSize: number } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
   const [lastQuery, setLastQuery] = useState('');
   const [lastFilters, setLastFilters] = useState<SearchFilters | null>(null);
   const navigate = useNavigate();
@@ -35,37 +26,29 @@ const NerPage: React.FC = () => {
         has_full_text: searchParams.get('ft') === '1',
         article_type: searchParams.get('type') || '',
         sort: searchParams.get('sort') || '',
-        page_size: normalizePageSize(searchParams.get('ps')),
+        source: searchParams.get('src') || 'europepmc',
       };
-      doSearch(q, filters, '*', { resetHistory: true });
+      doSearch(q, filters, 1);
     }
   }, []);
 
   const doSearch = async (
     query: string,
     filters: SearchFilters,
-    cursorMark: string = '*',
-    options?: { resetHistory?: boolean; historyOverride?: string[] },
+    page: number = 1,
   ) => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const data = await nerApi.search(query, filters, cursorMark);
+      const data = await nerApi.search(query, filters, page, filters.source || 'europepmc');
       if ('error' in data && data.error) {
         throw new Error(data.error);
       }
 
       setResults(data.results || []);
       setPagination(data.pagination || null);
-      setCurrentCursor(cursorMark);
-      if (options?.historyOverride) {
-        setCursorHistory(options.historyOverride);
-      } else if (options?.resetHistory || cursorMark === '*') {
-        setCursorHistory(['*']);
-      } else {
-        setCursorHistory(prev => prev[prev.length - 1] === cursorMark ? prev : [...prev, cursorMark]);
-      }
+      setCurrentPage(page);
       setLastQuery(query);
       setLastFilters(filters);
 
@@ -76,7 +59,7 @@ const NerPage: React.FC = () => {
       if (filters.has_full_text) params.set('ft', '1');
       if (filters.article_type) params.set('type', filters.article_type);
       if (filters.sort) params.set('sort', filters.sort);
-      if (filters.page_size !== 25) params.set('ps', String(filters.page_size));
+      if (filters.source && filters.source !== 'europepmc') params.set('src', filters.source);
       navigate(`/?${params.toString()}`, { replace: true });
     } catch (err: any) {
       console.error('Search failed:', err);
@@ -132,22 +115,20 @@ const NerPage: React.FC = () => {
       return;
     }
 
-    doSearch(query, filters, '*', { resetHistory: true });
+    doSearch(query, filters, 1);
   };
 
   const handleNextPage = () => {
-    if (lastQuery && lastFilters && pagination?.nextCursorMark) {
+    if (lastQuery && lastFilters && pagination?.hasMore) {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      doSearch(lastQuery, lastFilters, pagination.nextCursorMark);
+      doSearch(lastQuery, lastFilters, currentPage + 1);
     }
   };
 
   const handlePrevPage = () => {
-    if (lastQuery && lastFilters && currentCursor !== '*' && cursorHistory.length > 1) {
+    if (lastQuery && lastFilters && currentPage > 1) {
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      const nextHistory = cursorHistory.slice(0, -1);
-      const prevCursor = nextHistory[nextHistory.length - 1] || '*';
-      doSearch(lastQuery, lastFilters, prevCursor, { historyOverride: nextHistory });
+      doSearch(lastQuery, lastFilters, currentPage - 1);
     }
   };
 
@@ -162,7 +143,7 @@ const NerPage: React.FC = () => {
           has_full_text: searchParams.get('ft') === '1',
           article_type: searchParams.get('type') || '',
           sort: searchParams.get('sort') || '',
-          page_size: normalizePageSize(searchParams.get('ps')),
+          source: searchParams.get('src') || 'europepmc',
         }}
       />
 
@@ -207,14 +188,19 @@ const NerPage: React.FC = () => {
           <>
             <div className="space-y-4 max-w-4xl mx-auto">
               {results.map((result) => (
-                <div
-                  key={result.id}
-                  onClick={() => {
-                    const paperId = result.doi || result.pmcid || result.pmid;
-                    if (paperId) {
-                      navigate(`/paper/${encodeURIComponent(paperId)}`);
-                    }
-                  }}
+                  <div
+                    key={result.id}
+                    onClick={() => {
+                      const paperId = result.doi || result.pmcid || result.pmid;
+                      if (paperId) {
+                        // Always pass source in URL - convert to lowercase
+                        const src = (result.source || 'Europe PMC').toLowerCase();
+                        const params = new URLSearchParams();
+                        params.set('src', src);
+                        console.log('[NerPage] Clicked result, setting src:', src, 'paperId:', paperId);
+                        navigate(`/paper/${encodeURIComponent(paperId)}?${params.toString()}`);
+                      }
+                    }}
                   className="saas-card p-6 hover:shadow-md transition-shadow cursor-pointer"
                 >
                   <h3 
@@ -264,7 +250,7 @@ const NerPage: React.FC = () => {
             {pagination && pagination.hasMore && (
               <div className="flex items-center justify-center gap-3 pt-8 pb-4">
                 <div className="flex items-center gap-2">
-                  {cursorHistory.length > 1 && (
+                  {currentPage > 1 && (
                     <button
                       onClick={handlePrevPage}
                       disabled={isLoading}

@@ -10,6 +10,7 @@ Handles all network communication with Europe PMC:
 import asyncio
 import re
 import logging
+from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, List
 from xml.etree import ElementTree
 
@@ -128,8 +129,12 @@ class EuropePMCClient:
         if val.isdigit():
             return "pmid", val
 
-        # 9. Fallback: treat as DOI
-        return "doi", val
+        # 9. Bare DOI (must be actual DOI format: 10.xxxx/xxxx)
+        if val.startswith("10.") and "/" in val:
+            return "doi", val
+
+        # 10. Not an identifier - return empty
+        return None, val
 
     @classmethod
     async def fetch_full_text(cls, pmcid: str) -> Optional[str]:
@@ -293,22 +298,42 @@ class EuropePMCClient:
                 if authors_str
                 else []
             )
-            # Publication date from journalInfo
-            pub_date = ""
-            journal_info = result.get("journalInfo", {})
-            if journal_info:
+            # Publication date — use Europe PMC's firstPublicationDate when available
+            raw_date = result.get("firstPublicationDate") or result.get("publicationDate", "")
+            if raw_date:
+                try:
+                    # Europe PMC may return YYYY-MM-DD, YYYY-MM, or YYYY
+                    parts = raw_date.split("-")
+                    if len(parts) == 3:
+                        dt = datetime.strptime(raw_date, "%Y-%m-%d")
+                        pub_date = dt.strftime("%d %B %Y")
+                    elif len(parts) == 2:
+                        dt = datetime.strptime(raw_date, "%Y-%m")
+                        pub_date = dt.strftime("%d %B %Y")
+                    else:
+                        pub_date = raw_date  # Already just year or unformatted
+                except Exception:
+                    pub_date = raw_date
+            if not pub_date:
+                # Fallback: construct from journalInfo (defaults to day=01)
+                journal_info = result.get("journalInfo", {})
                 month = journal_info.get("monthOfPublication")
                 year = journal_info.get("yearOfPublication")
                 if month and year:
-                    from datetime import datetime
-
                     try:
-                        dt = datetime.strptime(f"{year}-{month:02d}", "%Y-%m")
-                        pub_date = dt.strftime("%d %B %Y")
-                    except (ValueError, TypeError):
+                        if isinstance(month, int):
+                            month_num = month
+                        else:
+                            month_num = datetime.strptime(month[:3], "%b").month
+                        pub_date = datetime.strptime(f"{year}-{month_num:02d}", "%Y-%m").strftime("%d %B %Y")
+                    except Exception:
                         pub_date = str(year)
                 elif year:
                     pub_date = str(year)
+                else:
+                    pub_year = result.get("pubYear")
+                    if pub_year:
+                        pub_date = str(pub_year)
 
             # If PMCID exists, try to get full text XML (regardless of OA flag)
             if pmcid:
@@ -347,7 +372,24 @@ class EuropePMCClient:
                 )
                 return abstract, "abstract"
 
-            logger.warning(f"Empty content for {id_type.upper()}: {id_value}")
+            logger.debug(f"Empty content for {id_type.upper()}: {id_value}")
+            # Cache metadata even with no abstract/full text, including text=None and mode="empty"
+            # so future fetch_paper_data calls can return gracefully with metadata
+            try:
+                pmc_cache.set(
+                    id_value,
+                    {
+                        "text": None,
+                        "mode": "empty",
+                        "title": title,
+                        "journal": journal,
+                        "authors": authors,
+                        "doi": doi,
+                        "date": pub_date,
+                    },
+                )
+            except Exception:
+                pass  # Don't fail if cache set fails
             return None, "empty"
 
         except Exception as e:
@@ -477,6 +519,10 @@ class EuropePMCClient:
                         journal = journal_info.get("journal", {}).get("title", "")
                 if not journal:
                     journal = "Unknown journal"
+                
+                # Check for full text availability
+                has_full_text = r.get("hasFullText") == "Y" or r.get("isOpenAccess") == "Y"
+                
                 formatted_results.append(
                     {
                         "id": r.get("id"),
@@ -490,7 +536,11 @@ class EuropePMCClient:
                         "citationCount": r.get("citedByCount", 0),
                         "isOpenAccess": r.get("isOpenAccess") == "Y",
                         "hasTextMinedTerms": r.get("hasTextMinedTerms") == "Y",
+                        "hasFullText": has_full_text,
+                        "hasPdfUrl": has_full_text,  # Europe PMC OA means likely PDF
+                        "pdfUrl": None,  # PDF URL resolved on paper fetch
                         "abstract": r.get("abstractText", ""),
+                        "source": "Europe PMC",
                     }
                 )
             return {

@@ -1,7 +1,7 @@
-"""Search Router — Europe PMC literature search."""
+"""Search Router — merged scholarly literature search."""
 
 from fastapi import APIRouter, Form, HTTPException
-from backend.services.europe_pmc import EuropePMCService
+from backend.services.search_service import SearchService
 import logging
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -15,23 +15,34 @@ async def search_papers_json(
     has_full_text: bool = Form(False),
     article_type: str = Form(""),
     sort: str = Form(""),
-    page_size: int = Form(25),
     page: int = Form(1),
     cursor_mark: str = Form("*"),
+    source: str = Form("europepmc"),  # "europepmc" or "openalex" (default: europepmc)
 ):
-    """JSON endpoint for searching literature."""
+    """JSON endpoint for searching literature.
+    
+    source param: 
+    - "europepmc" = Europe PMC only (default)
+    - "openalex" = OpenAlex only
+    """
+    # Normalize source, default to europepmc
+    source = source.lower() if source else "europepmc"
+    if source not in ("europepmc", "openalex"):
+        source = "europepmc"
+    
     filters = {
         "open_access": open_access,
         "has_full_text": has_full_text,
         "article_type": article_type,
     }
     try:
-        return await EuropePMCService.search_literature(
+        return await SearchService.search_literature(
             query=query,
             filters=filters,
-            max_results=max(10, min(page_size, 100)),
+            page_size=25,  # Fixed at 25
+            page=max(1, page),
             sort=sort,
-            cursor_mark=cursor_mark,
+            source=source,
         )
     except Exception as e:
         logger.error(f"Search failed: {e}")

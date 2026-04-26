@@ -137,13 +137,15 @@ class EuropePMCService:
                 "authors": cached_render.get("authors", []),
                 "doi": cached_render.get("doi", ""),
                 "date": cached_render.get("date", ""),
+                "fallback_source": "Europe PMC",  # Always set when cached
+                "fallback_url": f"https://europepmc.org/article/{id_value}",
             }
 
         # Proceed with normal processing if no cached rendered HTML is available
         id_type, id_value = cls.parse_identifier(doi)
         text, mode = await cls.fetch_paper_data(doi)
 
-        # Get cached metadata from paper data cache
+        # Read cached metadata (may have been populated by fetch_paper_data)
         cached_paper = pmc_cache.get(id_value) or {}
         paper_title_from_cache = cached_paper.get("title", "")
         paper_journal_from_cache = cached_paper.get("journal", "")
@@ -156,14 +158,15 @@ class EuropePMCService:
                 "sections": [],
                 "html": "",
                 "mode": mode,
-                "title": "",
+                "title": paper_title_from_cache,
                 "references": {},
-                "pmcid": "",
+                "pmcid": id_value if id_type == "pmcid" else "",
                 "toc": [],
-                "journal": "",
-                "authors": [],
+                "journal": paper_journal_from_cache,
+                "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "fallback_source": "",  # No source available
             }
 
         # If we have a PMCID, we need it for figure image URLs
@@ -200,6 +203,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "fallback_source": "Europe PMC",  # Has abstract
             }
 
         # Parse XML for sections, title, and references
@@ -248,6 +252,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "fallback_source": "Europe PMC",  # Has full text
             }
 
         # Sanitize all section contents before returning
@@ -290,4 +295,5 @@ class EuropePMCService:
             "authors": paper_authors_from_cache,
             "doi": paper_doi_from_cache,
             "date": paper_date_from_cache,
+            "fallback_source": "Europe PMC",  # Has full text
         }
