@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Header from './layout/Header';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import NerPage from './features/search/NerPage';
+import MyPapersPage from './features/papers/MyPapersPage';
 import RagPage from './features/chat/RagPage';
 import PaperPage from './features/reader/PaperPage';
 
@@ -16,6 +17,7 @@ function App() {
             <ErrorBoundary>
               <Routes>
                 <Route path="/" element={<NerPage />} />
+                <Route path="/mypapers" element={<MyPapersPage />} />
                 <Route path="/chat" element={<RagPage />} />
                 <Route path="/paper/:doi" element={<PaperPage />} />
               </Routes>

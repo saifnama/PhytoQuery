@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MagnifyingGlass, Chats, FlowerTulip } from '@phosphor-icons/react';
+import { MagnifyingGlass, Chats, Folder, FlowerTulip } from '@phosphor-icons/react';
 
 interface HeaderProps {
   isLoading?: boolean;
@@ -12,6 +12,7 @@ const Header: React.FC<HeaderProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
   const isSearch = location.pathname === '/';
+  const isMyPapers = location.pathname === '/mypapers';
   const isChat = location.pathname === '/chat';
 
   return (
@@ -40,6 +41,17 @@ const Header: React.FC<HeaderProps> = ({
           >
             <MagnifyingGlass size={18} weight="bold" />
             <span>Search</span>
+          </button>
+          <button
+            onClick={() => navigate('/mypapers')}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              isMyPapers
+                ? 'bg-white text-blue-600 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Folder size={18} weight="bold" />
+            <span>My Papers</span>
           </button>
           <button
             onClick={() => navigate('/chat')}
