@@ -12,10 +12,10 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 - PDF download directly from paper page
 
 ### Search
-- Search Europe PMC by keywords, DOI, PMCID, or PMID
+- Search **Europe PMC** or **OpenAlex** (select source in UI)
 - Filter by Open Access, Full Text, Article Type
 - Sort by Relevance, Citations, or Date
-- Page size: 10/25/50/100 results per page
+- Page size: fixed at 25 results
 
 ### Chat / RAG
 - Upload PDFs and query with AI
@@ -32,7 +32,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 - Export to CSV
 
 ### Source Fallbacks
-- DOI → Europe PMC → OpenAlex → Semantic Scholar
+- DOI → Europe PMC (full text) → OpenAlex (abstract + direct PDF)
 - PMID → Europe PMC → PubMed
 - PMCID → Europe PMC → NCBI PMC
 
@@ -47,7 +47,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | PDF | pymupdf (fitz), BeautifulSoup |
 | Graph | vis-network |
 | Sanitization | nh3 (server), DOMPurify (client) |
-| Paper Source | Europe PMC API |
+| Paper Sources | Europe PMC API, OpenAlex API |
 | LLM | OpenRouter / Ollama |
 
 ## Project Structure
@@ -68,6 +68,7 @@ PhytoQuery/
 │   │   └── http_client.py # HTTP abstraction
 │   ├── services/       # Business logic
 │   │   ├── europe_pmc/ # Paper fetching/parsing
+│   │   ├── openalex/  # OpenAlex API integration
 │   │   ├── ner_engine.py # NER pipeline
 │   │   ├── rag_engine.py # RAG + chat
 │   │   └── doi_resolver.py # DOI fallback sources
@@ -111,16 +112,15 @@ pip install -r backend/requirements.txt
 # Download spaCy model (for dictionary matchers)
 python -m spacy download en_core_web_sm
 
-# Run backend (two options)
+# Run backend
 
-# Option 1: Direct Python
-python -m backend.app
+# Option 1: Via uvicorn (recommended)
+# From PhytoQuery directory:
+cd C:\Users\saif\saifnama_lab\PhytoQuery
+python -m uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
 
-# Option 2: Via uvicorn (network accessible)
-# Bind to all interfaces for access from other devices on your WiFi
-uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
-
-# Or with direct Python  
+# Option 2: Direct Python
+cd C:\Users\saif\saifnama_lab\PhytoQuery
 python -m backend.app --host 0.0.0.0 --port 8000
 ```
 
@@ -175,8 +175,8 @@ Gazetteer CSV files in `backend/gazetteer/data/`:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/paper/json` | POST | Fetch paper by DOI/PMCID/PMID |
-| `/search/json` | POST | Search Europe PMC |
+| `/paper/json` | POST | Fetch paper by DOI/PMCID/PMID (source: europepmc or openalex) |
+| `/search/json` | POST | Search Europe PMC or OpenAlex |
 | `/api/chat/query/json` | POST | RAG chat |
 | `/api/chat/upload/json` | POST | Upload PDF to RAG |
 | `/ner/doi/json` | POST | Standalone NER |

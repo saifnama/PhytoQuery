@@ -275,9 +275,7 @@ class EuropePMCClient:
 
             results = data.get("resultList", {}).get("result", [])
             if not results:
-                logger.warning(
-                    f"No results found in Europe PMC for {id_type.upper()}: {id_value}"
-                )
+                # Not an error - paper may not be in Europe PMC (fallback to OpenAlex will handle it)
                 return None, "error"
 
             result = results[0]

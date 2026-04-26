@@ -197,7 +197,6 @@ const NerPage: React.FC = () => {
                         const src = (result.source || 'Europe PMC').toLowerCase();
                         const params = new URLSearchParams();
                         params.set('src', src);
-                        console.log('[NerPage] Clicked result, setting src:', src, 'paperId:', paperId);
                         navigate(`/paper/${encodeURIComponent(paperId)}?${params.toString()}`);
                       }
                     }}

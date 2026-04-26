@@ -121,7 +121,6 @@ const PaperPage: React.FC = () => {
       setError(null);
 
       try {
-        console.log('[PaperPage] Calling analyzePaper with source:', searchSource);
         const data = await nerApi.analyzePaper(doi, false, searchSource);
         
         if (!data || 'error' in data) {
@@ -221,7 +220,6 @@ const PaperPage: React.FC = () => {
   }, [doi, isExtracted, isExtracting]);
 
   const pdfIdentifier = getPaperIdentifier()?.value || paperData?.pmcid || paperData?.doi || doi;
-  console.log('[PaperPage] pdfIdentifier:', pdfIdentifier, 'pdfUrl:', paperData?.pdfUrl, 'mode:', paperData?.mode);
   // Allow PDF if: full_text mode, OR OpenAlex has direct PDF URL
   const canUsePdfActions = (paperData?.mode === 'full_text' || Boolean(paperData?.pdfUrl)) && Boolean(pdfIdentifier);
 

@@ -77,7 +77,6 @@ async def analyze_paper_json(
     """
     # Normalize source: "Europe PMC" → "europepmc", "OpenAlex" → "openalex"
     source = source.lower().strip() if source else ""
-    print(f">>> paper.py: source='{source}', doi='{doi}'")
     
     try:
         id_type, clean_id = EuropePMCService.parse_identifier(doi)

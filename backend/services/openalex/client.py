@@ -67,7 +67,6 @@ class OpenAlexClient:
             # Get PDF URL from best_oa_location
             best_oa = data.get("best_oa_location") or {}
             pdf_url = best_oa.get("pdf_url") or ""
-            logger.info(f"[OpenAlex] Fetched DOI {doi}: title={title[:50]}, pdf_url={pdf_url[:50] if pdf_url else 'None'}")
             
             return {
                 "doi": doi,
