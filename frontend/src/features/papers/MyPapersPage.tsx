@@ -80,10 +80,13 @@ const MyPapersPage = () => {
     setExpandedGroups(all);
   };
 
-  // Group entities with counts
+  // Group entities with counts - sort alphabetically like search page
   const groupedEntities = useMemo(() => {
     if (!selectedPaper?.entity_counts) return [];
-    return Object.entries(selectedPaper.entity_counts).map(([label, items]) => ({
+    const entries = Object.entries(selectedPaper.entity_counts);
+    // Sort alphabetically by label ( CHEMICAL, SPECIES, etc.)
+    entries.sort(([a], [b]) => a.localeCompare(b));
+    return entries.map(([label, items]) => ({
       label,
       items: items.map(item => ({ text: item.text, count: item.count })),
       totalCount: items.reduce((sum, item) => sum + item.count, 0),

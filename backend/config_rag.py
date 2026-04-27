@@ -10,7 +10,7 @@ import os
 # OPENROUTER (Primary for RAG)
 # =============================================================================
 
-RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "").strip()
+RAG_OPENROUTER_API_KEY = os.getenv("RAG_OPENROUTER_API_KEY", "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").strip()
 RAG_OPENROUTER_MODEL = os.getenv(
     "RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
 )
@@ -28,7 +28,7 @@ RAG_OLLAMA_MODEL = os.getenv("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
 RAG_TEMPERATURE = float(os.getenv("RAG_TEMPERATURE", "0.1"))
 RAG_CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "8192"))
-RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.85"))
 

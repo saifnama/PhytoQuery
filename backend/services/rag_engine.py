@@ -1,4 +1,6 @@
 import os
+# Suppress transformers tokenizer sequence length warnings globally
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 import re
 import gc
 import time
@@ -19,6 +21,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
 from sentence_transformers import CrossEncoder
 from langchain_core.documents import Document
+
+# --- Docling Advanced Imports ---
+try:
+    from docling.chunking import HybridChunker
+    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+except ImportError:
+    HybridChunker = None
+    HuggingFaceTokenizer = None
 
 # --- Import from RAG config ---
 from backend.config_rag import (
@@ -217,6 +227,8 @@ class RAGService:
         )
         # Cache for per-user vectorstores
         self._vectorstore_cache: Dict[str, Chroma] = {}
+        # Cache for Docling converter to avoid reloading models
+        self._docling_converter = None
 
     def _get_user_collection(self, user_id: str) -> Chroma:
         """Get or create a ChromaDB collection for a specific user."""
@@ -280,14 +292,9 @@ class RAGService:
             parser_type: "pymupdf" for fast extraction, "docling" for detailed
             user_id: Unique identifier for the user (isolates their documents)
         """
-        # Store parser type for use in _process_pdf
-        self._current_parser = (
-            parser_type if parser_type in ("pymupdf", "docling") else "docling"
-        )
-
         all_docs = []
         for path in pdf_paths:
-            docs = self._process_pdf(path, user_id=user_id)
+            docs = self._process_pdf(path, user_id=user_id, parser_type=parser_type)
             all_docs.extend(docs)
 
         if all_docs:
@@ -312,7 +319,7 @@ class RAGService:
 
     def _extract_pdf_metadata(self, pdf_path: str) -> Dict[str, str]:
         """Extract DOI, authors, and journal from PDF metadata and first pages."""
-        metadata = {"authors": "", "doi": "", "journal": ""}
+        metadata = {"authors": "", "doi": "", "journal": "", "title": ""}
         try:
             import fitz
 
@@ -322,6 +329,8 @@ class RAGService:
             pdf_info = doc.metadata or {}
             if pdf_info.get("author"):
                 metadata["authors"] = pdf_info["author"]
+            if pdf_info.get("title"):
+                metadata["title"] = pdf_info["title"].strip()
 
             # Extract text from first 2 pages for regex-based extraction
             first_pages_text = ""
@@ -349,17 +358,22 @@ class RAGService:
             logger.warning(f"Metadata extraction failed for {pdf_path}: {e}")
         return metadata
 
-    def _process_pdf(self, pdf_path: str, user_id: str = "default") -> List[Document]:
+    def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "docling") -> List[Document]:
         """PDF processing pipeline (Preserved from notebook)"""
         source = os.path.basename(pdf_path)
-
-        # Get parser type from instance or default to docling
-        parser_type = getattr(self, "_current_parser", "docling")
 
         # 0. Extract metadata (DOI, authors, journal)
         pdf_metadata = self._extract_pdf_metadata(pdf_path)
 
         # 1. Extract using selected parser
+        if parser_type == "docling":
+            try:
+                return self._process_with_docling_skill(pdf_path, source, pdf_metadata)
+            except Exception as e:
+                logger.error(f"Docling skill processing failed, falling back: {e}")
+                # Fall through to standard extraction if skill fails
+        
+        # Fallback/Standard Pipeline (PyMuPDF or Docling fallback)
         if parser_type == "pymupdf":
             full_text, tables = self._extract_with_pymupdf(pdf_path)
         else:
@@ -371,7 +385,7 @@ class RAGService:
         # Store full text for summarization later
         self._last_extracted_text = full_text
 
-        # 2. Section detection & Chunking
+        # 2. Section detection & Chunking (Regex-based fallback)
         sections = self._detect_sections(full_text)
         chunks = self._chunk_by_sections(sections, tables)
 
@@ -390,6 +404,7 @@ class RAGService:
             meta["indexed_at"] = indexed_at
             meta["total_chunks"] = len(unique_chunks)
             # Add document-level metadata to every chunk
+            meta["doc_title"] = pdf_metadata.get("title", "")
             meta["doc_authors"] = pdf_metadata.get("authors", "")
             meta["doc_doi"] = pdf_metadata.get("doi", "")
             meta["doc_journal"] = pdf_metadata.get("journal", "")
@@ -417,11 +432,11 @@ class RAGService:
             search_kwargs["filter"] = {"source": {"$in": filter_files}}
 
         try:
-            vector_results = vectorstore.similarity_search_with_relevance_scores(
+            vector_results = vectorstore.similarity_search_with_score(
                 question, **search_kwargs
             )
         except Exception:
-            # Fallback to regular search if relevance scores not supported
+            # Fallback to regular search if scores not supported
             docs = vectorstore.similarity_search(question, **search_kwargs)
             vector_results = [(doc, 0.5) for doc in docs]
 
@@ -561,11 +576,25 @@ class RAGService:
             src = d.metadata.get("source", "")
             sec = d.metadata.get("section_title", "")
 
+            title = d.metadata.get("doc_title", "")
+            authors = d.metadata.get("doc_authors", "")
+            
+            # Build a rich header for the LLM context
+            header_elements = []
+            if title:
+                header_elements.append(f"Title: {title}")
+            if authors:
+                header_elements.append(f"Authors: {authors}")
+            header_elements.append(f"File: {src}")
+            if sec:
+                header_elements.append(f"Section: {sec}")
+                
+            header_str = " | ".join(header_elements)
+
             if ctype == "table":
-                context_parts.append(f"[TABLE from {src}]:\n{d.page_content}")
+                context_parts.append(f"[TABLE | {header_str}]:\n{d.page_content}")
             else:
-                header = f"[{src}" + (f" - {sec}" if sec else "") + "]:"
-                context_parts.append(f"{header}\n{d.page_content}")
+                context_parts.append(f"[{header_str}]:\n{d.page_content}")
 
             parser_type = d.metadata.get("parser_type", "docling")
             sources.append(
@@ -760,37 +789,145 @@ Summary:"""
 
     # --- Helper Methods (Logic preserved from notebook) ---
 
+    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict) -> List[Document]:
+        """Advanced Docling processing using HybridChunker and Semantic Analysis."""
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.base_models import InputFormat
+
+        if self._docling_converter is None:
+            logger.info("Initializing Docling DocumentConverter for Agent Skill...")
+            pipeline_options = PdfPipelineOptions()
+            pipeline_options.do_table_structure = True
+            pipeline_options.do_ocr = False
+            pipeline_options.do_code_enrichment = False
+            pipeline_options.do_formula_enrichment = False
+            
+            self._docling_converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+
+        abs_path = os.path.abspath(pdf_path)
+        result = self._docling_converter.convert(abs_path)
+        
+        if not result or not result.document:
+            raise ValueError("Docling returned empty result")
+
+        # Update last extracted text for summarization
+        self._last_extracted_text = result.document.export_to_markdown()
+
+        # Initialize HybridChunker (respects headers and structure)
+        if HybridChunker and HuggingFaceTokenizer:
+            logger.info("Using Docling HybridChunker for semantic splitting...")
+            tokenizer = HuggingFaceTokenizer.from_pretrained(
+                model_name=config.embedding_model,
+                max_tokens=min(config.chunk_size, 384),
+            )
+            chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
+            doc_chunks = list(chunker.chunk(result.document))
+            
+            documents = []
+            file_ext = os.path.splitext(source)[1].lower() or ".pdf"
+            indexed_at = datetime.now(timezone.utc).isoformat()
+            
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            safety_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=config.chunk_size,
+                chunk_overlap=config.chunk_overlap,
+                separators=["\n\n", "\n", ". ", " ", ""]
+            )
+            
+            for i, chunk in enumerate(doc_chunks):
+                # Contextualize adds breadcrumbs (e.g., section headers) to the text
+                chunk_text = chunker.contextualize(chunk)
+                
+                meta = {
+                    "source": source,
+                    "chunk_id": f"{source}_{i}",
+                    "parser_type": "docling_skill",
+                    "file_type": file_ext,
+                    "indexed_at": indexed_at,
+                    "total_chunks": len(doc_chunks),
+                    "doc_title": pdf_metadata.get("title", ""),
+                    "doc_authors": pdf_metadata.get("authors", ""),
+                    "doc_doi": pdf_metadata.get("doi", ""),
+                    "doc_journal": pdf_metadata.get("journal", ""),
+                    "page": getattr(chunk.meta.origin, "page_no", 0),
+                    "headings": chunk.meta.headings,
+                }
+                
+                # SAFETY CHECK: HybridChunker can sometimes produce large atomic chunks (like tables).
+                # Forcefully split them if they are dangerously large (e.g. > 1000 characters ~ 250 tokens).
+                if len(chunk_text) > config.chunk_size * 2:
+                    sub_chunks = safety_splitter.split_text(chunk_text)
+                    for j, sub in enumerate(sub_chunks):
+                        sub_meta = meta.copy()
+                        sub_meta["chunk_id"] = f"{source}_{i}_part{j}"
+                        documents.append(Document(page_content=sub, metadata=sub_meta))
+                else:
+                    documents.append(Document(page_content=chunk_text, metadata=meta))
+            
+            logger.info(f"Docling skill created {len(documents)} chunks for {source}")
+            return documents
+        else:
+            logger.warning("Docling chunking components missing, falling back to basic extraction")
+            # This will fall through to the manual extraction in _process_pdf
+            raise ImportError("Docling chunking components missing")
+
     def _extract_with_docling(self, pdf_path):
+        logger.info(f"Starting detailed extraction with Docling for: {pdf_path}")
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption
             from docling.datamodel.pipeline_options import PdfPipelineOptions
             from docling.datamodel.base_models import InputFormat
 
-            pipeline_options = PdfPipelineOptions()
-            pipeline_options.do_table_structure = True
-            pipeline_options.do_ocr = False
+            if self._docling_converter is None:
+                logger.info("Initializing Docling DocumentConverter (this may take a moment)...")
+                pipeline_options = PdfPipelineOptions()
+                pipeline_options.do_table_structure = True
+                pipeline_options.do_ocr = False
+                
+                # Disable heavy enrichment features for now to prevent background VLM model downloads
+                pipeline_options.do_code_enrichment = False
+                pipeline_options.do_formula_enrichment = False
+                
+                self._docling_converter = DocumentConverter(
+                    format_options={
+                        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                    }
+                )
+            
+            # Use absolute path to avoid any confusion
+            abs_path = os.path.abspath(pdf_path)
+            result = self._docling_converter.convert(abs_path)
+            
+            if not result or not result.document:
+                logger.error(f"Docling returned empty result for {pdf_path}")
+                return None, []
 
-            converter = DocumentConverter(
-                format_options={
-                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-                }
-            )
-            result = converter.convert(pdf_path)
             md_text = result.document.export_to_markdown()
 
             docling_tables = []
+            # In Docling v2, tables are accessible via result.document.tables
             if hasattr(result.document, "tables"):
                 for table in result.document.tables:
                     try:
-                        table_md = table.export_to_markdown(doc=result.document)
+                        # Ensure we are calling the correct export method
+                        table_md = table.export_to_markdown()
                         pnum = 0
-                        if table.prov and len(table.prov) > 0:
-                            pnum = getattr(table.prov[0], "page_no", 0)
+                        if hasattr(table, "prov") and table.prov and len(table.prov) > 0:
+                            pnum = getattr(table.prov[0], "page_no", 1) # Default to 1 if found
                         docling_tables.append({"content": table_md, "page": pnum})
-                    except:
+                    except Exception as te:
+                        logger.warning(f"Failed to export table in {pdf_path}: {te}")
                         continue
+            
+            logger.info(f"Docling extraction successful for {pdf_path} ({len(md_text)} chars, {len(docling_tables)} tables)")
             return md_text, docling_tables
-        except:
+        except Exception as e:
+            logger.error(f"Docling extraction failed for {pdf_path}: {str(e)}", exc_info=True)
             return None, []
 
     def _extract_with_pymupdf(self, pdf_path):
@@ -874,15 +1011,19 @@ Summary:"""
         for table in tables:
             content = table.get("content", "")
             if content.strip():
-                chunks.append(
-                    {
-                        "text": content,
-                        "metadata": {
-                            "content_type": "table",
-                            "page": table.get("page", 0),
-                        },
-                    }
-                )
+                # Split large tables so they don't crash the embedding model
+                table_chunks = fallback_splitter.split_text(content)
+                for i, tc in enumerate(table_chunks):
+                    chunks.append(
+                        {
+                            "text": tc,
+                            "metadata": {
+                                "content_type": "table",
+                                "page": table.get("page", 0),
+                                "chunk_part": i + 1
+                            },
+                        }
+                    )
         for section in sections:
             text = section.get("text", "")
             if not text.strip():
@@ -893,27 +1034,38 @@ Summary:"""
                 if len(text) >= config.min_chunk_size:
                     chunks.append({"text": text, "metadata": meta})
             else:
+                # Use semantic splitter if available, otherwise fallback
                 if semantic_splitter:
+                    # Semantic chunker expects a list of documents
                     try:
-                        # Semantic chunking
-                        split_docs = semantic_splitter.create_documents([text])
-                        for i, doc in enumerate(split_docs):
-                            if len(doc.page_content) >= config.min_chunk_size:
-                                m = meta.copy()
-                                m["chunk_idx"] = i
-                                chunks.append({"text": doc.page_content, "metadata": m})
-                        continue
+                        doc = Document(page_content=text, metadata=meta)
+                        section_chunks = semantic_splitter.split_documents([doc])
+                        for chunk in section_chunks:
+                            if len(chunk.page_content) >= config.min_chunk_size:
+                                # SAFETY CHECK: If SemanticChunker created a chunk that is still too large,
+                                # forcefully split it with the fallback splitter to prevent embedding errors.
+                                if len(chunk.page_content) > config.chunk_size * 2:
+                                    sub_chunks = fallback_splitter.split_text(chunk.page_content)
+                                    for sub in sub_chunks:
+                                        if len(sub) >= config.min_chunk_size:
+                                            chunks.append({"text": sub, "metadata": chunk.metadata.copy()})
+                                else:
+                                    chunks.append(
+                                        {"text": chunk.page_content, "metadata": chunk.metadata}
+                                    )
                     except Exception as e:
                         logger.warning(
-                            f"Semantic chunking failed for section, falling back: {e}"
+                            f"Semantic chunking failed for section, using fallback: {e}"
                         )
-
-                # Fallback to recursive character splitting
-                for i, sub in enumerate(fallback_splitter.split_text(text)):
-                    if len(sub) >= config.min_chunk_size:
-                        m = meta.copy()
-                        m["chunk_idx"] = i
-                        chunks.append({"text": sub, "metadata": m})
+                        sub_chunks = fallback_splitter.split_text(text)
+                        for sub in sub_chunks:
+                            if len(sub) >= config.min_chunk_size:
+                                chunks.append({"text": sub, "metadata": meta.copy()})
+                else:
+                    sub_chunks = fallback_splitter.split_text(text)
+                    for sub in sub_chunks:
+                        if len(sub) >= config.min_chunk_size:
+                            chunks.append({"text": sub, "metadata": meta.copy()})
         return chunks
 
     def _deduplicate_chunks(self, chunks):
