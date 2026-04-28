@@ -1609,7 +1609,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                       >
                         <div 
                           className="w-[3px] h-8 rounded-sm shrink-0" 
-                          style={{ backgroundColor: accentColor, opacity: isHighlightEnabled ? (group.totalCount === 0 ? 0.3 : 1) : 0.15 }}
+                          style={{ backgroundColor: accentColor, opacity: isHighlightEnabled ? (group.termCount === 0 ? 0.3 : 1) : 0.15 }}
                         />
                         <div className="flex-1 flex flex-col gap-[2px] min-w-0">
                           <span 
@@ -1631,9 +1631,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span 
                             className="text-[10px] font-mono text-right min-w-[1.5rem]"
-                            style={{ color: group.totalCount === 0 ? '#cbd5e1' : accentColor, opacity: isHighlightEnabled ? 1 : 0.2 }}
+                            style={{ color: group.termCount === 0 ? '#cbd5e1' : accentColor, opacity: isHighlightEnabled ? 1 : 0.2 }}
                           >
-                            {group.totalCount || '—'}
+                            {group.termCount || '—'}
                           </span>
                           {group.termCount > 0 && (
                             <button 

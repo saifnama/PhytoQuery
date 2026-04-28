@@ -13,6 +13,7 @@ from backend.services.ner_engine import ner_service, NERService
 from backend.core.highlighter import Highlighter
 from backend.core.caching import ner_cache
 from backend.core.http_client import HttpClientManager
+from bs4 import BeautifulSoup
 import logging
 
 router = APIRouter(prefix="/paper", tags=["paper"])
@@ -51,6 +52,22 @@ def _extract_filename_from_disposition(content_disposition: str | None) -> str |
     if match:
         return match.group(1).strip()
     return None
+
+
+def _html_to_plain_text(html_content: str) -> str:
+    """Strip HTML tags to get plain text for NER processing (matches PDF pipeline).
+    
+    Uses empty separator to preserve hyphenated words across inline tags (e.g. <em>),
+    then normalizes whitespace. This prevents chemicals like 
+    '1,2-dioleoyl-sn-glycero-3-phosphocholine' from being broken by spaces.
+    """
+    if not html_content:
+        return ""
+    soup = BeautifulSoup(html_content, "html.parser")
+    # Use empty separator so inline tags don't insert spaces into hyphenated words
+    text = soup.get_text(separator='')
+    # Normalize whitespace: collapse multiple spaces/newlines to single space
+    return ' '.join(text.split())
 
 
 async def _fetch_identifier_fallback(id_type: str, clean_id: str):
@@ -250,14 +267,24 @@ async def analyze_paper_json(
                 # Europe PMC - has structured sections already
                 # Build a temporary list for NER: prepend title if present (title not added to paper_data["sections"])
                 ner_sections = [{"title": "Title", "content": title}] + sections if title else sections
-                summary, entities = await service.process_sections(ner_sections)
+                # Strip HTML from sections for clean NER input (matches PDF pipeline)
+                plain_text_sections = []
+                for s in ner_sections:
+                    plain_content = _html_to_plain_text(s.get("content", ""))
+                    if plain_content.strip():
+                        plain_text_sections.append({"title": s.get("title", ""), "content": plain_content})
+                summary, entities = await service.process_sections(plain_text_sections)
             elif title or abstract:
                 # OpenAlex/Semantic Scholar - build NER sections list: title + existing sections
                 ner_sections = []
                 if title:
-                    ner_sections.append({"title": "Title", "content": title})
-                # Include existing paper_data sections (abstract or placeholder) by reference
-                ner_sections.extend(paper_data.get("sections", []))
+                    plain_title = _html_to_plain_text(title)
+                    if plain_title.strip():
+                        ner_sections.append({"title": "Title", "content": plain_title})
+                for s in paper_data.get("sections", []):
+                    plain_content = _html_to_plain_text(s.get("content", ""))
+                    if plain_content.strip():
+                        ner_sections.append({"title": s.get("title", ""), "content": plain_content})
                 summary, entities = await service.process_sections(ner_sections)
             else:
                 # No content - skip NER

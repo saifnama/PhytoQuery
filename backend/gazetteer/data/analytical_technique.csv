@@ -1,7 +1,7 @@
 term,synonyms
 gas chromatography,glc
 gas chromatography-mass spectrometry,gcms|gc-ms|gc ms
-gas chromatography-flame ionization detector,gcfid
+gas chromatography-flame ionization detector,gcfid|gc-fid
 gas chromatography-isotope ratio mass spectrometry,gc-irms
 gas chromatography-time of flight mass spectrometry,gc-tof-ms
 high performance liquid chromatography,hplc
@@ -32,7 +32,7 @@ matrix assisted laser desorption ionization time-of-flight mass spectrometry,mal
 direct analysis in real time,dart
 electrospray ionization,esi
 electrospray ionization mass spectrometry,esi-ms
-polyacrylamide gel electrophoresis,page
+polyacrylamide gel electrophoresis,
 sodium dodecyl sulfate polyacrylamide gel electrophoresis,sds-page
 pulsed-field gel electrophoresis,pfge
 agarose gel electrophoresis,gel electrophoresis
@@ -126,3 +126,4 @@ ultraviolet photoelectron spectroscopy,
 vibrational circular dichroism spectroscopy,
 x-ray photoelectron spectroscopy,
 two-dimensional correlation spectroscopy,
+ultra-performance liquid chromatography-mass spectrometry,uplc-ms

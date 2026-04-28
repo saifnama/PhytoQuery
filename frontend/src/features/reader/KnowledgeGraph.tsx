@@ -9,13 +9,27 @@ declare global {
   }
 }
 
-interface KnowledgeGraphProps {
-  entities: Entity[];
-  paperIdentifier?: { type: string; value: string };
-  entityConfig: Record<string, { accentVar: string }>;
+interface PaperIdentifier {
+  type: string;
+  value: string;
 }
 
-export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperIdentifier, entityConfig }) => {
+interface KnowledgeGraphProps {
+  entities: Entity[];
+  paperIdentifier?: PaperIdentifier;
+  paperIdentifiers?: PaperIdentifier[];
+  entityConfig: Record<string, { accentVar: string }>;
+  /** Map of entity key -> array of paper values this entity appears in (for compare mode) */
+  entityPaperMap?: Record<string, string[]>;
+}
+
+export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ 
+  entities, 
+  paperIdentifier, 
+  paperIdentifiers,
+  entityConfig,
+  entityPaperMap
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<any>(null);
   const dataRef = useRef<{ nodes: any; edges: any }>({ nodes: null, edges: null });
@@ -36,28 +50,33 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
   }, []);
 
   useEffect(() => {
-    if (!isVisLoaded || !containerRef.current || entities.length === 0 || !paperIdentifier) return;
+    const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
+    if (!isVisLoaded || !containerRef.current || entities.length === 0 || papers.length === 0) return;
 
     // Build Nodes & Edges
     const nodes = new window.vis.DataSet();
     const edges = new window.vis.DataSet();
 
-    // Central Node (Paper)
-    const centralNodeId = `paper-${paperIdentifier.value}`;
-    nodes.add({
-      id: centralNodeId,
-      label: `DOI\n${paperIdentifier.value}`,
-      shape: 'dot',
-      size: 30,
-      color: {
-        background: '#E1FBF1', 
-        border: '#6EE7B7', // Mint green border to match
-        borderWidth: 3,
-        highlight: { background: '#D1FAE5', border: '#34D399' }
-      },
-      font: { color: '#1e293b', face: 'Inter', size: 14, bold: true, vadjust: -5 },
-      title: `Type: ${paperIdentifier.type.toUpperCase()}\nIdentifier: ${paperIdentifier.value}`,
-      shadow: true,
+    // Central Nodes (Papers)
+    const paperNodeIds: string[] = [];
+    papers.forEach((p, idx) => {
+      const nodeId = `paper-${p.value}`;
+      paperNodeIds.push(nodeId);
+      nodes.add({
+        id: nodeId,
+        label: papers.length === 1 ? `DOI\n${p.value}` : `Paper ${idx + 1}\n${p.value}`,
+        shape: 'dot',
+        size: papers.length === 1 ? 40 : 28,
+        color: {
+          background: '#E1FBF1',
+          border: '#6EE7B7',
+          borderWidth: papers.length === 1 ? 4 : 3,
+          highlight: { background: '#D1FAE5', border: '#34D399' }
+        },
+        font: { color: '#1e293b', face: 'Inter', size: papers.length === 1 ? 16 : 13, bold: true, vadjust: -5 },
+        title: `Type: ${p.type.toUpperCase()}\nIdentifier: ${p.value}`,
+        shadow: true,
+      });
     });
 
     // We only want unique canonical entities to avoid clutter, and we count their occurrences
@@ -65,11 +84,12 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
     entities.forEach(e => {
       // Use text + label as unique key to prevent merging identical terms from different categories
       const key = `${e.label}-${e.text.toLowerCase()}`;
+      const incomingCount = (e as Entity & { count?: number }).count || 1;
       if (!uniqueEntities.has(key)) {
-        uniqueEntities.set(key, { ...e, count: 1 });
+        uniqueEntities.set(key, { ...e, count: incomingCount });
       } else {
         const existing = uniqueEntities.get(key)!;
-        existing.count += 1;
+        existing.count += incomingCount;
       }
     });
 
@@ -111,29 +131,48 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
       
       legendMap.set(ent.label.toUpperCase(), solidColor);
 
+      // Frequency-based sizing: logarithmic scale for dramatic differences
+      const freqSize = Math.max(8, Math.min(34, 8 + Math.log2((ent.count || 1) + 1) * 8));
+      const freqFontSize = Math.max(10, Math.min(16, 10 + Math.log2((ent.count || 1) + 1) * 3));
+
       nodes.add({
         id: key,
         label: ent.text,
         shape: 'dot',
-        size: Math.max(10, Math.min(26, 10 + (ent.count || 1) * 2)), 
+        size: freqSize,
         color: {
           background: bgColor,
-          border: solidColor, 
-          borderWidth: 1.5,
+          border: solidColor,
+          borderWidth: ent.count && ent.count > 5 ? 2 : 1.5,
           highlight: { background: bgColor, border: '#1e293b' },
           hover: { background: bgColor, border: '#1e293b' }
         },
-        font: { color: '#334155', face: 'Inter', size: Math.max(11, Math.min(14, 9 + ent.count)), vadjust: 2 },
+        font: { color: '#334155', face: 'Inter', size: freqFontSize, vadjust: 2 },
         title: `Type: ${ent.label.toUpperCase()}\nEntity: ${ent.text}\nMentions: ${ent.count || 1}`
       });
 
-      // Connect to central node
-      edges.add({
-        from: centralNodeId,
-        to: key,
-        color: { color: '#DBDBDB', highlight: '#969696' },
-        width: 1.5
-      });
+      // Connect to paper node(s)
+      const papersForEntity = entityPaperMap?.[key];
+      if (papersForEntity && papersForEntity.length > 0) {
+        // Compare mode: connect to all papers this entity appears in
+        papersForEntity.forEach(paperValue => {
+          const paperNodeId = `paper-${paperValue}`;
+          edges.add({
+            from: paperNodeId,
+            to: key,
+            color: { color: '#DBDBDB', highlight: '#969696' },
+            width: 1.5
+          });
+        });
+      } else {
+        // Single paper mode
+        edges.add({
+          from: paperNodeIds[0],
+          to: key,
+          color: { color: '#DBDBDB', highlight: '#969696' },
+          width: 1.5
+        });
+      }
     });
 
     setActiveLegend(Array.from(legendMap.entries()).map(([label, color]) => ({ label, color })));
@@ -176,7 +215,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
         networkRef.current = null;
       }
     };
-  }, [isVisLoaded, entities, paperIdentifier, entityConfig]);
+  }, [isVisLoaded, entities, paperIdentifier, paperIdentifiers, entityConfig, entityPaperMap]);
 
   // Handle resize when toggling fullscreen
   useEffect(() => {
@@ -210,11 +249,16 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
       </div>
     `).join('');
     
+    const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
+    const paperLabel = papers.length > 1 
+      ? `${papers.length} Papers` 
+      : (paperIdentifier?.value || 'Document');
+
     const htmlContent = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Knowledge Graph - ${paperIdentifier?.value || 'Export'}</title>
+    <title>Knowledge Graph - ${paperLabel}</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
     <style>
@@ -233,7 +277,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ entities, paperI
 <body>
 <div class="header">
   <h1 class="title">Graph View</h1>
-  <div class="subtitle">Entities linked to ${paperIdentifier?.value || 'Document'}</div>
+  <div class="subtitle">Entities linked to ${paperLabel}</div>
 </div>
 ${activeLegend.length > 0 ? `
 <div class="legend">
@@ -262,12 +306,16 @@ ${activeLegend.length > 0 ? `
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `GraphView-${paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export'}.html`;
+    const safeLabel = papers.length > 1 
+      ? `compare-${papers.length}-papers` 
+      : (paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export');
+    a.download = `GraphView-${safeLabel}.html`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  if (entities.length === 0 || !paperIdentifier) {
+  const hasPaper = paperIdentifier || (paperIdentifiers && paperIdentifiers.length > 0);
+  if (entities.length === 0 || !hasPaper) {
     return null; // Don't show if no entities are extracted
   }
 

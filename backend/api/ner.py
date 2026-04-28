@@ -85,6 +85,10 @@ async def process_doi_json(
     if not text:
         raise HTTPException(status_code=404, detail="Paper not found")
 
+    # Strip XML tags for full_text mode so NER sees plain text (matches PDF pipeline)
+    if mode == "full_text":
+        text = EuropePMCService.clean_xml(text)
+
     summary, entities_data = await service.process_text(text)
     entities = [Entity(**e) for e in entities_data]
 

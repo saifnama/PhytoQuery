@@ -32,6 +32,13 @@ class Highlighter:
 
             soup = BeautifulSoup(html_content, "html.parser")
 
+            # 0. Unwrap purely presentational inline tags that split entities across
+            # text nodes (e.g. 1,2-dioleoyl-<em>sn</em>-glycero-... → contiguous text).
+            # We keep <sub> and <sup> because chemical formulas rely on them
+            # (e.g. H<sub>2</sub>O). Entity highlight colors replace italics/bold.
+            for tag in soup.find_all(("em", "strong", "i", "b")):
+                tag.unwrap()
+
             # 1. Create a sorted list of unique entities to highlight (longest first to avoid nested mismatch)
             unique_entities = sorted(
                 {(e["text"].lower(), e["label"]) for e in entities if e.get("text")},

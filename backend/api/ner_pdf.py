@@ -36,7 +36,7 @@ async def extract_metadata_from_pdf(doc: fitz.Document) -> Dict[str, Any]:
         doi = doi_match.group()
     
     if not doi and doc.page_count > 0:
-        page1_text = doc[0].get_text()
+        page1_text = doc[0].get_text("text", sort=True)
         doi_match = re.search(doi_pattern, page1_text)
         if doi_match:
             doi = doi_match.group()[:100]
@@ -50,13 +50,13 @@ async def extract_metadata_from_pdf(doc: fitz.Document) -> Dict[str, Any]:
 async def extract_text_from_pdf(doc: fitz.Document) -> str:
     """Extract full text from PDF using PyMuPDF."""
     text_parts = []
-    
+
     for page_num in range(doc.page_count):
         page = doc[page_num]
         text = page.get_text()
         if text.strip():
             text_parts.append(text)
-    
+
     return "\n\n".join(text_parts)
 
 
@@ -65,7 +65,7 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
     from backend.gazetteer import plant_part_matcher, chemical_matcher, species_matcher
     from backend.gazetteer import analytical_technique_matcher, extraction_method_matcher
     from backend.gazetteer import development_stage_matcher, season_matcher, bioactivity_matcher
-    
+
     # Dictionary-only matching (FAST)
     plant_parts = plant_part_matcher.match_plant_parts(text)
     chemicals = chemical_matcher.match_chemicals(text)
@@ -75,12 +75,12 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
     development = development_stage_matcher.match_development_stages(text)
     seasons = season_matcher.match_seasons(text)
     bioactivities = bioactivity_matcher.match_bioactivities(text)
-    
+
     # Group by type with case-insensitive deduplication, track counts
     entities: Dict[str, List[str]] = {}
     seen_lower: Dict[str, set] = {}
     count_map: Dict[str, Dict[str, int]] = {}  # label -> text_lower -> count
-    
+
     def add_ents(ents: list, label: str):
         if label not in entities:
             entities[label] = []
@@ -97,7 +97,7 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
                 else:
                     # Increment count
                     count_map[label][txt_lower] = count_map[label].get(txt_lower, 0) + 1
-    
+
     add_ents(plant_parts, "PLANT_PART")
     add_ents(chemicals, "CHEMICAL")
     add_ents(species, "SPECIES")
@@ -106,7 +106,7 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
     add_ents(development, "DEVELOPMENT_STAGE")
     add_ents(seasons, "SEASON")
     add_ents(bioactivities, "BIOACTIVITY")
-    
+
     return entities, count_map
 
 
@@ -150,12 +150,12 @@ async def upload_pdf_for_ner(
         
         # Run FAST dictionary-only NER (no LLM, no slow processing)
         entities_by_type, entity_counts = extract_entities_fast(text)
-        
+
         doc.close()
-        
+
         # Calculate total entity count (sum of all occurrences)
         total_entities = sum(sum(cnt.values()) for cnt in entity_counts.values())
-        
+
         # Build entities with counts
         entities_with_counts: Dict[str, List[Dict[str, Any]]] = {}
         for label, texts in entities_by_type.items():
@@ -164,7 +164,7 @@ async def upload_pdf_for_ner(
                 txt_lower = txt.lower()
                 cnt = entity_counts.get(label, {}).get(txt_lower, 1)
                 entities_with_counts[label].append({"text": txt, "count": cnt})
-        
+
         return JSONResponse({
             "filename": file.filename,
             "metadata": {
