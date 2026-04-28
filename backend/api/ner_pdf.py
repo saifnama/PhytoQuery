@@ -60,8 +60,8 @@ async def extract_text_from_pdf(doc: fitz.Document) -> str:
     return "\n\n".join(text_parts)
 
 
-def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Dict[str, int]]]:
-    """Fast dictionary-only entity extraction (no LLM). Returns (entities, counts)."""
+def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Dict[str, int]], Dict[str, Dict[str, Dict[str, Any]]]]:
+    """Fast dictionary-only entity extraction (no LLM). Returns (entities, counts, canonical_data)."""
     from backend.gazetteer import plant_part_matcher, chemical_matcher, species_matcher
     from backend.gazetteer import analytical_technique_matcher, extraction_method_matcher
     from backend.gazetteer import development_stage_matcher, season_matcher, bioactivity_matcher
@@ -80,8 +80,9 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
     entities: Dict[str, List[str]] = {}
     seen_lower: Dict[str, set] = {}
     count_map: Dict[str, Dict[str, int]] = {}  # label -> text_lower -> count
+    canonical_data: Dict[str, Dict[str, Dict[str, Any]]] = {}  # label -> canonical_lower -> {canonical, aliases}
 
-    def add_ents(ents: list, label: str):
+    def add_simple_ents(ents: list, label: str):
         if label not in entities:
             entities[label] = []
             seen_lower[label] = set()
@@ -98,16 +99,72 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
                     # Increment count
                     count_map[label][txt_lower] = count_map[label].get(txt_lower, 0) + 1
 
-    add_ents(plant_parts, "PLANT_PART")
-    add_ents(chemicals, "CHEMICAL")
-    add_ents(species, "SPECIES")
-    add_ents(analytical, "ANALYTICAL_TECHNIQUE")
-    add_ents(extraction, "EXTRACTION_METHOD")
-    add_ents(development, "DEVELOPMENT_STAGE")
-    add_ents(seasons, "SEASON")
-    add_ents(bioactivities, "BIOACTIVITY")
+    def add_canonical_ents(ents: list, label: str):
+        """Group dictionary-backed entities by canonical, use CSV canonical name as display text."""
+        if label not in entities:
+            entities[label] = []
+            seen_lower[label] = set()
+            count_map[label] = {}
+            canonical_data[label] = {}
 
-    return entities, count_map
+        # canonical -> matched_text -> count
+        alias_counts: Dict[str, Dict[str, int]] = {}
+        canonical_aliases_map: Dict[str, List[str]] = {}  # canonical -> all aliases from metadata
+
+        for e in ents:
+            txt = e.get("span", e.get("text", ""))
+            canonical = e.get("canonical", txt)
+            if txt and canonical:
+                alias_counts.setdefault(canonical, {})
+                alias_counts[canonical][txt] = alias_counts[canonical].get(txt, 0) + 1
+                # Store aliases from metadata for enrichment
+                if canonical not in canonical_aliases_map and e.get("aliases"):
+                    canonical_aliases_map[canonical] = e.get("aliases", [])
+
+        for canonical, matched_texts in alias_counts.items():
+            if not matched_texts:
+                continue
+
+            # Use CSV canonical name as display text (like DOI NER)
+            display_text = canonical
+            total_count = sum(matched_texts.values())
+            canonical_lower = canonical.lower()
+
+            if canonical_lower not in seen_lower[label]:
+                seen_lower[label].add(canonical_lower)
+                entities[label].append(display_text)
+                # Store count by canonical for lookup
+                count_map[label][canonical_lower] = total_count
+                # Merge matched text variants with metadata aliases
+                all_variants = list(matched_texts.keys())
+                meta_aliases = canonical_aliases_map.get(canonical, [])
+                merged = list(dict.fromkeys(all_variants + meta_aliases))
+                canonical_data[label][canonical_lower] = {
+                    "canonical": canonical,
+                    "display_text": display_text,
+                    "aliases": merged,
+                }
+            else:
+                # Merge counts if same canonical appears again (shouldn't happen with proper dedup)
+                count_map[label][canonical_lower] = count_map[label].get(canonical_lower, 0) + total_count
+                # Merge aliases
+                existing = canonical_data[label].get(canonical_lower, {})
+                existing_aliases = set(existing.get("aliases", []))
+                existing_aliases.update(matched_texts.keys())
+                meta_aliases = canonical_aliases_map.get(canonical, [])
+                existing_aliases.update(meta_aliases)
+                existing["aliases"] = list(existing_aliases)
+
+    add_canonical_ents(plant_parts, "PLANT_PART")
+    add_canonical_ents(chemicals, "CHEMICAL")
+    add_canonical_ents(species, "SPECIES")
+    add_canonical_ents(analytical, "ANALYTICAL_TECHNIQUE")
+    add_canonical_ents(extraction, "EXTRACTION_METHOD")
+    add_canonical_ents(development, "DEVELOPMENT_STAGE")
+    add_canonical_ents(seasons, "SEASON")
+    add_canonical_ents(bioactivities, "BIOACTIVITY")
+
+    return entities, count_map, canonical_data
 
 
 @router.post("/upload/json")
@@ -149,7 +206,7 @@ async def upload_pdf_for_ner(
         text = await extract_text_from_pdf(doc)
         
         # Run FAST dictionary-only NER (no LLM, no slow processing)
-        entities_by_type, entity_counts = extract_entities_fast(text)
+        entities_by_type, entity_counts, canonical_data = extract_entities_fast(text)
 
         doc.close()
 
@@ -163,7 +220,13 @@ async def upload_pdf_for_ner(
             for txt in texts:
                 txt_lower = txt.lower()
                 cnt = entity_counts.get(label, {}).get(txt_lower, 1)
-                entities_with_counts[label].append({"text": txt, "count": cnt})
+                entry: Dict[str, Any] = {"text": txt, "count": cnt}
+                # Add canonical/aliases for dictionary-backed entities
+                meta = canonical_data.get(label, {}).get(txt_lower)
+                if meta:
+                    entry["canonical"] = meta["canonical"]
+                    entry["aliases"] = meta["aliases"]
+                entities_with_counts[label].append(entry)
 
         return JSONResponse({
             "filename": file.filename,

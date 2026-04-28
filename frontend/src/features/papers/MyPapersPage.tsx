@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Plus, FlowerLotus, Table, ChartBar, X } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import type { Entity } from '../../types';
@@ -47,33 +47,63 @@ const MyPapersPage = () => {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [compareSelection, setCompareSelection] = useState<Set<string>>(new Set());
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const processFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const pdfFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    if (pdfFiles.length === 0) return;
+
+    setIsUploading(true);
+    setUploadProgress({ current: 0, total: pdfFiles.length });
+    setIsCompareMode(false);
+    setCompareSelection(new Set());
+
+    const uploadedPapers: UploadedPaper[] = [];
+
+    for (let i = 0; i < pdfFiles.length; i++) {
+      const file = pdfFiles[i];
+      setUploadProgress({ current: i + 1, total: pdfFiles.length });
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/ner/upload/json', { method: 'POST', body: formData });
+        if (!res.ok) continue;
+        const data = await res.json();
+
+        const paper: UploadedPaper = {
+          id: `${Date.now()}_${i}`,
+          name: data.metadata.title || file.name,
+          doi: data.metadata.doi,
+          entities: data.entities,
+          entity_counts: data.entity_counts || {},
+          entity_count: data.entity_count,
+        };
+        uploadedPapers.push(paper);
+      } catch {
+        // Skip failed uploads
+      }
+    }
+
+    if (uploadedPapers.length > 0) {
+      setPapers(prev => [...uploadedPapers, ...prev]);
+      setSelectedPaper(uploadedPapers[0]);
+      const initial: Record<string, boolean> = {};
+      ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
+      setExpandedGroups(initial);
+    }
+
+    setIsUploading(false);
+    setUploadProgress({ current: 0, total: 0 });
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.[0]) {
-      const selectedFile = e.target.files[0];
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      fetch('/ner/upload/json', { method: 'POST', body: formData })
-        .then(res => res.json())
-        .then(data => {
-          const paper: UploadedPaper = {
-            id: Date.now().toString(),
-            name: data.metadata.title || selectedFile.name,
-            doi: data.metadata.doi,
-            entities: data.entities,
-            entity_counts: data.entity_counts || {},
-            entity_count: data.entity_count,
-          };
-          setPapers(prev => [paper, ...prev]);
-          setSelectedPaper(paper);
-          const initial: Record<string, boolean> = {};
-          ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
-          setExpandedGroups(initial);
-          setIsCompareMode(false);
-          setCompareSelection(new Set());
-        })
-        .catch(() => {});
-    }
+    processFiles(e.target.files);
+    e.target.value = ''; // Reset input so same files can be selected again
   };
 
   const toggleComparePaper = (paperId: string) => {
@@ -245,11 +275,34 @@ const MyPapersPage = () => {
             </button>
           )}
 
-          <label className="block">
-            <input type="file" accept=".pdf" onChange={handleFileChange} className="hidden" />
-            <div className="flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed border-slate-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors text-xs text-blue-600 font-medium">
-              <Plus size={14} />
-              Upload PDF
+          <label className="block relative">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              multiple
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <div className={`flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed rounded-lg cursor-pointer transition-colors text-xs font-medium ${
+              isUploading
+                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50 text-blue-600'
+            }`}>
+              {isUploading ? (
+                <>
+                  <svg className="animate-spin h-3.5 w-3.5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span>{uploadProgress.current} / {uploadProgress.total}</span>
+                </>
+              ) : (
+                <>
+                  <Plus size={14} />
+                  <span>Upload PDFs</span>
+                </>
+              )}
             </div>
           </label>
         </div>
