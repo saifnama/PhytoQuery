@@ -17,7 +17,7 @@ from backend.core.http_client import HttpClientManager
 
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
 from sentence_transformers import CrossEncoder
 from langchain_core.documents import Document
@@ -53,13 +53,23 @@ LLM_CONTEXT_WINDOW = RAG_CONTEXT_WINDOW
 
 @dataclass
 class RAGConfig:
-    chunk_size: int = 500
-    chunk_overlap: int = 100
-    min_chunk_size: int = 100
+    # Parent chunks: large context for LLM
+    parent_chunk_size: int = 2500
+    parent_chunk_overlap: int = 300
+    # Child chunks: small for precise retrieval
+    child_chunk_size: int = 250
+    child_chunk_overlap: int = 50
+    # Retrieval settings
+    retrieve_k: int = 200  # Initial vector search: how many child chunks to fetch
+    rerank_threshold: float = 0.1  # Minimum cross-encoder score to keep
+    max_parents: int = 20  # Max unique parent chunks passed to LLM
+    min_chunk_size: int = 50
     similarity_threshold: float = RAG_SIMILARITY_THRESHOLD
     embedding_model: str = RAG_EMBEDDING_MODEL
     top_k: int = RAG_TOP_K
     parser_type: str = "pymupdf"  # "pymupdf" (fast) or "docling" (detailed)
+    max_num_pages: int = 200
+    max_file_size: int = 104_857_600  # 100 MB
     chroma_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data",
@@ -229,6 +239,52 @@ class RAGService:
         self._vectorstore_cache: Dict[str, Chroma] = {}
         # Cache for Docling converter to avoid reloading models
         self._docling_converter = None
+        # Lazy-init semantic child splitter
+        self._semantic_splitter = None
+
+    def _get_semantic_splitter(self):
+        """Lazy-init SemanticChunker for child-level semantic splitting."""
+        if self._semantic_splitter is None:
+            logger.info("Initializing SemanticChunker for child splitting...")
+            self._semantic_splitter = SemanticChunker(
+                self.embeddings,
+                breakpoint_threshold_type="standard_deviation",
+                breakpoint_threshold_amount=1.5,
+            )
+        return self._semantic_splitter
+
+    def _split_semantic_children(self, text: str) -> List[str]:
+        """Split parent text into semantically coherent child chunks.
+
+        Uses SemanticChunker to group sentences by meaning, then applies
+        size guards to ensure chunks stay within configured bounds.
+        """
+        try:
+            splitter = self._get_semantic_splitter()
+            raw_chunks = splitter.split_text(text)
+        except Exception as e:
+            logger.warning(f"SemanticChunker failed, falling back to MarkdownTextSplitter: {e}")
+            fallback = MarkdownTextSplitter(
+                chunk_size=config.child_chunk_size,
+                chunk_overlap=config.child_chunk_overlap,
+            )
+            return fallback.split_text(text)
+
+        result: List[str] = []
+        for chunk in raw_chunks:
+            if len(chunk) < config.min_chunk_size:
+                continue
+            if len(chunk) > config.child_chunk_size * 2:
+                # Oversized semantic chunk → fallback to character-based split
+                safety = RecursiveCharacterTextSplitter(
+                    chunk_size=config.child_chunk_size,
+                    chunk_overlap=config.child_chunk_overlap,
+                    separators=["\n\n", "\n", ". ", " ", ""],
+                )
+                result.extend(safety.split_text(chunk))
+            else:
+                result.append(chunk)
+        return result
 
     def _get_user_collection(self, user_id: str) -> Chroma:
         """Get or create a ChromaDB collection for a specific user."""
@@ -279,10 +335,60 @@ class RAGService:
         gc.collect()
         time.sleep(0.1)
 
+    # --- Parent-Child Chunking: Parent Store ---
+
+    def _get_parent_store_path(self, user_id: str) -> str:
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+        return os.path.join(config.chroma_dir, f"{safe_user_id}_parents.json")
+
+    def _load_parent_store(self, user_id: str) -> Dict[str, str]:
+        path = self._get_parent_store_path(user_id)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def _save_parent_store(self, user_id: str, store: Dict[str, str]) -> None:
+        path = self._get_parent_store_path(user_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False)
+
+    def _add_parents(self, user_id: str, parent_chunks: List[Dict[str, str]]) -> None:
+        store = self._load_parent_store(user_id)
+        for p in parent_chunks:
+            store[p["parent_id"]] = p["text"]
+        self._save_parent_store(user_id, store)
+
+    def _get_parent_text(self, parent_id: str, user_id: str) -> str:
+        store = self._load_parent_store(user_id)
+        return store.get(parent_id, "")
+
+    def _cleanup_parent_store(self, user_id: str) -> None:
+        """Remove parent store entries that are no longer referenced by any child chunk."""
+        vectorstore = self._get_user_collection(user_id)
+        collection = vectorstore._collection
+        try:
+            result = collection.get(include=["metadatas"])
+            metadatas = result.get("metadatas", [])
+            active_parent_ids = set()
+            for meta in metadatas:
+                pid = meta.get("parent_id")
+                if pid:
+                    active_parent_ids.add(pid)
+            store = self._load_parent_store(user_id)
+            new_store = {k: v for k, v in store.items() if k in active_parent_ids}
+            self._save_parent_store(user_id, new_store)
+        except Exception:
+            pass
+
     def process_and_index_pdfs(
         self,
         pdf_paths: List[str],
-        parser_type: str = "docling",
+        parser_type: str = "pymupdf",
         user_id: str = "default",
     ):
         """Extract, chunk, and index PDFs for a specific user.
@@ -358,7 +464,7 @@ class RAGService:
             logger.warning(f"Metadata extraction failed for {pdf_path}: {e}")
         return metadata
 
-    def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "docling") -> List[Document]:
+    def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "pymupdf") -> List[Document]:
         """PDF processing pipeline (Preserved from notebook)"""
         source = os.path.basename(pdf_path)
 
@@ -368,7 +474,7 @@ class RAGService:
         # 1. Extract using selected parser
         if parser_type == "docling":
             try:
-                return self._process_with_docling_skill(pdf_path, source, pdf_metadata)
+                return self._process_with_docling_skill(pdf_path, source, pdf_metadata, user_id)
             except Exception as e:
                 logger.error(f"Docling skill processing failed, falling back: {e}")
                 # Fall through to standard extraction if skill fails
@@ -387,7 +493,10 @@ class RAGService:
 
         # 2. Section detection & Chunking (Regex-based fallback)
         sections = self._detect_sections(full_text)
-        chunks = self._chunk_by_sections(sections, tables)
+        parent_chunks, chunks = self._chunk_by_sections(sections, tables, pdf_metadata, source)
+
+        # Store parent chunks for parent-child retrieval
+        self._add_parents(user_id, parent_chunks)
 
         # 3. Deduplication
         unique_chunks = self._deduplicate_chunks(chunks)
@@ -417,13 +526,15 @@ class RAGService:
         question: str,
         vectorstore: Chroma,
         filter_files: Optional[List[str]] = None,
+        k: int = None,
     ) -> List[Dict[str, Any]]:
         """Hybrid search combining vector similarity + BM25 keyword matching.
 
         Uses Reciprocal Rank Fusion (RRF) to merge results from both methods.
         Returns list of dicts with 'doc', 'score' keys.
         """
-        k = config.top_k
+        if k is None:
+            k = config.top_k
         rrf_k = 60  # RRF constant
 
         # --- 1. Vector similarity search ---
@@ -533,43 +644,83 @@ class RAGService:
         """
         vectorstore = self._get_user_collection(user_id)
 
-        # 1. Hybrid search (BM25 + Vector with RRF) - Get top 20 candidates
-        config.top_k = 20  # Temporary boost for candidate retrieval
-        search_results = self._hybrid_search(question, vectorstore, filter_files)
-        config.top_k = RAG_TOP_K  # Reset
+        # 1. Retrieve many child chunks from vector store (up to 200)
+        search_results = self._hybrid_search(
+            question, vectorstore, filter_files, k=config.retrieve_k
+        )
 
-        # 2. Cross-Encoder Reranking - Pick top 5
-        reranked_results = []
+        # 2. Cross-Encoder Reranking on ALL retrieved children
+        reranked_children = []
         if self.reranker and search_results:
             try:
+                import numpy as np
+
                 pairs = [[question, res["doc"].page_content] for res in search_results]
                 rerank_scores = self.reranker.predict(pairs)
 
                 for i, score in enumerate(rerank_scores):
                     search_results[i]["rerank_score"] = float(score)
 
+                # Normalize scores to 0-1 range using min-max
+                scores = np.array(rerank_scores)
+                min_s, max_s = scores.min(), scores.max()
+                if max_s > min_s:
+                    normalized = (scores - min_s) / (max_s - min_s)
+                else:
+                    normalized = np.ones_like(scores) * 0.5
+
+                for i, r in enumerate(search_results):
+                    r["normalized_score"] = round(float(normalized[i]) * 100)
+
+                # Filter by relevance threshold (>= 0.1 normalized)
+                reranked_children = [
+                    r for r in search_results
+                    if normalized[i] >= config.rerank_threshold
+                ]
                 # Sort by rerank score descending
-                search_results.sort(key=lambda x: x["rerank_score"], reverse=True)
-
-                # Take top k
-                reranked_results = search_results[: config.top_k]
-
-                # Normalize cross-encoder scores (typically unbounded, min/max varies, rough sigmoid approximation for display)
-                import math
-
-                for r in reranked_results:
-                    # Simple sigmoid to squish to 0-100%
-                    prob = 1 / (1 + math.exp(-r["rerank_score"]))
-                    r["normalized_score"] = round(prob * 100)
+                reranked_children.sort(key=lambda x: x["rerank_score"], reverse=True)
             except Exception as e:
                 logger.error(f"Reranking failed: {e}")
-                reranked_results = search_results[: config.top_k]
+                reranked_children = search_results
         else:
-            reranked_results = search_results[: config.top_k]
+            reranked_children = search_results
 
+        # 3. Parent-Child Resolution: resolve filtered children to unique parents
+        parent_ids_seen: set[str] = set()
+        parent_results: List[Dict[str, Any]] = []
+
+        for result in reranked_children:
+            d = result["doc"]
+            ctype = d.metadata.get("content_type", "text")
+            if ctype != "text":
+                # Tables pass through directly
+                parent_results.append(result)
+                continue
+
+            parent_id = d.metadata.get("parent_id")
+            if not parent_id or parent_id in parent_ids_seen:
+                continue
+
+            parent_ids_seen.add(parent_id)
+            ptext = self._get_parent_text(parent_id, user_id)
+            if ptext:
+                # Create a synthetic result with parent text
+                parent_results.append({
+                    "doc": Document(
+                        page_content=ptext,
+                        metadata=d.metadata,
+                    ),
+                    "rerank_score": result.get("rerank_score", 0),
+                    "normalized_score": result.get("normalized_score", 0),
+                })
+
+            if len(parent_results) >= config.max_parents:
+                break
+
+        # 4. Build LLM context from resolved parents
         context_parts = []
         sources = []
-        for result in reranked_results:
+        for result in parent_results:
             d = result["doc"]
             score = result.get("normalized_score", 0)
             ctype = d.metadata.get("content_type", "text")
@@ -578,7 +729,7 @@ class RAGService:
 
             title = d.metadata.get("doc_title", "")
             authors = d.metadata.get("doc_authors", "")
-            
+
             # Build a rich header for the LLM context
             header_elements = []
             if title:
@@ -588,7 +739,7 @@ class RAGService:
             header_elements.append(f"File: {src}")
             if sec:
                 header_elements.append(f"Section: {sec}")
-                
+
             header_str = " | ".join(header_elements)
 
             if ctype == "table":
@@ -707,6 +858,8 @@ Summary:"""
                     f"Deleted {len(ids_to_delete)} chunks for '{filename}' from user {user_id}'s ChromaDB"
                 )
 
+            # Clean up orphaned parent chunks
+            self._cleanup_parent_store(user_id)
             self._invalidate_user_collection(user_id)
 
             return True
@@ -726,6 +879,12 @@ Summary:"""
             if all_ids:
                 collection.delete(ids=all_ids)
                 logger.info(f"Deleted all {len(all_ids)} chunks for user {user_id}")
+
+            # Clear parent store
+            parent_path = self._get_parent_store_path(user_id)
+            if os.path.exists(parent_path):
+                os.remove(parent_path)
+                logger.info(f"Deleted parent store for user {user_id}")
 
             self._invalidate_user_collection(user_id)
 
@@ -764,6 +923,15 @@ Summary:"""
             logger.warning(f"Could not fully delete ChromaDB folder: {e}")
             # Ensure the SQLite DB is at least emptied via reset_rag
 
+        # 2b. Delete parent store file
+        parent_path = self._get_parent_store_path(user_id)
+        try:
+            if os.path.exists(parent_path):
+                os.remove(parent_path)
+                logger.info(f"Deleted parent store: {parent_path}")
+        except Exception as e:
+            logger.warning(f"Could not delete parent store: {e}")
+
         # 3. Delete user's uploads folder
         upload_dir = os.path.join(
             os.path.dirname(
@@ -789,16 +957,22 @@ Summary:"""
 
     # --- Helper Methods (Logic preserved from notebook) ---
 
-    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict) -> List[Document]:
-        """Advanced Docling processing using HybridChunker and Semantic Analysis."""
+    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict, user_id: str = "default") -> List[Document]:
+        """Advanced Docling processing using HybridChunker and parent-child chunking.
+
+        Creates parent chunks (contextualized by HybridChunker) and child chunks
+        (small chunks with contextual headers for embedding) consistent with PyMuPDF path.
+        """
         from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
         from docling.datamodel.base_models import InputFormat
 
         if self._docling_converter is None:
             logger.info("Initializing Docling DocumentConverter for Agent Skill...")
             pipeline_options = PdfPipelineOptions()
             pipeline_options.do_table_structure = True
+            pipeline_options.table_structure_options.do_cell_matching = False
+            pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
             pipeline_options.do_ocr = False
             pipeline_options.do_code_enrichment = False
             pipeline_options.do_formula_enrichment = False
@@ -810,7 +984,11 @@ Summary:"""
             )
 
         abs_path = os.path.abspath(pdf_path)
-        result = self._docling_converter.convert(abs_path)
+        result = self._docling_converter.convert(
+            abs_path,
+            max_num_pages=config.max_num_pages,
+            max_file_size=config.max_file_size,
+        )
         
         if not result or not result.document:
             raise ValueError("Docling returned empty result")
@@ -821,72 +999,112 @@ Summary:"""
         # Initialize HybridChunker (respects headers and structure)
         if HybridChunker and HuggingFaceTokenizer:
             logger.info("Using Docling HybridChunker for semantic splitting...")
-            tokenizer = HuggingFaceTokenizer.from_pretrained(
-                model_name=config.embedding_model,
-                max_tokens=min(config.chunk_size, 384),
+            from transformers import AutoTokenizer
+            tokenizer = HuggingFaceTokenizer(
+                tokenizer=AutoTokenizer.from_pretrained(config.embedding_model),
+                max_tokens=min(config.parent_chunk_size, 384),
             )
             chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
             doc_chunks = list(chunker.chunk(result.document))
             
-            documents = []
             file_ext = os.path.splitext(source)[1].lower() or ".pdf"
             indexed_at = datetime.now(timezone.utc).isoformat()
             
-            from langchain_text_splitters import RecursiveCharacterTextSplitter
             safety_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,
+                chunk_size=config.parent_chunk_size,
+                chunk_overlap=config.parent_chunk_overlap,
                 separators=["\n\n", "\n", ". ", " ", ""]
             )
             
+            doc_title = pdf_metadata.get("title", "")
+            parent_chunks: List[Dict[str, str]] = []
+            all_child_chunks: List[Dict[str, Any]] = []
+            
             for i, chunk in enumerate(doc_chunks):
-                # Contextualize adds breadcrumbs (e.g., section headers) to the text
+                # Contextualize adds breadcrumbs (section headers) to the text
                 chunk_text = chunker.contextualize(chunk)
                 
-                meta = {
-                    "source": source,
-                    "chunk_id": f"{source}_{i}",
-                    "parser_type": "docling_skill",
-                    "file_type": file_ext,
-                    "indexed_at": indexed_at,
-                    "total_chunks": len(doc_chunks),
-                    "doc_title": pdf_metadata.get("title", ""),
-                    "doc_authors": pdf_metadata.get("authors", ""),
-                    "doc_doi": pdf_metadata.get("doi", ""),
-                    "doc_journal": pdf_metadata.get("journal", ""),
-                    "page": getattr(chunk.meta.origin, "page_no", 0),
-                    "headings": chunk.meta.headings,
-                }
+                # Extract section title from headings
+                headings = chunk.meta.headings or []
+                section_title = headings[0] if headings else ""
                 
-                # SAFETY CHECK: HybridChunker can sometimes produce large atomic chunks (like tables).
-                # Forcefully split them if they are dangerously large (e.g. > 1000 characters ~ 250 tokens).
-                if len(chunk_text) > config.chunk_size * 2:
-                    sub_chunks = safety_splitter.split_text(chunk_text)
-                    for j, sub in enumerate(sub_chunks):
-                        sub_meta = meta.copy()
-                        sub_meta["chunk_id"] = f"{source}_{i}_part{j}"
-                        documents.append(Document(page_content=sub, metadata=sub_meta))
+                # Contextualize() already prepends section breadcrumbs.
+                # Only prepend doc_title here to avoid double section headers.
+                doc_header = f"{doc_title}\n\n" if doc_title else ""
+                
+                # Stable parent ID: include source to avoid collisions across docs
+                parent_id = hashlib.md5(
+                    f"docling::{source}::{section_title}::{chunk_text[:200]}".encode()
+                ).hexdigest()
+                
+                # --- PARENT CHUNK ---
+                # Safety: if HybridChunker produced oversized chunk, split it
+                if len(chunk_text) > config.parent_chunk_size * 2:
+                    parent_texts = safety_splitter.split_text(chunk_text)
                 else:
-                    documents.append(Document(page_content=chunk_text, metadata=meta))
+                    parent_texts = [chunk_text]
+                
+                for p_idx, p_text in enumerate(parent_texts):
+                    pid = f"{parent_id}_p{p_idx}"
+                    parent_with_header = doc_header + p_text
+                    parent_chunks.append({
+                        "parent_id": pid,
+                        "text": parent_with_header,
+                        "section_title": section_title,
+                    })
+                    
+                    # --- CHILD CHUNKS from this parent ---
+                    child_texts = self._split_semantic_children(p_text)
+                    for c_idx, c_text in enumerate(child_texts):
+                        child_with_header = doc_header + c_text
+                        all_child_chunks.append({
+                            "text": child_with_header,
+                            "metadata": {
+                                "source": source,
+                                "chunk_id": f"{source}_{i}_p{p_idx}_c{c_idx}",
+                                "parser_type": "docling_skill",
+                                "file_type": file_ext,
+                                "indexed_at": indexed_at,
+                                "content_type": "text",
+                                "doc_title": doc_title,
+                                "doc_authors": pdf_metadata.get("authors", ""),
+                                "doc_doi": pdf_metadata.get("doi", ""),
+                                "doc_journal": pdf_metadata.get("journal", ""),
+                                "page": getattr(chunk.meta.origin, "page_no", 0),
+                                "section_title": section_title,
+                                "headings": headings,
+                                "parent_id": pid,
+                                "child_index": c_idx,
+                            },
+                        })
             
-            logger.info(f"Docling skill created {len(documents)} chunks for {source}")
-            return documents
+            # Store parents and return children for indexing
+            self._add_parents(user_id, parent_chunks)
+            logger.info(f"Docling skill created {len(parent_chunks)} parents, {len(all_child_chunks)} children for {source}")
+            
+            # Deduplicate children
+            unique_children = self._deduplicate_chunks(all_child_chunks)
+            total = len(unique_children)
+            for c in unique_children:
+                c["metadata"]["total_chunks"] = total
+            return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children]
         else:
             logger.warning("Docling chunking components missing, falling back to basic extraction")
-            # This will fall through to the manual extraction in _process_pdf
             raise ImportError("Docling chunking components missing")
 
     def _extract_with_docling(self, pdf_path):
         logger.info(f"Starting detailed extraction with Docling for: {pdf_path}")
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
             from docling.datamodel.base_models import InputFormat
 
             if self._docling_converter is None:
                 logger.info("Initializing Docling DocumentConverter (this may take a moment)...")
                 pipeline_options = PdfPipelineOptions()
                 pipeline_options.do_table_structure = True
+                pipeline_options.table_structure_options.do_cell_matching = False
+                pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
                 pipeline_options.do_ocr = False
                 
                 # Disable heavy enrichment features for now to prevent background VLM model downloads
@@ -901,7 +1119,11 @@ Summary:"""
             
             # Use absolute path to avoid any confusion
             abs_path = os.path.abspath(pdf_path)
-            result = self._docling_converter.convert(abs_path)
+            result = self._docling_converter.convert(
+                abs_path,
+                max_num_pages=config.max_num_pages,
+                max_file_size=config.max_file_size,
+            )
             
             if not result or not result.document:
                 logger.error(f"Docling returned empty result for {pdf_path}")
@@ -915,7 +1137,7 @@ Summary:"""
                 for table in result.document.tables:
                     try:
                         # Ensure we are calling the correct export method
-                        table_md = table.export_to_markdown()
+                        table_md = table.export_to_markdown(doc=result.document)
                         pnum = 0
                         if hasattr(table, "prov") and table.prov and len(table.prov) > 0:
                             pnum = getattr(table.prov[0], "page_no", 1) # Default to 1 if found
@@ -933,8 +1155,7 @@ Summary:"""
     def _extract_with_pymupdf(self, pdf_path):
         """Fast PDF extraction using PyMuPDF (fitz)
 
-        Uses plain text extraction for maximum compatibility.
-        Much faster than Docling but without table structure detection.
+        Extracts text in reading order and detects tables.
         """
         try:
             import fitz  # PyMuPDF
@@ -944,9 +1165,29 @@ Summary:"""
 
             doc = fitz.open(pdf_path)
             for page_num, page in enumerate(doc):
-                text = page.get_text("text")
+                # sort=True preserves visual reading order (top-left to bottom-right)
+                text = page.get_text("text", sort=True)
                 if text.strip():
-                    text_parts.append(text)
+                    text_parts.append(f"<!-- Page {page_num + 1} -->\n\n{text}")
+
+                # Extract tables using PyMuPDF's built-in detector
+                try:
+                    tab_finder = page.find_tables()
+                    for tab in tab_finder.tables:
+                        rows = tab.extract()
+                        if rows:
+                            # Convert list-of-lists to markdown table
+                            md_rows = []
+                            for r in rows:
+                                cells = [str(cell).replace("|", "\\|") if cell is not None else "" for cell in r]
+                                md_rows.append("| " + " | ".join(cells) + " |")
+                            if len(md_rows) >= 2:
+                                # Insert separator after first row
+                                md_rows.insert(1, "|" + "|".join([" --- " for _ in rows[0]]) + "|")
+                            table_md = "\n".join(md_rows)
+                            tables.append({"content": table_md, "page": page_num + 1})
+                except Exception:
+                    pass  # Table extraction is best-effort
 
             doc.close()
 
@@ -960,113 +1201,208 @@ Summary:"""
             return None, []
 
     def _detect_sections(self, text):
+        """Detect scientific paper sections from plain text or markdown.
+
+        Handles both Docling markdown output (# headers) and PyMuPDF plain text
+        by recognizing standard scientific section names.
+        """
+        # Standard scientific paper section names (case-insensitive)
+        SECTION_PATTERNS = [
+            r"^(?:Abstract|Summary)\s*$",
+            r"^(?:Introduction|Background|Literature Review|Related Work)\s*$",
+            r"^(?:Methods|Methodology|Materials and Methods|Experimental(?: Setup)?|Procedure|Protocol)\s*$",
+            r"^(?:Results|Findings)\s*$",
+            r"^(?:Discussion)\s*$",
+            r"^(?:Conclusion|Conclusions)\s*$",
+            r"^(?:Acknowledgments?|Acknowledgements?)\s*$",
+            r"^(?:References|Bibliography|Literature Cited)\s*$",
+            r"^(?:Supplementary(?: Material| Information)?|Appendix(?:es)?)\s*$",
+            r"^(?:Declarations?|Funding|Author Contributions|Ethics Statement|Data Availability|Conflicts? of Interest)\s*$",
+        ]
+        # Combine into one regex for efficiency
+        section_regex = re.compile(
+            "|".join(SECTION_PATTERNS),
+            re.IGNORECASE | re.MULTILINE,
+        )
+
         lines = text.split("\n")
         sections = []
         current = {"title": "Start", "level": 0, "content": [], "start": 0}
+
         for i, line in enumerate(lines):
-            if line.startswith("#"):
-                match = re.match(r"^(#{1,4})\s+(.+)$", line)
+            stripped = line.strip()
+            is_header = False
+            header_level = 0
+            header_title = ""
+
+            # 1. Markdown headers (from Docling)
+            if stripped.startswith("#"):
+                match = re.match(r"^(#{1,4})\s+(.+)$", stripped)
                 if match:
-                    if current["content"]:
-                        current["text"] = "\n".join(current["content"])
-                        sections.append(current)
-                    current = {
-                        "title": match.group(2).strip(),
-                        "level": len(match.group(1)),
-                        "content": [],
-                        "start": i,
-                    }
-                    continue
-            if re.match(r"^\d+\.?\s+[A-Z]", line):
+                    is_header = True
+                    header_level = len(match.group(1))
+                    header_title = match.group(2).strip()
+
+            # 2. Numbered sections (e.g., "1. Introduction", "2. Methods")
+            if not is_header and re.match(r"^\d+\.?\s+[A-Z]", stripped):
+                is_header = True
+                header_level = 1
+                header_title = stripped
+
+            # 3. ALL CAPS section headers (common in PDFs)
+            if not is_header and re.match(r"^[A-Z][A-Z0-9&\s\-\.]{2,}$", stripped) and len(stripped) < 60:
+                # Verify it's a known section name
+                if section_regex.search(stripped):
+                    is_header = True
+                    header_level = 1
+                    header_title = stripped.title()
+
+            # 4. Title-case section headers on their own line
+            if not is_header and len(stripped) < 50 and stripped:
+                if section_regex.search(stripped):
+                    is_header = True
+                    header_level = 1
+                    header_title = stripped
+
+            if is_header:
+                # Save previous section
                 if current["content"]:
                     current["text"] = "\n".join(current["content"])
                     sections.append(current)
-                current = {"title": line.strip(), "level": 1, "content": [], "start": i}
+                current = {
+                    "title": header_title,
+                    "level": header_level,
+                    "content": [],
+                    "start": i,
+                }
                 continue
+
             current["content"].append(line)
+
         if current["content"]:
             current["text"] = "\n".join(current["content"])
             sections.append(current)
+
         return sections
 
-    def _chunk_by_sections(self, sections, tables):
-        try:
-            # Try SemanticChunker first
-            semantic_splitter = SemanticChunker(
-                self.embeddings, breakpoint_threshold_type="percentile"
-            )
-        except Exception as e:
-            logger.warning(
-                f"SemanticChunker init failed, falling back to recursive: {e}"
-            )
-            semantic_splitter = None
+    def _chunk_by_sections(self, sections, tables, doc_metadata: Dict[str, str] = None, source: str = ""):
+        """Create parent-child hierarchical chunks with Markdown splitting and contextual headers.
 
-        fallback_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=config.chunk_size,
-            chunk_overlap=config.chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
+        Flow:
+        1. Convert each section to Markdown with headers
+        2. Split into parent chunks (~2500 chars) using MarkdownTextSplitter
+        3. Split into child chunks using SemanticChunker (meaning-based boundaries)
+        4. Prepend contextual chunk headers (CCH) to each child before embedding:
+           [Document Title] > [Section Title] > [chunk text]
+
+        Tables are indexed directly without parent-child split.
+        Returns: (parent_chunks, all_chunks_for_indexing)
+        """
+        doc_metadata = doc_metadata or {}
+        doc_title = doc_metadata.get("title", "")
+        doc_authors = doc_metadata.get("authors", "")
+
+        # Build contextual header prefix for this document
+        def build_header(section_title: str) -> str:
+            parts = []
+            if doc_title:
+                parts.append(doc_title)
+            if section_title and section_title != "Start":
+                parts.append(section_title)
+            if parts:
+                return " > ".join(parts) + "\n\n"
+            return ""
+
+        # Markdown splitters
+        parent_splitter = MarkdownTextSplitter(
+            chunk_size=config.parent_chunk_size,
+            chunk_overlap=config.parent_chunk_overlap,
+        )
+        table_splitter = MarkdownTextSplitter(
+            chunk_size=config.parent_chunk_size,
+            chunk_overlap=config.parent_chunk_overlap,
         )
 
-        chunks = []
+        parent_chunks: List[Dict[str, str]] = []
+        all_chunks: List[Dict[str, Any]] = []
+
+        # Tables: index directly, no parent-child
         for table in tables:
             content = table.get("content", "")
             if content.strip():
-                # Split large tables so they don't crash the embedding model
-                table_chunks = fallback_splitter.split_text(content)
+                table_md = f"## Table\n\n{content}"
+                table_chunks = table_splitter.split_text(table_md)
                 for i, tc in enumerate(table_chunks):
-                    chunks.append(
+                    all_chunks.append(
                         {
                             "text": tc,
                             "metadata": {
                                 "content_type": "table",
                                 "page": table.get("page", 0),
-                                "chunk_part": i + 1
+                                "chunk_part": i + 1,
                             },
                         }
                     )
+
+        # Sections: parent-child hierarchical chunking with Markdown
         for section in sections:
             text = section.get("text", "")
             if not text.strip():
                 continue
-            meta = {"section_title": section.get("title", ""), "content_type": "text"}
 
-            if len(text) <= config.chunk_size:
-                if len(text) >= config.min_chunk_size:
-                    chunks.append({"text": text, "metadata": meta})
+            section_title = section.get("title", "")
+            header = build_header(section_title)
+
+            # Convert section to Markdown with header for the splitter
+            # Skip "## Start" as it's not a real section
+            if section_title and section_title != "Start":
+                section_md = f"## {section_title}\n\n{text}"
+                header_prefix = f"## {section_title}\n\n"
             else:
-                # Use semantic splitter if available, otherwise fallback
-                if semantic_splitter:
-                    # Semantic chunker expects a list of documents
-                    try:
-                        doc = Document(page_content=text, metadata=meta)
-                        section_chunks = semantic_splitter.split_documents([doc])
-                        for chunk in section_chunks:
-                            if len(chunk.page_content) >= config.min_chunk_size:
-                                # SAFETY CHECK: If SemanticChunker created a chunk that is still too large,
-                                # forcefully split it with the fallback splitter to prevent embedding errors.
-                                if len(chunk.page_content) > config.chunk_size * 2:
-                                    sub_chunks = fallback_splitter.split_text(chunk.page_content)
-                                    for sub in sub_chunks:
-                                        if len(sub) >= config.min_chunk_size:
-                                            chunks.append({"text": sub, "metadata": chunk.metadata.copy()})
-                                else:
-                                    chunks.append(
-                                        {"text": chunk.page_content, "metadata": chunk.metadata}
-                                    )
-                    except Exception as e:
-                        logger.warning(
-                            f"Semantic chunking failed for section, using fallback: {e}"
-                        )
-                        sub_chunks = fallback_splitter.split_text(text)
-                        for sub in sub_chunks:
-                            if len(sub) >= config.min_chunk_size:
-                                chunks.append({"text": sub, "metadata": meta.copy()})
-                else:
-                    sub_chunks = fallback_splitter.split_text(text)
-                    for sub in sub_chunks:
-                        if len(sub) >= config.min_chunk_size:
-                            chunks.append({"text": sub, "metadata": meta.copy()})
-        return chunks
+                section_md = text
+                header_prefix = ""
+
+            # Stable parent_id: include source to avoid collisions across docs
+            parent_id = hashlib.md5(
+                f"{source}::{section_title}::{text[:200]}".encode()
+            ).hexdigest()
+
+            # --- PARENT CHUNKS ---
+            # Split section into parent-sized markdown chunks
+            parent_texts = parent_splitter.split_text(section_md)
+            for p_idx, p_text in enumerate(parent_texts):
+                # Strip the splitter-injected section header to avoid doubles
+                if header_prefix and p_text.startswith(header_prefix):
+                    p_text = p_text[len(header_prefix):]
+                parent_with_header = header + p_text
+                pid = f"{parent_id}_p{p_idx}"
+                parent_chunks.append(
+                    {
+                        "parent_id": pid,
+                        "text": parent_with_header,
+                        "section_title": section_title,
+                    }
+                )
+
+                # --- CHILD CHUNKS (from this parent) ---
+                # Use semantic chunking for coherent, meaning-based splits
+                child_texts = self._split_semantic_children(p_text)
+                for c_idx, c_text in enumerate(child_texts):
+                    # Prepend contextual header to child for embedding
+                    child_with_header = header + c_text
+                    all_chunks.append(
+                        {
+                            "text": child_with_header,
+                            "metadata": {
+                                "section_title": section_title,
+                                "content_type": "text",
+                                "parent_id": pid,
+                                "child_index": c_idx,
+                            },
+                        }
+                    )
+
+        return parent_chunks, all_chunks
 
     def _deduplicate_chunks(self, chunks):
         unique = []
