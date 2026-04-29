@@ -28,7 +28,15 @@ RAG_OLLAMA_MODEL = os.getenv("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
 RAG_TEMPERATURE = float(os.getenv("RAG_TEMPERATURE", "0.1"))
 RAG_CONTEXT_WINDOW = int(os.getenv("RAG_CONTEXT_WINDOW", "8192"))
-RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Primary embedding model (Qwen3-Embedding-4B recommended)
+RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-4B")
+# Fallback embedding model if primary fails to load (e.g., OOM)
+RAG_FALLBACK_EMBEDDING_MODEL = os.getenv("RAG_FALLBACK_EMBEDDING_MODEL", "BAAI/bge-m3")
+# MRL output dimension for Qwen3 (None = full 2560 dims; e.g., 1024 or 512 for speed/memory)
+RAG_EMBEDDING_DIM = os.getenv("RAG_EMBEDDING_DIM")
+RAG_EMBEDDING_DIM = int(RAG_EMBEDDING_DIM) if RAG_EMBEDDING_DIM else None
+# Query instruction for instruction-aware embedding models (Qwen3)
+RAG_EMBEDDING_INSTRUCTION = os.getenv("RAG_EMBEDDING_INSTRUCTION", "")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.85"))
 

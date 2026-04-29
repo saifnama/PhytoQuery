@@ -15,7 +15,6 @@ from pathlib import Path
 from dataclasses import dataclass
 from backend.core.http_client import HttpClientManager
 
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
@@ -39,6 +38,9 @@ from backend.config_rag import (
     RAG_TEMPERATURE,
     RAG_CONTEXT_WINDOW,
     RAG_EMBEDDING_MODEL,
+    RAG_FALLBACK_EMBEDDING_MODEL,
+    RAG_EMBEDDING_DIM,
+    RAG_EMBEDDING_INSTRUCTION,
     RAG_TOP_K,
     RAG_SIMILARITY_THRESHOLD,
     get_rag_provider,
@@ -70,6 +72,24 @@ class RAGConfig:
     parser_type: str = "pymupdf"  # "pymupdf" (fast) or "docling" (detailed)
     max_num_pages: int = 200
     max_file_size: int = 104_857_600  # 100 MB
+    # Embedding models
+    fallback_embedding_model: str = RAG_FALLBACK_EMBEDDING_MODEL
+    embedding_dim: Optional[int] = RAG_EMBEDDING_DIM  # MRL truncation (None = full dim)
+    embedding_instruction: Optional[str] = RAG_EMBEDDING_INSTRUCTION or None  # Query instruction for Qwen3
+    # Reranker model
+    reranker_model: str = "zeroentropy/zerank-2"
+    reranker_max_length: int = 2048
+    # Instruction prepended to queries for domain-aware reranking
+    reranker_instruction: str = (
+        "You are ranking passages from life science and biology research papers. "
+        "Prioritize content about: genes, proteins, enzymes, metabolic pathways, molecular biology, "
+        "cell biology, genetics, genomics, transcriptomics, proteomics, metabolomics, "
+        "bioactive compounds, natural products, phytochemistry, plant extracts, "
+        "analytical techniques (HPLC, GC-MS, NMR, sequencing), biological activity "
+        "(antioxidant, antimicrobial, anti-inflammatory, cytotoxicity), "
+        "medicinal plants, ethnobotany, and traditional medicine. "
+        "Methods, results, and data-driven findings are highly relevant."
+    )
     chroma_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data",
@@ -211,20 +231,124 @@ class OllamaLLM:
         raise last_exception
 
 
+class PhytoQueryEmbeddings:
+    """Custom embeddings with Qwen3-Embedding-4B primary and bge-m3 fallback.
+
+    Implements the LangChain Embeddings interface for ChromaDB compatibility.
+    For Qwen3, queries use prompt_name="query" for instruction-aware retrieval;
+    documents are encoded without prompts. Falls back to bge-m3 on load failure.
+    """
+
+    def __init__(
+        self,
+        primary_model: str = "Qwen/Qwen3-Embedding-4B",
+        fallback_model: str = "BAAI/bge-m3",
+        device: str = "cpu",
+        mrl_dim: Optional[int] = None,
+        query_instruction: Optional[str] = None,
+    ):
+        self.device = device
+        self.mrl_dim = mrl_dim
+        self.query_instruction = query_instruction
+        self.model_name = primary_model
+        self.model_dim: int = 2560  # Qwen3-Embedding-4B default
+
+        # Try primary model first
+        self._model = self._load_model(primary_model, fallback_model)
+
+    def _load_model(self, primary: str, fallback: str):
+        """Load embedding model with fallback on failure."""
+        from sentence_transformers import SentenceTransformer
+
+        for model_name in [primary, fallback]:
+            try:
+                logger.info(f"Loading embedding model: {model_name}...")
+                kwargs = {"device": self.device, "trust_remote_code": True}
+                # Enable fp16 on CUDA for speed/memory; keep fp32 on CPU
+                if self.device.startswith("cuda"):
+                    kwargs["model_kwargs"] = {"torch_dtype": "auto"}
+                model = SentenceTransformer(model_name, **kwargs)
+                self.model_name = model_name
+                # Detect dimension from the model
+                self.model_dim = (
+                    model.get_sentence_embedding_dimension() or self.model_dim
+                )
+                logger.info(
+                    f"Embedding model loaded: {model_name} "
+                    f"(dim={self.model_dim}, device={self.device})"
+                )
+                return model
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load embedding model {model_name}: {e}"
+                )
+                if model_name == primary:
+                    logger.info(f"Falling back to {fallback}...")
+                else:
+                    raise RuntimeError(
+                        f"Both primary ({primary}) and fallback ({fallback}) "
+                        f"embedding models failed to load."
+                    )
+        return None  # unreachable, but satisfies type checker
+
+    def _maybe_truncate(self, embeddings: List[List[float]]) -> List[List[float]]:
+        """Truncate embeddings to MRL dimension if configured."""
+        if self.mrl_dim and self.mrl_dim < self.model_dim:
+            return [emb[: self.mrl_dim] for emb in embeddings]
+        return embeddings
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embed a list of documents. No instruction prompt for documents."""
+        embeddings = self._model.encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        ).tolist()
+        return self._maybe_truncate(embeddings)
+
+    def embed_query(self, text: str) -> List[float]:
+        """Embed a query. Uses instruction prompt for Qwen3 models."""
+        if "qwen" in self.model_name.lower() and self.query_instruction:
+            # Qwen3 supports prompt_name for built-in or custom prompts
+            embeddings = self._model.encode(
+                [text],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                prompt_name="query",
+            )
+        else:
+            embeddings = self._model.encode(
+                [text],
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+        result = embeddings[0].tolist()
+        if self.mrl_dim and self.mrl_dim < self.model_dim:
+            result = result[: self.mrl_dim]
+        return result
+
+
 class RAGService:
     def __init__(self):
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=config.embedding_model,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
+        self.embeddings = PhytoQueryEmbeddings(
+            primary_model=config.embedding_model,
+            fallback_model=config.fallback_embedding_model,
+            device="cpu",
+            mrl_dim=config.embedding_dim,
+            query_instruction=config.embedding_instruction,
         )
         try:
-            logger.info("Loading CrossEncoder for reranking...")
-            self.reranker = CrossEncoder(
-                "cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512, device="cpu"
-            )
+            logger.info(f"Loading reranker: {config.reranker_model}...")
+            kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
+            # zerank-2 requires trust_remote_code
+            if "zerank" in config.reranker_model.lower():
+                kwargs["trust_remote_code"] = True
+            self.reranker = CrossEncoder(config.reranker_model, **kwargs)
         except Exception as e:
-            logger.warning(f"Failed to load CrossEncoder: {e}")
+            logger.warning(f"Failed to load reranker: {e}")
             self.reranker = None
 
         self.llm = OllamaLLM(
@@ -286,6 +410,16 @@ class RAGService:
                 result.append(chunk)
         return result
 
+    def _get_collection_suffix(self) -> str:
+        """Generate a short suffix based on the active embedding model and dimension.
+
+        This ensures ChromaDB collections are versioned by embedding config,
+        preventing dimension mismatch when switching models.
+        """
+        model_key = f"{self.embeddings.model_name}:{self.embeddings.model_dim}"
+        short_hash = hashlib.md5(model_key.encode()).hexdigest()[:8]
+        return short_hash
+
     def _get_user_collection(self, user_id: str) -> Chroma:
         """Get or create a ChromaDB collection for a specific user."""
         if user_id in self._vectorstore_cache:
@@ -294,7 +428,8 @@ class RAGService:
         # Create user-specific collection
         # Sanitize user_id for collection name (alphanumeric + underscore only)
         safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        collection_name = f"user_{safe_user_id}"
+        model_suffix = self._get_collection_suffix()
+        collection_name = f"user_{safe_user_id}_{model_suffix}"
 
         # User-specific persist directory
         user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
@@ -655,7 +790,12 @@ class RAGService:
             try:
                 import numpy as np
 
-                pairs = [[question, res["doc"].page_content] for res in search_results]
+                # Build query with instruction for zerank-2 instruction-following
+                if config.reranker_instruction and "zerank" in config.reranker_model.lower():
+                    query_text = f'<query> "{question}" </query>\n<instruction> {config.reranker_instruction} </instruction>'
+                else:
+                    query_text = question
+                pairs = [[query_text, res["doc"].page_content] for res in search_results]
                 rerank_scores = self.reranker.predict(pairs)
 
                 for i, score in enumerate(rerank_scores):
