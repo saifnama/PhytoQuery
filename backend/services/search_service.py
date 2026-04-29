@@ -172,12 +172,95 @@ class SearchService:
 
     @staticmethod
     def _map_openalex_type(article_type: str) -> str:
+        """Normalize article type for OpenAlex API.
+
+        Accepts both Europe PMC-style names (Research-article → article)
+        and OpenAlex names (article, review, dataset, etc.) directly.
+        """
         normalized = (article_type or "").strip().lower()
-        if normalized == "research-article":
-            return "article"
-        if normalized == "review":
-            return "review"
-        return normalized
+        # Europe PMC → OpenAlex mappings
+        epmc_to_oa = {
+            "research-article": "article",
+            "review": "review",
+        }
+        return epmc_to_oa.get(normalized, normalized)
+
+    @classmethod
+    async def get_openalex_type_counts(cls) -> List[Dict[str, Any]]:
+        """Fetch work type counts from OpenAlex API.
+
+        Returns a list of {key, display_name, count} sorted by count desc.
+        Cached for 1 hour to avoid repeated API calls.
+        """
+        cache_key = "openalex_type_counts"
+        now = time.time()
+        # Use a longer TTL (1 hour) for type counts
+        if cache_key in _SEARCH_CACHE:
+            cached = _SEARCH_CACHE[cache_key]
+            if cached.get("timestamp", 0) + 3600 > now:
+                return cached.get("data", [])
+
+        try:
+            client = await HttpClientManager.get_client()
+            # Apply same base filters as search_openalex so counts reflect
+            # the Biology/Life Sciences + Open Access + Full Text subset
+            response = await client.get(
+                f"{cls.OPENALEX_BASE_URL}/works",
+                params={
+                    "group_by": "type",
+                    "per_page": 200,
+                    "filter": "has_doi:true,has_content.pdf:true,is_oa:true,primary_topic.domain.id:1",
+                },
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            results = []
+            for group in data.get("group_by", []):
+                key = group.get("key_display_name", "")
+                count = group.get("count", 0)
+                if key:
+                    results.append({
+                        "key": key,
+                        "display_name": key.replace("-", " ").title(),
+                        "count": count,
+                    })
+
+            # Sort by count descending
+            results.sort(key=lambda x: x["count"], reverse=True)
+
+            _SEARCH_CACHE[cache_key] = {"data": results, "timestamp": now}
+            return results
+        except Exception as e:
+            logger.warning(f"Failed to fetch OpenAlex type counts: {e}")
+            # Return fallback list with no hardcoded counts
+            return [
+                {"key": "article", "display_name": "Article", "count": None},
+                {"key": "book-chapter", "display_name": "Book Chapter", "count": None},
+                {"key": "dataset", "display_name": "Dataset", "count": None},
+                {"key": "other", "display_name": "Other", "count": None},
+                {"key": "dissertation", "display_name": "Dissertation", "count": None},
+                {"key": "preprint", "display_name": "Preprint", "count": None},
+                {"key": "book", "display_name": "Book", "count": None},
+                {"key": "review", "display_name": "Review", "count": None},
+                {"key": "paratext", "display_name": "Paratext", "count": None},
+                {"key": "libguides", "display_name": "Libguides", "count": None},
+                {"key": "letter", "display_name": "Letter", "count": None},
+                {"key": "report", "display_name": "Report", "count": None},
+                {"key": "peer-review", "display_name": "Peer Review", "count": None},
+                {"key": "reference-entry", "display_name": "Reference Entry", "count": None},
+                {"key": "editorial", "display_name": "Editorial", "count": None},
+                {"key": "erratum", "display_name": "Erratum", "count": None},
+                {"key": "standard", "display_name": "Standard", "count": None},
+                {"key": "supplementary-materials", "display_name": "Supplementary Materials", "count": None},
+                {"key": "retraction", "display_name": "Retraction", "count": None},
+                {"key": "software", "display_name": "Software", "count": None},
+                {"key": "database", "display_name": "Database", "count": None},
+                {"key": "book-section", "display_name": "Book Section", "count": None},
+                {"key": "report-component", "display_name": "Report Component", "count": None},
+                {"key": "grant", "display_name": "Grant", "count": None},
+            ]
 
     @staticmethod
     def _normalize_doi(value: Optional[str]) -> str:

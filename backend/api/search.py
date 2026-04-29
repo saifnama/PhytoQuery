@@ -20,8 +20,8 @@ async def search_papers_json(
     source: str = Form("europepmc"),  # "europepmc" or "openalex" (default: europepmc)
 ):
     """JSON endpoint for searching literature.
-    
-    source param: 
+
+    source param:
     - "europepmc" = Europe PMC only (default)
     - "openalex" = OpenAlex only
     """
@@ -29,7 +29,7 @@ async def search_papers_json(
     source = source.lower() if source else "europepmc"
     if source not in ("europepmc", "openalex"):
         source = "europepmc"
-    
+
     filters = {
         "open_access": open_access,
         "has_full_text": has_full_text,
@@ -47,3 +47,30 @@ async def search_papers_json(
     except Exception as e:
         logger.error(f"Search failed: {e}")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/types")
+async def get_article_types(source: str = "openalex"):
+    """Get available article types for a search source.
+
+    - source="openalex": Returns OpenAlex work types with live counts
+    - source="europepmc": Returns Europe PMC publication types
+    """
+    source = source.lower() if source else "openalex"
+
+    if source == "openalex":
+        try:
+            types = await SearchService.get_openalex_type_counts()
+            return {"types": types}
+        except Exception as e:
+            logger.error(f"Failed to fetch OpenAlex types: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+
+    # Europe PMC types (static list)
+    return {
+        "types": [
+            {"key": "", "display_name": "Any Type", "count": None},
+            {"key": "Research-article", "display_name": "Research Article", "count": None},
+            {"key": "Review", "display_name": "Review", "count": None},
+        ]
+    }

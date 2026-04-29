@@ -269,9 +269,11 @@ class PhytoQueryEmbeddings:
                     kwargs["model_kwargs"] = {"torch_dtype": "auto"}
                 model = SentenceTransformer(model_name, **kwargs)
                 self.model_name = model_name
-                # Detect dimension from the model
+                # Detect dimension from the model (support both old and new API)
                 self.model_dim = (
-                    model.get_sentence_embedding_dimension() or self.model_dim
+                    getattr(model, "get_embedding_dimension", None)()
+                    or getattr(model, "get_sentence_embedding_dimension", None)()
+                    or self.model_dim
                 )
                 logger.info(
                     f"Embedding model loaded: {model_name} "
