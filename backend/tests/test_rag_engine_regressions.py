@@ -294,3 +294,100 @@ def test_ollama_invoke_enforces_timeout_budget(monkeypatch):
         assert exc.__class__.__name__ == "RAGLLMTimeoutError"
     else:
         raise AssertionError("Expected RAGLLMTimeoutError")
+
+
+# --- Device Detection Tests ---
+
+def test_get_optimal_device_respects_env_override(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    monkeypatch.setenv("RAG_DEVICE", "cuda")
+    assert rag_engine.get_optimal_device() == "cuda"
+    monkeypatch.setenv("RAG_DEVICE", "mps")
+    assert rag_engine.get_optimal_device() == "mps"
+    monkeypatch.setenv("RAG_DEVICE", "cpu")
+    assert rag_engine.get_optimal_device() == "cpu"
+
+
+def test_get_optimal_device_prefers_cuda_then_mps_then_cpu(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    monkeypatch.delenv("RAG_DEVICE", raising=False)
+
+    # Simulate torch module with varying availability
+    class FakeCuda:
+        is_available = staticmethod(lambda: True)
+        device_count = staticmethod(lambda: 1)
+
+    class FakeMps:
+        is_available = staticmethod(lambda: True)
+
+    class FakeBackends:
+        mps = FakeMps()
+
+    class TorchCuda:
+        cuda = FakeCuda()
+        backends = FakeBackends()
+
+    class TorchMps:
+        cuda = type("FakeCuda", (), {"is_available": staticmethod(lambda: False), "device_count": staticmethod(lambda: 0)})()
+        backends = FakeBackends()
+
+    class TorchNone:
+        cuda = type("FakeCuda", (), {"is_available": staticmethod(lambda: False), "device_count": staticmethod(lambda: 0)})()
+        backends = type("FakeBackends", (), {"mps": type("FakeMps", (), {"is_available": staticmethod(lambda: False)})()})()
+
+    # CUDA available
+    monkeypatch.setitem(sys.modules, "torch", TorchCuda())
+    assert rag_engine.get_optimal_device() == "cuda"
+
+    # MPS only
+    monkeypatch.setitem(sys.modules, "torch", TorchMps())
+    assert rag_engine.get_optimal_device() == "mps"
+
+    # Neither
+    monkeypatch.setitem(sys.modules, "torch", TorchNone())
+    assert rag_engine.get_optimal_device() == "cpu"
+
+
+def test_build_cuda_model_kwargs_with_flash_attn_and_multi_gpu(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    # Simulate flash-attn available
+    fake_flash = types.ModuleType("flash_attn")
+    monkeypatch.setitem(sys.modules, "flash_attn", fake_flash)
+
+    # Simulate 2 GPUs
+    class FakeMultiGpu:
+        is_available = staticmethod(lambda: True)
+        device_count = staticmethod(lambda: 2)
+
+    monkeypatch.setitem(sys.modules, "torch", type("T", (), {"cuda": FakeMultiGpu()})())
+
+    kwargs = rag_engine._build_cuda_model_kwargs(enable_flash_attn=True, enable_multi_gpu=True)
+    assert kwargs["torch_dtype"] == "auto"
+    assert kwargs["attn_implementation"] == "flash_attention_2"
+    assert kwargs["device_map"] == "auto"
+
+
+def test_build_cuda_model_kwargs_without_flash_attn(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    # No flash-attn module
+    monkeypatch.delitem(sys.modules, "flash_attn", raising=False)
+
+    class FakeSingleGpu:
+        is_available = staticmethod(lambda: True)
+        device_count = staticmethod(lambda: 1)
+
+    monkeypatch.setitem(sys.modules, "torch", type("T", (), {"cuda": FakeSingleGpu()})())
+
+    kwargs = rag_engine._build_cuda_model_kwargs(enable_flash_attn=True, enable_multi_gpu=False)
+    assert kwargs["torch_dtype"] == "auto"
+    assert "attn_implementation" not in kwargs
+    assert "device_map" not in kwargs
+
+
+def test_build_cuda_model_kwargs_disabled(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    kwargs = rag_engine._build_cuda_model_kwargs(enable_flash_attn=False, enable_multi_gpu=False)
+    assert kwargs == {"torch_dtype": "auto"}

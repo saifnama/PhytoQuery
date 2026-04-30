@@ -39,6 +39,15 @@ RAG_EMBEDDING_DIM = int(RAG_EMBEDDING_DIM) if RAG_EMBEDDING_DIM else None
 RAG_EMBEDDING_INSTRUCTION = os.getenv("RAG_EMBEDDING_INSTRUCTION", "")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.85"))
+# Accelerator override: "cuda" | "mps" | "cpu".  When unset the backend auto-detects
+# the best device (cuda > mps > cpu).
+RAG_DEVICE = os.getenv("RAG_DEVICE", "")
+# Enterprise: shard embedding/reranker models across all visible CUDA GPUs via
+# HuggingFace device_map="auto".  Only applies when the detected device is cuda.
+RAG_MULTI_GPU = os.getenv("RAG_MULTI_GPU", "false").strip().lower() in {"1", "true", "yes"}
+# Use Flash Attention 2 on CUDA when available (requires flash-attn package).
+# Falls back to eager attention if the package is missing.
+RAG_USE_FLASH_ATTENTION = os.getenv("RAG_USE_FLASH_ATTENTION", "true").strip().lower() not in {"0", "false", "no"}
 
 
 def get_rag_provider() -> dict:

@@ -39,8 +39,76 @@ from backend.config_rag import (
     RAG_EMBEDDING_INSTRUCTION,
     RAG_TOP_K,
     RAG_SIMILARITY_THRESHOLD,
+    RAG_MULTI_GPU,
+    RAG_USE_FLASH_ATTENTION,
     get_rag_provider,
 )
+
+
+# --- Device Detection ---
+def get_optimal_device() -> str:
+    """Detect the best available accelerator: cuda > mps > cpu.
+
+    Priority:
+      1. NVIDIA CUDA (Linux/Windows servers, A100, etc.)
+      2. Apple MPS (MacBook Pro M4, M3, M2, M1)
+      3. CPU fallback (universal, slowest)
+
+    Can be overridden via the ``RAG_DEVICE`` environment variable.
+    """
+    env_override = os.getenv("RAG_DEVICE", "").strip().lower()
+    if env_override:
+        return env_override
+
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        return "cuda"
+
+    # Apple Silicon MPS support (torch >= 1.12)
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+
+    return "cpu"
+
+
+def _has_multiple_gpus() -> bool:
+    """Return True when CUDA is available and more than one GPU is visible."""
+    try:
+        import torch
+        return torch.cuda.is_available() and torch.cuda.device_count() > 1
+    except ImportError:
+        return False
+
+
+def _flash_attn_available() -> bool:
+    """Check whether flash-attn is installed and importable."""
+    try:
+        import flash_attn  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _build_cuda_model_kwargs(enable_flash_attn: bool = True, enable_multi_gpu: bool = False) -> Dict[str, Any]:
+    """Build model_kwargs for CUDA loading.
+
+    Args:
+        enable_flash_attn: Whether to try Flash Attention 2 (requires flash-attn package).
+        enable_multi_gpu: Whether to shard across all visible GPUs via device_map="auto".
+
+    Returns:
+        Dict suitable for passing as ``model_kwargs`` to SentenceTransformer / CrossEncoder.
+    """
+    kwargs: Dict[str, Any] = {"torch_dtype": "auto"}
+    if enable_multi_gpu and _has_multiple_gpus():
+        kwargs["device_map"] = "auto"
+    if enable_flash_attn and _flash_attn_available():
+        kwargs["attn_implementation"] = "flash_attention_2"
+    return kwargs
 
 
 # --- RAG Configuration ---
@@ -256,11 +324,11 @@ class PhytoQueryEmbeddings:
         self,
         primary_model: str = "Qwen/Qwen3-Embedding-4B",
         fallback_model: str = "BAAI/bge-m3",
-        device: str = "cpu",
+        device: Optional[str] = None,
         mrl_dim: Optional[int] = None,
         query_instruction: Optional[str] = None,
     ):
-        self.device = device
+        self.device = device or get_optimal_device()
         self.mrl_dim = mrl_dim
         self.query_instruction = query_instruction
         self.model_name = primary_model
@@ -270,16 +338,43 @@ class PhytoQueryEmbeddings:
         self._model = self._load_model(primary_model, fallback_model)
 
     def _load_model(self, primary: str, fallback: str):
-        """Load embedding model with fallback on failure."""
+        """Load embedding model with fallback on failure.
+
+        For CUDA we enable fp16 (auto dtype) for speed/memory savings.
+        For Apple MPS we keep fp32 because MPS fp16 support is still maturing.
+        CPU always stays fp32.
+        """
         from sentence_transformers import SentenceTransformer
 
         for model_name in [primary, fallback]:
             try:
-                logger.info(f"Loading embedding model: {model_name}...")
-                kwargs = {"device": self.device, "trust_remote_code": True}
-                # Enable fp16 on CUDA for speed/memory; keep fp32 on CPU
+                logger.info(f"Loading embedding model: {model_name} on {self.device}...")
+                kwargs: Dict[str, Any] = {"trust_remote_code": True}
+
                 if self.device.startswith("cuda"):
-                    kwargs["model_kwargs"] = {"torch_dtype": "auto"}
+                    cuda_kwargs = _build_cuda_model_kwargs(
+                        enable_flash_attn=RAG_USE_FLASH_ATTENTION,
+                        enable_multi_gpu=RAG_MULTI_GPU,
+                    )
+                    if "device_map" in cuda_kwargs:
+                        # device_map="auto" handles its own device placement;
+                        # passing device= as well can raise a conflict.
+                        kwargs["model_kwargs"] = cuda_kwargs
+                    else:
+                        kwargs["device"] = self.device
+                        kwargs["model_kwargs"] = cuda_kwargs
+                    if _flash_attn_available():
+                        logger.info("Flash Attention 2 enabled for embedding model.")
+                    if RAG_MULTI_GPU and _has_multiple_gpus():
+                        try:
+                            import torch as _torch
+                            gpu_count = _torch.cuda.device_count()
+                        except ImportError:
+                            gpu_count = 0
+                        logger.info(f"Multi-GPU enabled: sharding across {gpu_count} GPUs.")
+                else:
+                    kwargs["device"] = self.device
+
                 model = SentenceTransformer(model_name, **kwargs)
                 self.model_name = model_name
                 # Detect dimension from the model (support both old and new API)
@@ -295,8 +390,28 @@ class PhytoQueryEmbeddings:
                 return model
             except Exception as e:
                 logger.warning(
-                    f"Failed to load embedding model {model_name}: {e}"
+                    f"Failed to load embedding model {model_name} on {self.device}: {e}"
                 )
+                # If MPS failed, silently retry on CPU before giving up entirely
+                if self.device == "mps" and model_name == primary:
+                    try:
+                        logger.info("Retrying embedding model load on CPU due to MPS failure...")
+                        kwargs = {"device": "cpu", "trust_remote_code": True}
+                        model = SentenceTransformer(model_name, **kwargs)
+                        self.model_name = model_name
+                        self.model_dim = (
+                            getattr(model, "get_embedding_dimension", None)()
+                            or getattr(model, "get_sentence_embedding_dimension", None)()
+                            or self.model_dim
+                        )
+                        self.device = "cpu"
+                        logger.info(
+                            f"Embedding model loaded (CPU fallback): {model_name} "
+                            f"(dim={self.model_dim}, device=cpu)"
+                        )
+                        return model
+                    except Exception:
+                        pass  # fall through to normal fallback flow
                 if model_name == primary:
                     logger.info(f"Falling back to {fallback}...")
                 else:
@@ -348,23 +463,54 @@ class PhytoQueryEmbeddings:
 
 class RAGService:
     def __init__(self):
+        self._device = get_optimal_device()
         self.embeddings = PhytoQueryEmbeddings(
             primary_model=config.embedding_model,
             fallback_model=config.fallback_embedding_model,
-            device="cpu",
+            device=self._device,
             mrl_dim=config.embedding_dim,
             query_instruction=config.embedding_instruction,
         )
+        # Sync service device with embeddings (embeddings may have fallen back to cpu)
+        self._device = self.embeddings.device
         try:
-            logger.info(f"Loading reranker: {config.reranker_model}...")
-            kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
+            logger.info(f"Loading reranker: {config.reranker_model} on {self._device}...")
+            kwargs: Dict[str, Any] = {"max_length": config.reranker_max_length}
             # zerank-2 requires trust_remote_code
             if "zerank" in config.reranker_model.lower():
                 kwargs["trust_remote_code"] = True
+
+            if self._device.startswith("cuda"):
+                cuda_kwargs = _build_cuda_model_kwargs(
+                    enable_flash_attn=RAG_USE_FLASH_ATTENTION,
+                    enable_multi_gpu=RAG_MULTI_GPU,
+                )
+                if "device_map" in cuda_kwargs:
+                    kwargs["model_kwargs"] = cuda_kwargs
+                else:
+                    kwargs["device"] = self._device
+                    kwargs["model_kwargs"] = cuda_kwargs
+            else:
+                kwargs["device"] = self._device
+
             self.reranker = CrossEncoder(config.reranker_model, **kwargs)
         except Exception as e:
-            logger.warning(f"Failed to load reranker: {e}")
-            self.reranker = None
+            logger.warning(f"Failed to load reranker on {self._device}: {e}")
+            # If MPS failed, retry on CPU
+            if self._device == "mps":
+                try:
+                    logger.info("Retrying reranker load on CPU due to MPS failure...")
+                    kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
+                    if "zerank" in config.reranker_model.lower():
+                        kwargs["trust_remote_code"] = True
+                    self.reranker = CrossEncoder(config.reranker_model, **kwargs)
+                    self._device = "cpu"
+                    logger.info("Reranker loaded successfully on CPU fallback.")
+                except Exception as cpu_e:
+                    logger.warning(f"Failed to load reranker on CPU fallback: {cpu_e}")
+                    self.reranker = None
+            else:
+                self.reranker = None
 
         self.llm = OllamaLLM(
             base_url=LLM_PROVIDER.get("url", "").replace("/api/chat", ""),
