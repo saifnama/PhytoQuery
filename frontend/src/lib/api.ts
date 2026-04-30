@@ -3,6 +3,7 @@ import type {
   NERResponse,
   QueryResponse,
   UploadResponse,
+  UploadJobStatus,
   PaperData,
   SearchResult,
   SearchFilters,
@@ -174,6 +175,14 @@ export const ragApi = {
     formData.append('parser_type', parserType);
 
     const response = await api.post<UploadResponse>('/api/chat/upload/json', formData);
+    return response.data;
+  },
+
+  /**
+   * Poll the status of an async upload job.
+   */
+  async getUploadStatus(jobId: string): Promise<UploadJobStatus> {
+    const response = await api.get<UploadJobStatus>(`/api/chat/upload/status/${encodeURIComponent(jobId)}`);
     return response.data;
   },
 

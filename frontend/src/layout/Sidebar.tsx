@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Plus, SidebarSimple, FileText } from '@phosphor-icons/react';
 import { ragApi } from '../lib/api';
 
@@ -12,6 +12,52 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const startUploadPolling = (jobId: string) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    setIsUploading(true);
+    setUploadStatus('Processing upload...');
+
+    const poll = async () => {
+      try {
+        const status = await ragApi.getUploadStatus(jobId);
+        if (status.status === 'completed') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsUploading(false);
+          setUploadStatus(`Indexed ${status.files.length} file${status.files.length > 1 ? 's' : ''}.`);
+        } else if (status.status === 'failed') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsUploading(false);
+          setUploadStatus(`Upload failed: ${status.error || 'Unknown error'}`);
+        } else {
+          setUploadStatus(`Processing ${status.files.join(', ')}...`);
+        }
+      } catch (e) {
+        console.error('Poll error:', e);
+      }
+    };
+
+    poll();
+    pollIntervalRef.current = setInterval(poll, 2000);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -22,11 +68,15 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
 
     try {
       const result = await ragApi.uploadFiles(Array.from(files));
-      setUploadStatus(`Indexed ${result.files.length} files.`);
+      if (result.status === 'processing' && result.job_id) {
+        startUploadPolling(result.job_id);
+      } else {
+        setUploadStatus(`Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''}.`);
+        setIsUploading(false);
+      }
     } catch (error) {
       console.error('Upload failed:', error);
       setUploadStatus('Upload failed. Please try again.');
-    } finally {
       setIsUploading(false);
     }
   };

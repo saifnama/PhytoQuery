@@ -1,12 +1,16 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Request, Response
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Request, Response, BackgroundTasks
 from fastapi.responses import FileResponse
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import os
 import shutil
+import uuid
+import asyncio
+from datetime import datetime, timezone
 from backend.schemas.schemas import (
     QueryRequest,
     QueryResponse,
     UploadResponse,
+    UploadJobStatus,
     IndexedFileInfo,
 )
 from backend.services.rag_engine import RAGService, rag_service
@@ -29,18 +33,65 @@ UPLOAD_DIR = os.path.join(
     "uploads",
 )
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-# --- JSON Endpoints ---
+
+# In-memory upload job tracking (job_id -> job data)
+# NOTE: For production with multiple workers, use Redis or a database.
+_upload_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+async def _process_upload_job(job_id: str, saved_paths: List[str], parser_type: str, user_id: str):
+    """Background task: process and index uploaded PDFs without blocking the HTTP response."""
+    service = get_rag_service()
+    try:
+        # Run CPU-bound embedding generation in a thread pool so the event loop stays responsive
+        indexed_files = await asyncio.to_thread(
+            service.process_and_index_pdfs,
+            saved_paths,
+            parser_type=parser_type,
+            user_id=user_id,
+        )
+
+        # Generate summaries (LLM call, already async)
+        summaries = {}
+        for path in saved_paths:
+            filename = os.path.basename(path)
+            extracted_text = getattr(service, '_last_extracted_text', '')
+            if extracted_text:
+                try:
+                    summary = await service.summarize_document(extracted_text, filename)
+                    if summary:
+                        summaries[filename] = summary
+                except Exception as e:
+                    logger.warning(f"Summary generation failed for {filename}: {e}")
+
+        _upload_jobs[job_id].update({
+            "status": "completed",
+            "message": f"Successfully indexed {len(indexed_files)} files using {parser_type}",
+            "files": indexed_files,
+            "summaries": summaries if summaries else None,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(f"Upload job {job_id} completed: {len(indexed_files)} files indexed")
+    except Exception as e:
+        logger.error(f"Upload job {job_id} failed: {e}")
+        _upload_jobs[job_id].update({
+            "status": "failed",
+            "message": f"Indexing failed: {str(e)}",
+            "error": str(e),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
 
 @router.post("/upload/json", response_model=UploadResponse)
 async def upload_pdfs_json(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     service: RAGService = Depends(get_rag_service),
     parser_type: Optional[str] = Form("pymupdf"),
 ):
-    """Upload PDFs for indexing for a specific user.
+    """Upload PDFs for indexing. Returns immediately; processing continues in background.
 
     Args:
         parser_type: "pymupdf" for fast extraction, "docling" for detailed
@@ -68,32 +119,45 @@ async def upload_pdfs_json(
     if not saved_paths:
         raise HTTPException(status_code=400, detail="No valid PDF files uploaded")
 
-    try:
-        indexed_files = service.process_and_index_pdfs(
-            saved_paths, parser_type=parser_type, user_id=user_id
-        )
+    job_id = str(uuid.uuid4())
+    filenames = [os.path.basename(p) for p in saved_paths]
+    _upload_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "message": f"Processing {len(saved_paths)} file(s) with {parser_type}...",
+        "files": filenames,
+        "parser_type": parser_type,
+        "summaries": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+    }
 
-        # Generate summaries for each uploaded file
-        summaries = {}
-        for path in saved_paths:
-            filename = os.path.basename(path)
-            extracted_text = getattr(service, '_last_extracted_text', '')
-            if extracted_text:
-                try:
-                    summary = await service.summarize_document(extracted_text, filename)
-                    if summary:
-                        summaries[filename] = summary
-                except Exception as e:
-                    logger.warning(f"Summary generation failed for {filename}: {e}")
+    background_tasks.add_task(_process_upload_job, job_id, saved_paths, parser_type, user_id)
+    logger.info(f"Upload job {job_id} queued for user {user_id}: {len(saved_paths)} file(s)")
 
-        return UploadResponse(
-            status="success",
-            message=f"Successfully indexed {len(indexed_files)} files using {parser_type}",
-            files=indexed_files,
-            summaries=summaries if summaries else None,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
+    return UploadResponse(
+        status="processing",
+        message=f"Processing {len(saved_paths)} file(s) with {parser_type}. Poll /api/chat/upload/status/{job_id} for updates.",
+        files=filenames,
+        summaries=None,
+        job_id=job_id,
+    )
+
+
+@router.get("/upload/status/{job_id}", response_model=UploadJobStatus)
+async def get_upload_status(job_id: str):
+    """Get the status of an async upload job."""
+    job = _upload_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return UploadJobStatus(**job)
+
+
+@router.get("/upload/jobs")
+async def list_upload_jobs():
+    """List all active upload jobs."""
+    return list(_upload_jobs.values())
 
 
 @router.get("/files/json", response_model=List[IndexedFileInfo])

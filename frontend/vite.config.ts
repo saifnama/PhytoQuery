@@ -7,11 +7,20 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/ner': 'http://localhost:8000',
-      '/rag': 'http://localhost:8000',
+      '/ner': {
+        target: 'http://localhost:8000',
+        timeout: 600000,
+      },
+      '/rag': {
+        target: 'http://localhost:8000',
+        timeout: 600000,
+      },
       '/health': 'http://localhost:8000',
       '/static': 'http://localhost:8000',
-      '/api': 'http://localhost:8000',
+      '/api': {
+        target: 'http://localhost:8000',
+        timeout: 600000,
+      },
       '/doi': 'http://localhost:8000',
     },
   },

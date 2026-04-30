@@ -161,6 +161,16 @@ const RagPage: React.FC = () => {
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Auto-expand textarea
   useEffect(() => {
@@ -224,6 +234,53 @@ const RagPage: React.FC = () => {
     });
   }, []);
 
+  const startUploadPolling = useCallback((jobId: string, parserType: 'pymupdf' | 'docling') => {
+    // Clear any existing poll
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    setIsUploading(true);
+    setUploadStatus(`Processing upload...`);
+
+    const poll = async () => {
+      try {
+        const status = await ragApi.getUploadStatus(jobId);
+        if (status.status === 'completed') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsUploading(false);
+          setUploadStatus(
+            `Indexed ${status.files.length} file${status.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
+          );
+          applyUploadResult(
+            { files: status.files, summaries: status.summaries },
+            parserType
+          );
+          await loadIndexedFiles();
+        } else if (status.status === 'failed') {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+          setIsUploading(false);
+          setUploadStatus(`Upload failed: ${status.error || 'Unknown error'}`);
+        } else {
+          // still processing
+          setUploadStatus(`Processing ${status.files.join(', ')}...`);
+        }
+      } catch (e) {
+        // Keep polling on transient errors
+        console.error('Poll error:', e);
+      }
+    };
+
+    // Poll immediately, then every 2 seconds
+    poll();
+    pollIntervalRef.current = setInterval(poll, 2000);
+  }, [applyUploadResult, loadIndexedFiles]);
+
   const openPdfViewer = useCallback((file: UploadedFile) => {
     setActivePdfFile(file);
     setActivePdfUrl(buildChatFileContentUrl(file.name));
@@ -283,16 +340,20 @@ const RagPage: React.FC = () => {
         const finalName = filename.toLowerCase().endsWith('.pdf') ? filename : `${safeBase}.pdf`;
         const file = new File([blob], finalName, { type: 'application/pdf' });
         const result = await ragApi.uploadFiles([file], parserType);
-        applyUploadResult(result, parserType);
-        await loadIndexedFiles();
-        setUploadStatus(
-          `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
-        );
+        if (result.status === 'processing' && result.job_id) {
+          startUploadPolling(result.job_id, parserType);
+        } else {
+          applyUploadResult(result, parserType);
+          await loadIndexedFiles();
+          setUploadStatus(
+            `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
+          );
+        }
       } catch (error) {
         console.error('Paper PDF import failed:', error);
         setUploadStatus('Paper PDF import failed. Please try downloading it manually.');
-      } finally {
         setIsUploading(false);
+      } finally {
         navigate(location.pathname, { replace: true, state: null });
       }
     };
@@ -313,20 +374,23 @@ const RagPage: React.FC = () => {
 
     try {
       const result = await ragApi.uploadFiles(Array.from(files), parserType);
-      setUploadStatus(
-        `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
-          parserType === 'pymupdf' ? 'Fast' : 'Detailed'
-        }).`
-      );
-      applyUploadResult(result, parserType);
-
-      // Refresh from backend to get accurate chunk counts
-      await loadIndexedFiles();
+      if (result.status === 'processing' && result.job_id) {
+        startUploadPolling(result.job_id, parserType);
+      } else {
+        setUploadStatus(
+          `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
+            parserType === 'pymupdf' ? 'Fast' : 'Detailed'
+          }).`
+        );
+        applyUploadResult(result, parserType);
+        // Refresh from backend to get accurate chunk counts
+        await loadIndexedFiles();
+      }
     } catch (error) {
       console.error('Upload failed:', error);
       setUploadStatus('Upload failed. Please try again.');
-    } finally {
       setIsUploading(false);
+    } finally {
       // Reset file input so the same file can be re-uploaded
       if (fileInputRef.current) fileInputRef.current.value = '';
     }

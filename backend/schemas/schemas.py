@@ -72,3 +72,16 @@ class UploadResponse(BaseModel):
     message: str
     files: List[str]
     summaries: Optional[Dict[str, str]] = None  # filename -> summary
+    job_id: Optional[str] = None  # Set when processing is async
+
+
+class UploadJobStatus(BaseModel):
+    job_id: str
+    status: str  # "processing", "completed", "failed"
+    message: str
+    files: List[str]
+    parser_type: str
+    summaries: Optional[Dict[str, str]] = None
+    error: Optional[str] = None
+    created_at: str
+    completed_at: Optional[str] = None

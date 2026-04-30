@@ -67,6 +67,19 @@ export interface UploadResponse {
   message: string;
   files: string[];
   summaries?: Record<string, string>;
+  job_id?: string;
+}
+
+export interface UploadJobStatus {
+  job_id: string;
+  status: string; // "processing" | "completed" | "failed"
+  message: string;
+  files: string[];
+  parser_type: string;
+  summaries?: Record<string, string>;
+  error?: string;
+  created_at: string;
+  completed_at?: string;
 }
 
 export interface IndexedFileInfo {
