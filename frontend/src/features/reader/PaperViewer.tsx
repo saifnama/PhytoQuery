@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { ChartBar, ChatDots, Download, DownloadSimple, PencilSimple } from '@phosphor-icons/react';
+import { ChartBar, ChatDots, Download, PencilSimple, Table } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -1570,8 +1570,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             }}
             className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-100 cursor-pointer"
           >
-            <DownloadSimple size={16} weight="bold" />
-            <span>Export CSV</span>
+            <Table size={16} weight="bold" />
+            <span>Export Entities</span>
           </button>
         )}
 

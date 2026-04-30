@@ -24,6 +24,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+frontend_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "PHYTOQUERY_FRONTEND_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+
 # Mount frontend assets (React build)
 frontend_dist = os.path.join(os.getcwd(), "frontend", "dist")
 if os.path.exists(frontend_dist):
@@ -36,7 +46,7 @@ if os.path.exists(frontend_dist):
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

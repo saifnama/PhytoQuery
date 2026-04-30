@@ -280,7 +280,9 @@ const PaperPage: React.FC = () => {
     setIsAddingToMyPapers(true);
 
     try {
-      const { blob, filename } = await paperApi.fetchPdf(pdfIdentifier);
+      const { blob, filename } = paperData?.pdfUrl
+        ? await paperApi.fetchPdfFromUrl(paperData.pdfUrl)
+        : await paperApi.fetchPdf(pdfIdentifier);
       const file = new File([blob], filename || `${pdfIdentifier}.pdf`, {
         type: 'application/pdf',
       });
@@ -289,6 +291,7 @@ const PaperPage: React.FC = () => {
 
       const res = await fetch('/ner/upload/json', {
         method: 'POST',
+        credentials: 'same-origin',
         body: formData,
       });
 
@@ -306,6 +309,7 @@ const PaperPage: React.FC = () => {
         id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         name: data.metadata?.title || filename || pdfIdentifier,
         doi: data.metadata?.doi || paperData?.doi,
+        pdfUrl: data.pdf_url || null,
         entities: data.entities || {},
         entity_counts: data.entity_counts || {},
         entity_count: data.entity_count || 0,

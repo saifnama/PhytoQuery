@@ -22,24 +22,7 @@ const API_BASE = ''; // Uses Vite proxy in dev, same origin in production
 const api = axios.create({
   baseURL: API_BASE,
   timeout: 600000, 
-});
-
-// Generate or retrieve a unique user ID for this browser
-export const getUserId = (): string => {
-  const STORAGE_KEY = 'pq_user_id';
-  let userId = localStorage.getItem(STORAGE_KEY);
-  if (!userId) {
-    // Generate a simple unique ID
-    userId = 'user_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
-    localStorage.setItem(STORAGE_KEY, userId);
-  }
-  return userId;
-};
-
-// Add user ID to all requests for multi-user isolation
-api.interceptors.request.use((config) => {
-  config.headers['X-User-ID'] = getUserId();
-  return config;
+  withCredentials: true,
 });
 
 // NER API
@@ -244,8 +227,7 @@ export const ragApi = {
 };
 
 export const buildChatFileContentUrl = (filename: string): string => {
-  const params = new URLSearchParams({ user_id: getUserId() });
-  return `/api/chat/files/${encodeURIComponent(filename)}/content?${params.toString()}`;
+  return `/api/chat/files/${encodeURIComponent(filename)}/content`;
 };
 
 // Search Types API

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Request, Response
 from fastapi.responses import FileResponse
 from typing import List, Optional
 import os
@@ -11,6 +11,7 @@ from backend.schemas.schemas import (
 )
 from backend.services.rag_engine import RAGService, rag_service
 from backend.services.rag_engine import RAGProviderAuthError
+from backend.core.session import attach_session_cookie, get_or_set_session_id
 import logging
 
 
@@ -28,31 +29,23 @@ UPLOAD_DIR = os.path.join(
     "uploads",
 )
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-
-def get_user_id(x_user_id: Optional[str] = Header(None)) -> str:
-    """Extract user ID from header, default to 'default' if not provided."""
-    if not x_user_id or not x_user_id.strip():
-        return "default"
-    return x_user_id.strip()
-
-
 # --- JSON Endpoints ---
 
 
 @router.post("/upload/json", response_model=UploadResponse)
 async def upload_pdfs_json(
+    request: Request,
+    response: Response,
     files: List[UploadFile] = File(...),
     service: RAGService = Depends(get_rag_service),
     parser_type: Optional[str] = Form("pymupdf"),
-    x_user_id: Optional[str] = Header(None),
 ):
     """Upload PDFs for indexing for a specific user.
 
     Args:
         parser_type: "pymupdf" for fast extraction, "docling" for detailed
     """
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(request, response)
 
     # Validate parser_type
     if parser_type not in ("pymupdf", "docling"):
@@ -105,22 +98,23 @@ async def upload_pdfs_json(
 
 @router.get("/files/json", response_model=List[IndexedFileInfo])
 async def list_indexed_files(
+    request: Request,
+    response: Response,
     service: RAGService = Depends(get_rag_service),
-    x_user_id: Optional[str] = Header(None),
 ):
     """List all documents currently indexed in the RAG vector store for the user."""
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(request, response)
     return service.list_indexed_files(user_id)
 
 
 @router.get("/files/{filename}/content")
 async def get_uploaded_file_content(
+    request: Request,
+    response: Response,
     filename: str,
-    user_id: Optional[str] = None,
-    x_user_id: Optional[str] = Header(None),
 ):
     """Return the uploaded PDF file for inline viewing for the current user."""
-    user_id = get_user_id(x_user_id or user_id)
+    user_id = get_or_set_session_id(request, response)
     safe_filename = os.path.basename(filename)
     if safe_filename != filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -129,22 +123,25 @@ async def get_uploaded_file_content(
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(
+    file_response = FileResponse(
         file_path,
         media_type="application/pdf",
         filename=safe_filename,
         content_disposition_type="inline",
     )
+    attach_session_cookie(file_response, request, user_id)
+    return file_response
 
 
 @router.delete("/files/{filename}")
 async def delete_source(
+    request: Request,
+    response: Response,
     filename: str,
     service: RAGService = Depends(get_rag_service),
-    x_user_id: Optional[str] = Header(None),
 ):
     """Remove a source completely: chunks from ChromaDB."""
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(request, response)
     success = service.delete_source(filename, user_id)
     if not success:
         raise HTTPException(status_code=500, detail=f"Failed to delete '{filename}'")
@@ -156,11 +153,12 @@ async def delete_source(
 
 @router.post("/reset")
 async def reset_rag_data(
+    request: Request,
+    response: Response,
     service: RAGService = Depends(get_rag_service),
-    x_user_id: Optional[str] = Header(None),
 ):
     """Permanently delete all indexed chunks for the user."""
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(request, response)
     success = service.reset_rag(user_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to reset RAG data.")
@@ -172,12 +170,13 @@ async def reset_rag_data(
 
 @router.post("/cleanup")
 async def cleanup_user_data(
+    request: Request,
+    response: Response,
     service: RAGService = Depends(get_rag_service),
-    x_user_id: Optional[str] = Header(None),
 ):
     """Clean up all data for a user when they close their browser.
     Deletes: ChromaDB, uploads, and all user files."""
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(request, response)
     success = service.cleanup_user(user_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to cleanup user data.")
@@ -186,20 +185,21 @@ async def cleanup_user_data(
 
 @router.post("/query/json", response_model=QueryResponse)
 async def query_rag_json(
-    request: QueryRequest,
+    http_request: Request,
+    response: Response,
+    payload: QueryRequest,
     service: RAGService = Depends(get_rag_service),
-    x_user_id: Optional[str] = Header(None),
 ):
-    user_id = get_user_id(x_user_id)
+    user_id = get_or_set_session_id(http_request, response)
     try:
         # Convert chat_history from Pydantic models to dicts
         history = None
-        if request.chat_history:
-            history = [{"role": m.role, "content": m.content} for m in request.chat_history]
+        if payload.chat_history:
+            history = [{"role": m.role, "content": m.content} for m in payload.chat_history]
 
         result = await service.query(
-            request.query,
-            filter_files=request.selected_files,
+            payload.query,
+            filter_files=payload.selected_files,
             user_id=user_id,
             chat_history=history,
         )

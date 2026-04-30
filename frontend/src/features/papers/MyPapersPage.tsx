@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, FlowerLotus, Table, ChartBar, X } from '@phosphor-icons/react';
+import { Plus, FlowerLotus, Table, ChartBar, X, DotsThreeVertical, Trash } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import type { Entity } from '../../types';
 
@@ -7,6 +7,7 @@ interface UploadedPaper {
   id: string;
   name: string;
   doi?: string;
+  pdfUrl?: string | null;
   entities: Record<string, string[]>;
   entity_counts: Record<string, { text: string; count: number; canonical?: string; aliases?: string[] }[]>;
   entity_count: number;
@@ -44,12 +45,19 @@ const getEntityAccentColor = (label: string) => `var(${getEntityAccentVar(label)
 const MyPapersPage = () => {
   const [papers, setPapers] = useState<UploadedPaper[]>([]);
   const [selectedPaper, setSelectedPaper] = useState<UploadedPaper | null>(null);
+  const [viewerPaper, setViewerPaper] = useState<UploadedPaper | null>(null);
+  const [viewerSrc, setViewerSrc] = useState<string | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [isViewerLoading, setIsViewerLoading] = useState(false);
+  const [viewerLoadingPaperId, setViewerLoadingPaperId] = useState<string | null>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [compareSelection, setCompareSelection] = useState<Set<string>>(new Set());
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const [activePaperMenu, setActivePaperMenu] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Check localStorage queue for papers added from PaperPage
   useEffect(() => {
@@ -71,6 +79,100 @@ const MyPapersPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (viewerSrc) {
+        URL.revokeObjectURL(viewerSrc);
+      }
+    };
+  }, [viewerSrc]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setActivePaperMenu(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const closeViewer = () => {
+    if (viewerSrc) {
+      URL.revokeObjectURL(viewerSrc);
+    }
+    setViewerSrc(null);
+    setViewerError(null);
+    setIsViewerLoading(false);
+    setViewerLoadingPaperId(null);
+    setViewerPaper(null);
+  };
+
+  const openViewer = async (paper: UploadedPaper) => {
+    if (!paper.pdfUrl) return;
+
+    if (viewerSrc) {
+      URL.revokeObjectURL(viewerSrc);
+      setViewerSrc(null);
+    }
+
+    setViewerPaper(paper);
+    setViewerError(null);
+    setIsViewerLoading(true);
+    setViewerLoadingPaperId(paper.id);
+
+    try {
+      const res = await fetch(paper.pdfUrl);
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || 'Failed to load PDF preview');
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      setViewerSrc(objectUrl);
+    } catch (error) {
+      console.error('Failed to open PDF viewer:', error);
+      setViewerError('Unable to load this PDF preview right now.');
+    } finally {
+      setIsViewerLoading(false);
+      setViewerLoadingPaperId(null);
+    }
+  };
+
+  const deletePaper = async (paper: UploadedPaper) => {
+    if (!paper.pdfUrl) {
+      // Just remove from local state if no backend PDF
+      setPapers(prev => prev.filter(p => p.id !== paper.id));
+      if (selectedPaper?.id === paper.id) {
+        setSelectedPaper(null);
+      }
+      return;
+    }
+
+    try {
+      const storedFilename = paper.pdfUrl.split('/').pop()?.split('?')[0];
+      if (storedFilename) {
+        const res = await fetch(`/ner/uploaded/${storedFilename}`, {
+          method: 'DELETE',
+          credentials: 'same-origin',
+        });
+        if (!res.ok) {
+          console.error('Failed to delete PDF from backend:', await res.text());
+        }
+      }
+    } catch (err) {
+      console.error('Delete paper failed:', err);
+    } finally {
+      setPapers(prev => prev.filter(p => p.id !== paper.id));
+      if (selectedPaper?.id === paper.id) {
+        setSelectedPaper(null);
+      }
+      setActivePaperMenu(null);
+    }
+  };
+
   const processFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
@@ -91,7 +193,11 @@ const MyPapersPage = () => {
       try {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch('/ner/upload/json', { method: 'POST', body: formData });
+        const res = await fetch('/ner/upload/json', {
+          method: 'POST',
+          credentials: 'same-origin',
+          body: formData,
+        });
         if (!res.ok) continue;
         const data = await res.json();
 
@@ -99,6 +205,7 @@ const MyPapersPage = () => {
           id: `${Date.now()}_${i}`,
           name: data.metadata.title || file.name,
           doi: data.metadata.doi,
+          pdfUrl: data.pdf_url || null,
           entities: data.entities,
           entity_counts: data.entity_counts || {},
           entity_count: data.entity_count,
@@ -345,7 +452,7 @@ const MyPapersPage = () => {
                     setExpandedGroups(initial);
                   }
                 }}
-                className={`flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors ${
+                className={`group flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors ${
                   isSelected && !isCompareMode
                     ? 'border-blue-500 bg-blue-50'
                     : isInCompare && isCompareMode
@@ -364,10 +471,63 @@ const MyPapersPage = () => {
                     )}
                   </div>
                 )}
-                <div className="w-6 h-7 rounded bg-red-100 flex items-center justify-center text-[10px] font-bold text-red-600 flex-shrink-0">PDF</div>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void openViewer(paper);
+                  }}
+                  disabled={!paper.pdfUrl}
+                  title={paper.pdfUrl ? `Open PDF for ${paper.name}` : 'PDF viewer unavailable for this paper'}
+                  className={`w-6 h-7 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-colors ${
+                    paper.pdfUrl
+                      ? 'bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer'
+                      : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                  }`}
+                >
+                  {viewerLoadingPaperId === paper.id ? (
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+                  ) : (
+                    'PDF'
+                  )}
+                </button>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-slate-900 truncate">{paper.name}</p>
                   <p className="text-[10px] text-slate-400 truncate">{paper.doi || 'No DOI'}</p>
+                </div>
+
+                {/* Three-dots menu */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setActivePaperMenu(activePaperMenu === paper.id ? null : paper.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-opacity hover:text-slate-600"
+                    title="Paper options"
+                  >
+                    <DotsThreeVertical size={16} weight="bold" />
+                  </button>
+
+                  {activePaperMenu === paper.id && (
+                    <div
+                      ref={menuRef}
+                      className="absolute right-0 top-7 z-20 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                    >
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void deletePaper(paper);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        <Trash size={14} weight="bold" />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -413,7 +573,7 @@ const MyPapersPage = () => {
                     className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-100 cursor-pointer"
                   >
                     <Table size={16} weight="bold" />
-                    <span>Export CSV</span>
+                    <span>Export Entities</span>
                   </button>
 
                   <div className="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -545,6 +705,50 @@ const MyPapersPage = () => {
           </div>
         )}
       </div>
+
+      {viewerPaper && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={closeViewer}>
+          <div
+            className="flex h-[min(92vh,56rem)] w-[min(96vw,72rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <h3 className="truncate text-sm font-semibold text-slate-900">{viewerPaper.name}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeViewer}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
+                title="Close PDF viewer"
+              >
+                <X size={18} weight="bold" />
+              </button>
+            </div>
+
+            <div className="flex-1 bg-slate-100 p-3">
+              {isViewerLoading ? (
+                <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white text-sm text-slate-500">
+                  <div className="flex items-center gap-3">
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+                    <span>Loading PDF preview...</span>
+                  </div>
+                </div>
+              ) : viewerError ? (
+                <div className="flex h-full items-center justify-center rounded-xl border border-red-100 bg-white px-6 text-center text-sm text-red-500">
+                  {viewerError}
+                </div>
+              ) : (
+                <iframe
+                  src={viewerSrc || undefined}
+                  title={`PDF viewer for ${viewerPaper.name}`}
+                  className="h-full w-full rounded-xl border border-slate-200 bg-white"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
