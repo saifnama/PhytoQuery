@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Header from './layout/Header';
 import { ErrorBoundary } from './ui/ErrorBoundary';
@@ -5,8 +6,22 @@ import NerPage from './features/search/NerPage';
 import MyPapersPage from './features/papers/MyPapersPage';
 import RagPage from './features/chat/RagPage';
 import PaperPage from './features/reader/PaperPage';
+import { ragApi } from './lib/api';
 
 function App() {
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Fire-and-forget cleanup request using keepalive so it survives tab close
+      try {
+        ragApi.cleanupUserData();
+      } catch {
+        // Best-effort cleanup on browser close
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
   return (
     <BrowserRouter>
       <div className="bg-gray-50 flex h-screen overflow-hidden">

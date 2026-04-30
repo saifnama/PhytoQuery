@@ -5,15 +5,15 @@ import re
 import gc
 import time
 import hashlib
-import httpx
 import json
 import asyncio
 import logging
+import tempfile
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from pathlib import Path
 from dataclasses import dataclass
 from backend.core.http_client import HttpClientManager
+from backend.core.rag_storage import delete_user_upload_file, delete_user_uploads
 
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
@@ -31,10 +31,6 @@ except ImportError:
 
 # --- Import from RAG config ---
 from backend.config_rag import (
-    RAG_OLLAMA_URL,
-    RAG_OLLAMA_MODEL,
-    RAG_OPENROUTER_API_KEY,
-    RAG_OPENROUTER_MODEL,
     RAG_TEMPERATURE,
     RAG_CONTEXT_WINDOW,
     RAG_EMBEDDING_MODEL,
@@ -51,6 +47,9 @@ from backend.config_rag import (
 LLM_PROVIDER = get_rag_provider()
 LLM_TEMPERATURE = RAG_TEMPERATURE
 LLM_CONTEXT_WINDOW = RAG_CONTEXT_WINDOW
+RAG_QUERY_TIMEOUT_SECONDS = float(os.getenv("RAG_QUERY_TIMEOUT_SECONDS", "45"))
+RAG_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("RAG_SUMMARY_TIMEOUT_SECONDS", "20"))
+RAG_RERANK_CANDIDATE_K = int(os.getenv("RAG_RERANK_CANDIDATE_K", "24"))
 
 
 @dataclass
@@ -62,9 +61,10 @@ class RAGConfig:
     child_chunk_size: int = 250
     child_chunk_overlap: int = 50
     # Retrieval settings
-    retrieve_k: int = 200  # Initial vector search: how many child chunks to fetch
+    retrieve_k: int = 60  # Initial vector search: how many child chunks to fetch
     rerank_threshold: float = 0.1  # Minimum cross-encoder score to keep
-    max_parents: int = 20  # Max unique parent chunks passed to LLM
+    max_parents: int = 10  # Max unique parent chunks passed to LLM
+    rerank_candidate_k: int = RAG_RERANK_CANDIDATE_K
     min_chunk_size: int = 50
     similarity_threshold: float = RAG_SIMILARITY_THRESHOLD
     embedding_model: str = RAG_EMBEDDING_MODEL
@@ -106,6 +106,10 @@ class RAGProviderAuthError(Exception):
     """Raised when the configured LLM provider rejects authentication/config."""
 
 
+class RAGLLMTimeoutError(Exception):
+    """Raised when an RAG LLM request exceeds the configured wall-clock budget."""
+
+
 class OllamaLLM:
     """Wrapper for Ollama or OpenRouter API"""
 
@@ -132,6 +136,7 @@ class OllamaLLM:
         messages: list = None,
         max_retries: int = 3,
         base_delay: float = 2.0,
+        timeout_seconds: Optional[float] = None,
     ):
         """Invoke the LLM with either a simple prompt or a full messages list.
 
@@ -175,7 +180,15 @@ class OllamaLLM:
                 kwargs = {"json": payload, "timeout": None}
                 if self.provider == "openrouter":
                     kwargs["headers"] = headers
-                response = await client.post(self.url, **kwargs)
+                try:
+                    if timeout_seconds is not None:
+                        response = await asyncio.wait_for(client.post(self.url, **kwargs), timeout=timeout_seconds)
+                    else:
+                        response = await client.post(self.url, **kwargs)
+                except asyncio.TimeoutError as exc:
+                    raise RAGLLMTimeoutError(
+                        f"RAG {self.provider} request exceeded {timeout_seconds}s timeout"
+                    ) from exc
 
                 if self.provider == "openrouter" and response.status_code == 401:
                     raise RAGProviderAuthError(
@@ -368,6 +381,19 @@ class RAGService:
         # Lazy-init semantic child splitter
         self._semantic_splitter = None
 
+    async def _invoke_llm(self, *, prompt: str = None, messages: list = None, timeout_seconds: Optional[float] = None, max_retries: int = 3):
+        try:
+            return await self.llm.invoke(
+                prompt=prompt,
+                messages=messages,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            )
+        except TypeError as exc:
+            if "timeout_seconds" not in str(exc):
+                raise
+            return await self.llm.invoke(prompt=prompt, messages=messages)
+
     def _get_semantic_splitter(self):
         """Lazy-init SemanticChunker for child-level semantic splitting."""
         if self._semantic_splitter is None:
@@ -491,8 +517,82 @@ class RAGService:
     def _save_parent_store(self, user_id: str, store: Dict[str, str]) -> None:
         path = self._get_parent_store_path(user_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False)
+        fd, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(path),
+            prefix=os.path.basename(path),
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(store, f, ensure_ascii=False)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _delete_existing_sources(self, user_id: str, source_names: List[str]) -> None:
+        """Delete existing chunks for sources that are being re-uploaded."""
+        if not source_names:
+            return
+
+        vectorstore = self._get_user_collection(user_id)
+        collection = vectorstore._collection
+        deleted_any = False
+        for source_name in sorted(set(source_names)):
+            result = collection.get(where={"source": source_name}, include=["metadatas"])
+            ids_to_delete = result.get("ids", [])
+            if ids_to_delete:
+                collection.delete(ids=ids_to_delete)
+                deleted_any = True
+                logger.info(
+                    f"Replaced existing indexed chunks for '{source_name}' from user {user_id}'s ChromaDB"
+                )
+
+        if deleted_any:
+            self._cleanup_parent_store(user_id)
+
+    def process_and_index_pdfs_with_texts(
+        self,
+        pdf_paths: List[str],
+        parser_type: str = "pymupdf",
+        user_id: str = "default",
+    ):
+        """Extract, chunk, index, and return per-file extracted text for summaries."""
+        all_docs = []
+        extracted_texts: Dict[str, str] = {}
+        source_names = [os.path.basename(path) for path in pdf_paths]
+        for path in pdf_paths:
+            docs, extracted_text = self._process_pdf(
+                path,
+                user_id=user_id,
+                parser_type=parser_type,
+            )
+            all_docs.extend(docs)
+            if extracted_text:
+                extracted_texts[os.path.basename(path)] = extracted_text
+
+        if all_docs:
+            try:
+                self._delete_existing_sources(user_id, source_names)
+                vectorstore = self._get_user_collection(user_id)
+                vectorstore.add_documents(all_docs)
+            except Exception:
+                logger.warning(
+                    f"Indexing failed for user {user_id}; invalidating cached Chroma client and retrying once."
+                )
+                self._invalidate_user_collection(user_id)
+                time.sleep(0.3)  # Wait for SQLite file handles to release on Windows
+                self._delete_existing_sources(user_id, source_names)
+                vectorstore = self._get_user_collection(user_id)
+                try:
+                    vectorstore.add_documents(all_docs)
+                except Exception as retry_err:
+                    logger.error(
+                        f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
+                    )
+                    raise retry_err from retry_err
+
+        return source_names, extracted_texts
 
     def _add_parents(self, user_id: str, parent_chunks: List[Dict[str, str]]) -> None:
         store = self._load_parent_store(user_id)
@@ -535,30 +635,12 @@ class RAGService:
             parser_type: "pymupdf" for fast extraction, "docling" for detailed
             user_id: Unique identifier for the user (isolates their documents)
         """
-        all_docs = []
-        for path in pdf_paths:
-            docs = self._process_pdf(path, user_id=user_id, parser_type=parser_type)
-            all_docs.extend(docs)
-
-        if all_docs:
-            try:
-                vectorstore = self._get_user_collection(user_id)
-                vectorstore.add_documents(all_docs)
-            except Exception:
-                logger.warning(
-                    f"Indexing failed for user {user_id}; invalidating cached Chroma client and retrying once."
-                )
-                self._invalidate_user_collection(user_id)
-                time.sleep(0.3)  # Wait for SQLite file handles to release on Windows
-                vectorstore = self._get_user_collection(user_id)
-                try:
-                    vectorstore.add_documents(all_docs)
-                except Exception as retry_err:
-                    logger.error(
-                        f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
-                    )
-                    raise retry_err from retry_err
-        return [os.path.basename(p) for p in pdf_paths]
+        indexed_files, _ = self.process_and_index_pdfs_with_texts(
+            pdf_paths,
+            parser_type=parser_type,
+            user_id=user_id,
+        )
+        return indexed_files
 
     def _extract_pdf_metadata(self, pdf_path: str) -> Dict[str, str]:
         """Extract DOI, authors, and journal from PDF metadata and first pages."""
@@ -601,7 +683,7 @@ class RAGService:
             logger.warning(f"Metadata extraction failed for {pdf_path}: {e}")
         return metadata
 
-    def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "pymupdf") -> List[Document]:
+    def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "pymupdf"):
         """PDF processing pipeline (Preserved from notebook)"""
         source = os.path.basename(pdf_path)
 
@@ -623,10 +705,7 @@ class RAGService:
             full_text, tables = self._extract_with_docling(pdf_path)
 
         if not full_text:
-            return []
-
-        # Store full text for summarization later
-        self._last_extracted_text = full_text
+            return [], ""
 
         # 2. Section detection & Chunking (Regex-based fallback)
         sections = self._detect_sections(full_text)
@@ -656,7 +735,7 @@ class RAGService:
             meta["doc_journal"] = pdf_metadata.get("journal", "")
             documents.append(Document(page_content=chunk["text"], metadata=meta))
 
-        return documents
+        return documents, full_text
 
     def _hybrid_search(
         self,
@@ -702,7 +781,6 @@ class RAGService:
 
             all_docs_text = all_data.get("documents", [])
             all_metas = all_data.get("metadatas", [])
-            all_ids = all_data.get("ids", [])
 
             if all_docs_text:
                 # Tokenize for BM25
@@ -792,16 +870,18 @@ class RAGService:
             try:
                 import numpy as np
 
+                candidate_results = search_results[: config.rerank_candidate_k]
+
                 # Build query with instruction for zerank-2 instruction-following
                 if config.reranker_instruction and "zerank" in config.reranker_model.lower():
                     query_text = f'<query> "{question}" </query>\n<instruction> {config.reranker_instruction} </instruction>'
                 else:
                     query_text = question
-                pairs = [[query_text, res["doc"].page_content] for res in search_results]
+                pairs = [[query_text, res["doc"].page_content] for res in candidate_results]
                 rerank_scores = self.reranker.predict(pairs)
 
                 for i, score in enumerate(rerank_scores):
-                    search_results[i]["rerank_score"] = float(score)
+                    candidate_results[i]["rerank_score"] = float(score)
 
                 # Normalize scores to 0-1 range using min-max
                 scores = np.array(rerank_scores)
@@ -811,12 +891,12 @@ class RAGService:
                 else:
                     normalized = np.ones_like(scores) * 0.5
 
-                for i, r in enumerate(search_results):
+                for i, r in enumerate(candidate_results):
                     r["normalized_score"] = round(float(normalized[i]) * 100)
 
                 # Filter by relevance threshold (>= 0.1 normalized)
                 reranked_children = [
-                    r for r in search_results
+                    r for i, r in enumerate(candidate_results)
                     if normalized[i] >= config.rerank_threshold
                 ]
                 # Sort by rerank score descending
@@ -855,6 +935,8 @@ class RAGService:
                     "rerank_score": result.get("rerank_score", 0),
                     "normalized_score": result.get("normalized_score", 0),
                 })
+            else:
+                parent_results.append(result)
 
             if len(parent_results) >= config.max_parents:
                 break
@@ -902,6 +984,12 @@ class RAGService:
 
         context = "\n\n".join(context_parts)
 
+        if not context_parts:
+            return {
+                "answer": "I couldn't find enough relevant context in the selected sources to answer that question.",
+                "sources": [],
+            }
+
         # Build multi-turn messages for conversation memory
         system_msg = {
             "role": "system",
@@ -928,7 +1016,7 @@ class RAGService:
 Question: {question}"""
         messages.append({"role": "user", "content": user_msg})
 
-        response = await self.llm.invoke(messages=messages)
+        response = await self._invoke_llm(messages=messages, timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS)
         return {"answer": response.content.strip(), "sources": sources}
 
     async def summarize_document(self, text: str, filename: str) -> str:
@@ -942,8 +1030,11 @@ Excerpt:
 {excerpt}
 
 Summary:"""
-            response = await self.llm.invoke(prompt)
+            response = await self._invoke_llm(prompt=prompt, max_retries=1, timeout_seconds=RAG_SUMMARY_TIMEOUT_SECONDS)
             return response.content.strip()
+        except RAGLLMTimeoutError as e:
+            logger.warning(f"Summary generation timed out for {filename}: {e}")
+            return ""
         except Exception as e:
             logger.warning(f"Summarization failed for {filename}: {e}")
             return ""
@@ -1002,6 +1093,7 @@ Summary:"""
 
             # Clean up orphaned parent chunks
             self._cleanup_parent_store(user_id)
+            delete_user_upload_file(user_id, filename)
             self._invalidate_user_collection(user_id)
 
             return True
@@ -1027,6 +1119,8 @@ Summary:"""
             if os.path.exists(parent_path):
                 os.remove(parent_path)
                 logger.info(f"Deleted parent store for user {user_id}")
+
+            delete_user_uploads(user_id)
 
             self._invalidate_user_collection(user_id)
 
@@ -1075,20 +1169,8 @@ Summary:"""
             logger.warning(f"Could not delete parent store: {e}")
 
         # 3. Delete user's uploads folder
-        upload_dir = os.path.join(
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            ),
-            "data",
-            "uploads",
-            user_id,
-        )
         try:
-            if os.path.exists(upload_dir):
-                import shutil
-
-                shutil.rmtree(upload_dir)
-                logger.info(f"Deleted uploads folder: {upload_dir}")
+            delete_user_uploads(user_id)
         except Exception as e:
             logger.error(f"Error deleting uploads folder: {e}")
             success = False
@@ -1099,7 +1181,7 @@ Summary:"""
 
     # --- Helper Methods (Logic preserved from notebook) ---
 
-    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict, user_id: str = "default") -> List[Document]:
+    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict, user_id: str = "default"):
         """Advanced Docling processing using HybridChunker and parent-child chunking.
 
         Creates parent chunks (contextualized by HybridChunker) and child chunks
@@ -1135,8 +1217,7 @@ Summary:"""
         if not result or not result.document:
             raise ValueError("Docling returned empty result")
 
-        # Update last extracted text for summarization
-        self._last_extracted_text = result.document.export_to_markdown()
+        extracted_text = result.document.export_to_markdown()
 
         # Initialize HybridChunker (respects headers and structure)
         if HybridChunker and HuggingFaceTokenizer:
@@ -1229,7 +1310,7 @@ Summary:"""
             total = len(unique_children)
             for c in unique_children:
                 c["metadata"]["total_chunks"] = total
-            return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children]
+            return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children], extracted_text
         else:
             logger.warning("Docling chunking components missing, falling back to basic extraction")
             raise ImportError("Docling chunking components missing")
@@ -1442,7 +1523,6 @@ Summary:"""
         """
         doc_metadata = doc_metadata or {}
         doc_title = doc_metadata.get("title", "")
-        doc_authors = doc_metadata.get("authors", "")
 
         # Build contextual header prefix for this document
         def build_header(section_title: str) -> str:
