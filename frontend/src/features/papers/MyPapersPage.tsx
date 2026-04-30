@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, FlowerLotus, Table, ChartBar, X } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import type { Entity } from '../../types';
@@ -50,6 +50,26 @@ const MyPapersPage = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check localStorage queue for papers added from PaperPage
+  useEffect(() => {
+    const queueKey = 'phytoquery_mypapers_queue';
+    const raw = localStorage.getItem(queueKey);
+    if (!raw) return;
+    try {
+      const queued: UploadedPaper[] = JSON.parse(raw);
+      if (queued.length > 0) {
+        setPapers(prev => [...queued, ...prev]);
+        if (!selectedPaper) {
+          setSelectedPaper(queued[0]);
+        }
+        localStorage.removeItem(queueKey);
+      }
+    } catch {
+      // Ignore malformed queue
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const processFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;

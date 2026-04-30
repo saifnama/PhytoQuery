@@ -22,6 +22,8 @@ const PaperPage: React.FC = () => {
   const [pdfActionError, setPdfActionError] = useState<string | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isUploadingToRag, setIsUploadingToRag] = useState(false);
+  const [isAddingToMyPapers, setIsAddingToMyPapers] = useState(false);
+  const [myPapersActionError, setMyPapersActionError] = useState<string | null>(null);
 
   const isExplicitDoi = (value: string) => {
     const trimmed = value.trim();
@@ -272,6 +274,51 @@ const PaperPage: React.FC = () => {
     }
   };
 
+  const handleAddToMyPapers = async () => {
+    if (!pdfIdentifier || isAddingToMyPapers) return;
+    setMyPapersActionError(null);
+    setIsAddingToMyPapers(true);
+
+    try {
+      const { blob, filename } = await paperApi.fetchPdf(pdfIdentifier);
+      const file = new File([blob], filename || `${pdfIdentifier}.pdf`, {
+        type: 'application/pdf',
+      });
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/ner/upload/json', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to process paper for My Papers');
+      }
+
+      const data = await res.json();
+
+      // Save to localStorage queue so MyPapersPage can pick it up
+      const queueKey = 'phytoquery_mypapers_queue';
+      const existing = JSON.parse(localStorage.getItem(queueKey) || '[]');
+      const paperEntry = {
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: data.metadata?.title || filename || pdfIdentifier,
+        doi: data.metadata?.doi || paperData?.doi,
+        entities: data.entities || {},
+        entity_counts: data.entity_counts || {},
+        entity_count: data.entity_count || 0,
+      };
+      localStorage.setItem(queueKey, JSON.stringify([paperEntry, ...existing]));
+    } catch (err: any) {
+      console.error('Add to My Papers failed:', err);
+      setMyPapersActionError(err?.message || 'Failed to add paper to My Papers');
+    } finally {
+      setIsAddingToMyPapers(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -338,9 +385,12 @@ const PaperPage: React.FC = () => {
       canUsePdfActions={canUsePdfActions}
       isDownloadingPdf={isDownloadingPdf}
       isUploadingToRag={isUploadingToRag}
+      isAddingToMyPapers={isAddingToMyPapers}
       pdfActionError={pdfActionError}
+      myPapersActionError={myPapersActionError}
       onDownloadPdf={handleDownloadPdf}
       onSendPdfToRag={handleSendPdfToRag}
+      onAddToMyPapers={handleAddToMyPapers}
       onExtract={handleExtract}
     />
   );

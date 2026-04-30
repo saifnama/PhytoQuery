@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { DownloadSimple, PencilSimple, UploadSimple } from '@phosphor-icons/react';
+import { ChartBar, ChatDots, Download, DownloadSimple, PencilSimple } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -250,9 +250,12 @@ interface PaperViewerProps {
   canUsePdfActions?: boolean;
   isDownloadingPdf?: boolean;
   isUploadingToRag?: boolean;
+  isAddingToMyPapers?: boolean;
   pdfActionError?: string | null;
+  myPapersActionError?: string | null;
   onDownloadPdf?: () => void;
   onSendPdfToRag?: () => void;
+  onAddToMyPapers?: () => void;
   onExtract?: () => void;
 }
 
@@ -292,12 +295,16 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   canUsePdfActions = false,
   isDownloadingPdf = false,
   isUploadingToRag = false,
+  isAddingToMyPapers = false,
   pdfActionError = null,
+  myPapersActionError = null,
   onDownloadPdf,
   onSendPdfToRag,
+  onAddToMyPapers,
   onExtract,
 }) => {
   const identifierValue = paperIdentifier?.value || 'paper';
+  const pdfToolbarError = myPapersActionError || pdfActionError;
 
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
@@ -1233,6 +1240,63 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 )}
               </div>
             )}
+            {canUsePdfActions && (
+              <>
+                <div className="mt-4 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onAddToMyPapers}
+                    disabled={isAddingToMyPapers}
+                    title="Add to My Papers"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
+                      isAddingToMyPapers ? 'cursor-wait opacity-60' : ''
+                    }`}
+                  >
+                    {isAddingToMyPapers ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                    ) : (
+                      <ChartBar size={18} weight="bold" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onSendPdfToRag}
+                    disabled={isUploadingToRag}
+                    title="Upload to RAG"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
+                      isUploadingToRag ? 'cursor-wait opacity-60' : ''
+                    }`}
+                  >
+                    {isUploadingToRag ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                    ) : (
+                      <ChatDots size={18} weight="bold" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onDownloadPdf}
+                    disabled={isDownloadingPdf}
+                    title="Download PDF"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
+                      isDownloadingPdf ? 'cursor-wait opacity-60' : ''
+                    }`}
+                  >
+                    {isDownloadingPdf ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                    ) : (
+                      <Download size={18} weight="bold" />
+                    )}
+                  </button>
+                </div>
+
+                {pdfToolbarError && (
+                  <p className="mt-2 text-xs text-red-500">{pdfToolbarError}</p>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -1447,44 +1511,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
       {/* Right Sidebar: Entity Groups */}
       <aside className="w-full lg:w-[380px] p-8 space-y-10 bg-slate-50/20 h-screen sticky top-0 overflow-y-auto custom-scrollbar shrink-0 relative z-30">
-        {canUsePdfActions && (
-          <div className="flex items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-bold uppercase tracking-widest shadow-sm">
-            <button
-              onClick={onDownloadPdf}
-              disabled={isDownloadingPdf}
-              className={`inline-flex items-center gap-2 transition-colors ${
-                isDownloadingPdf
-                  ? 'text-slate-400 cursor-wait'
-                  : 'text-slate-700 hover:text-blue-600 cursor-pointer'
-              }`}
-            >
-              {isDownloadingPdf ? (
-                <div className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
-              ) : (
-                <DownloadSimple size={16} weight="bold" />
-              )}
-              <span>{isDownloadingPdf ? 'Downloading PDF' : 'Download PDF'}</span>
-            </button>
-
-            <span className="text-slate-300">|</span>
-
-            <button
-              onClick={onSendPdfToRag}
-              disabled={isUploadingToRag}
-              className={`inline-flex items-center gap-2 text-slate-700 transition-colors hover:text-violet-600 ${
-                isUploadingToRag ? 'cursor-wait opacity-60' : 'cursor-pointer'
-              }`}
-            >
-              {isUploadingToRag ? (
-                <div className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-violet-600" />
-              ) : (
-                <UploadSimple size={16} weight="bold" />
-              )}
-              <span>{isUploadingToRag ? 'Uploading...' : 'Upload to RAG'}</span>
-            </button>
-          </div>
-        )}
-
         {/* Find Key Terms Button */}
         <button
           onClick={() => {
@@ -1553,13 +1579,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           <div className="p-4 bg-red-50 border border-red-100 rounded-xl">
             <p className="text-[10px] text-red-600 font-bold uppercase tracking-wider mb-1">Extraction Error</p>
             <p className="text-[11px] text-red-500 leading-relaxed font-medium">{extractionError}</p>
-          </div>
-        )}
-
-        {pdfActionError && (
-          <div className="p-4 bg-red-50 border border-red-100 rounded-xl">
-            <p className="text-[10px] text-red-600 font-bold uppercase tracking-wider mb-1">PDF Error</p>
-            <p className="text-[11px] text-red-500 leading-relaxed font-medium">{pdfActionError}</p>
           </div>
         )}
 
