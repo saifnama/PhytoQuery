@@ -24,7 +24,7 @@ langchain-experimental==0.4.1
 langchain-text-splitters==1.1.2
 chromadb==1.5.8
 sentence-transformers==5.4.1
-transformers>=4.51.0  # Required for Qwen3-Embedding-4B
+transformers==4.57.1  # Keep in lockstep with zerank-2 + sentence-transformers integration
 rank-bm25==0.2.2
 
 # === PDF & Document Parsing ===

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Request, Response, BackgroundTasks
 from fastapi.responses import FileResponse
-from typing import List, Optional
+from typing import Any, List, Optional
 import os
 import shutil
 import uuid
@@ -13,18 +13,15 @@ from backend.schemas.schemas import (
     UploadJobStatus,
     IndexedFileInfo,
 )
-from backend.services.rag_engine import RAGService, rag_service
-from backend.services.rag_engine import RAGLLMTimeoutError, RAGProviderAuthError
 from backend.core.session import attach_session_cookie, get_or_set_session_id
 from backend.core.rag_storage import get_user_upload_file_path
 from backend.core.upload_jobs import UploadJobStore
 from backend.core.user_locks import user_lock_manager
 import logging
 
-
-# Dependency provider
-def get_rag_service() -> RAGService:
-    return rag_service
+def get_rag_service() -> Any:
+    from backend.services.rag_engine import get_rag_service as _get_rag_service
+    return _get_rag_service()
 
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
@@ -70,7 +67,7 @@ async def upload_pdfs_json(
     response: Response,
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
     parser_type: Optional[str] = Form("pymupdf"),
 ):
     """Upload PDFs for indexing. Returns immediately; processing continues in background.
@@ -146,7 +143,7 @@ async def list_upload_jobs(request: Request, response: Response):
 async def list_indexed_files(
     request: Request,
     response: Response,
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
 ):
     """List all documents currently indexed in the RAG vector store for the user."""
     user_id = get_or_set_session_id(request, response)
@@ -184,7 +181,7 @@ async def delete_source(
     request: Request,
     response: Response,
     filename: str,
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
 ):
     """Remove a source completely: chunks from ChromaDB."""
     user_id = get_or_set_session_id(request, response)
@@ -202,7 +199,7 @@ async def delete_source(
 async def reset_rag_data(
     request: Request,
     response: Response,
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
 ):
     """Permanently delete all indexed chunks for the user."""
     user_id = get_or_set_session_id(request, response)
@@ -222,7 +219,7 @@ async def reset_rag_data(
 async def cleanup_user_data(
     request: Request,
     response: Response,
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
 ):
     """Clean up all data for a user when they close their browser.
     Deletes: ChromaDB, uploads, and all user files."""
@@ -241,7 +238,7 @@ async def query_rag_json(
     http_request: Request,
     response: Response,
     payload: QueryRequest,
-    service: RAGService = Depends(get_rag_service),
+    service: Any = Depends(get_rag_service),
 ):
     user_id = get_or_set_session_id(http_request, response)
     try:
@@ -257,9 +254,10 @@ async def query_rag_json(
             chat_history=history,
         )
         return QueryResponse(**result)
-    except RAGProviderAuthError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except RAGLLMTimeoutError as e:
-        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
+        from backend.services import rag_engine as rag_engine_module
+        if isinstance(e, rag_engine_module.RAGProviderAuthError):
+            raise HTTPException(status_code=502, detail=str(e))
+        if isinstance(e, rag_engine_module.RAGLLMTimeoutError):
+            raise HTTPException(status_code=504, detail=str(e))
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")

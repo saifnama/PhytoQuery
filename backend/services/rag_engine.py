@@ -10,6 +10,7 @@ import asyncio
 import logging
 import tempfile
 import threading
+from importlib import metadata as importlib_metadata
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -205,6 +206,31 @@ LLM_CONTEXT_WINDOW = RAG_CONTEXT_WINDOW
 RAG_QUERY_TIMEOUT_SECONDS = float(os.getenv("RAG_QUERY_TIMEOUT_SECONDS", "45"))
 RAG_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("RAG_SUMMARY_TIMEOUT_SECONDS", "20"))
 RAG_RERANK_CANDIDATE_K = int(os.getenv("RAG_RERANK_CANDIDATE_K", "24"))
+RAG_RERANK_BATCH_SIZE = int(os.getenv("RAG_RERANK_BATCH_SIZE", "8"))
+ZERANK_EXPECTED_SENTENCE_TRANSFORMERS_VERSION = "5.4.1"
+ZERANK_EXPECTED_TRANSFORMERS_VERSION = "4.57.1"
+
+
+def _zerank_runtime_compatible() -> tuple[bool, str]:
+    try:
+        sentence_transformers_version = importlib_metadata.version("sentence-transformers")
+        transformers_version = importlib_metadata.version("transformers")
+    except importlib_metadata.PackageNotFoundError as exc:
+        return False, f"Required package missing for zerank-2 runtime: {exc}"
+
+    if sentence_transformers_version != ZERANK_EXPECTED_SENTENCE_TRANSFORMERS_VERSION:
+        return False, (
+            "sentence-transformers version drift detected for zerank-2: "
+            f"expected {ZERANK_EXPECTED_SENTENCE_TRANSFORMERS_VERSION}, got {sentence_transformers_version}"
+        )
+
+    if transformers_version != ZERANK_EXPECTED_TRANSFORMERS_VERSION:
+        return False, (
+            "transformers version drift detected for zerank-2: "
+            f"expected {ZERANK_EXPECTED_TRANSFORMERS_VERSION}, got {transformers_version}"
+        )
+
+    return True, ""
 
 
 @dataclass
@@ -217,9 +243,10 @@ class RAGConfig:
     child_chunk_overlap: int = 50
     # Retrieval settings
     retrieve_k: int = 60  # Initial vector search: how many child chunks to fetch
-    rerank_threshold: float = 0.1  # Minimum cross-encoder score to keep
+    rerank_threshold: float = 0.1  # Minimum normalized rerank score (0-1) to keep
     max_parents: int = 10  # Max unique parent chunks passed to LLM
     rerank_candidate_k: int = RAG_RERANK_CANDIDATE_K
+    rerank_batch_size: int = RAG_RERANK_BATCH_SIZE
     min_chunk_size: int = 50
     similarity_threshold: float = RAG_SIMILARITY_THRESHOLD
     embedding_model: str = RAG_EMBEDDING_MODEL
@@ -422,8 +449,11 @@ class PhytoQueryEmbeddings:
         self.model_dim: int = 2560  # Qwen3-Embedding-4B default
         self._timing_local = threading.local()
 
-        # Try primary model first
-        self._model = self._load_model(primary_model, fallback_model)
+        # Defer model loading to first use so RAGService construction is lightweight
+        self._primary_model = primary_model
+        self._fallback_model = fallback_model
+        self._model = None
+        self._model_lock = threading.Lock()
 
     def begin_timing_session(self) -> None:
         self._timing_local.session = {"calls": 0, "total_ms": 0.0, "texts": 0}
@@ -519,6 +549,15 @@ class PhytoQueryEmbeddings:
                     )
         return None  # unreachable, but satisfies type checker
 
+    def _ensure_model_loaded(self):
+        """Lazy-load the embedding model on first use."""
+        if self._model is not None:
+            return
+        with self._model_lock:
+            if self._model is not None:
+                return
+            self._model = self._load_model(self._primary_model, self._fallback_model)
+
     def _maybe_truncate(self, embeddings: List[List[float]]) -> List[List[float]]:
         """Truncate embeddings to MRL dimension if configured."""
         if self.mrl_dim and self.mrl_dim < self.model_dim:
@@ -527,6 +566,7 @@ class PhytoQueryEmbeddings:
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents. No instruction prompt for documents."""
+        self._ensure_model_loaded()
         started = time.perf_counter()
         embeddings = self._model.encode(
             texts,
@@ -544,6 +584,7 @@ class PhytoQueryEmbeddings:
 
     def embed_query(self, text: str) -> List[float]:
         """Embed a query. Uses instruction prompt for Qwen3 models."""
+        self._ensure_model_loaded()
         if "qwen" in self.model_name.lower() and self.query_instruction:
             # Qwen3 supports prompt_name for built-in or custom prompts
             embeddings = self._model.encode(
@@ -578,44 +619,10 @@ class RAGService:
         )
         # Sync service device with embeddings (embeddings may have fallen back to cpu)
         self._device = self.embeddings.device
-        try:
-            logger.info(f"Loading reranker: {config.reranker_model} on {self._device}...")
-            kwargs: Dict[str, Any] = {"max_length": config.reranker_max_length}
-            # zerank-2 requires trust_remote_code
-            if "zerank" in config.reranker_model.lower():
-                kwargs["trust_remote_code"] = True
 
-            if self._device.startswith("cuda"):
-                cuda_kwargs = _build_cuda_model_kwargs(
-                    enable_flash_attn=RAG_USE_FLASH_ATTENTION,
-                    enable_multi_gpu=RAG_MULTI_GPU,
-                )
-                if "device_map" in cuda_kwargs:
-                    kwargs["model_kwargs"] = cuda_kwargs
-                else:
-                    kwargs["device"] = self._device
-                    kwargs["model_kwargs"] = cuda_kwargs
-            else:
-                kwargs["device"] = self._device
-
-            self.reranker = CrossEncoder(config.reranker_model, **kwargs)
-        except Exception as e:
-            logger.warning(f"Failed to load reranker on {self._device}: {e}")
-            # If MPS failed, retry on CPU
-            if self._device == "mps":
-                try:
-                    logger.info("Retrying reranker load on CPU due to MPS failure...")
-                    kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
-                    if "zerank" in config.reranker_model.lower():
-                        kwargs["trust_remote_code"] = True
-                    self.reranker = CrossEncoder(config.reranker_model, **kwargs)
-                    self._device = "cpu"
-                    logger.info("Reranker loaded successfully on CPU fallback.")
-                except Exception as cpu_e:
-                    logger.warning(f"Failed to load reranker on CPU fallback: {cpu_e}")
-                    self.reranker = None
-            else:
-                self.reranker = None
+        # Defer reranker loading to first use so service construction is lightweight
+        self._reranker = ...  # sentinel: not loaded yet
+        self._reranker_lock = threading.Lock()
 
         self.llm = OllamaLLM(
             base_url=LLM_PROVIDER.get("url", "").replace("/api/chat", ""),
@@ -644,6 +651,63 @@ class RAGService:
             if "timeout_seconds" not in str(exc):
                 raise
             return await self.llm.invoke(prompt=prompt, messages=messages)
+
+    @property
+    def reranker(self):
+        """Lazy-load the reranker on first access."""
+        if self._reranker is not ...:
+            return self._reranker
+        with self._reranker_lock:
+            if self._reranker is not ...:
+                return self._reranker
+            try:
+                logger.info(f"Loading reranker: {config.reranker_model} on {self._device}...")
+                kwargs: Dict[str, Any] = {"max_length": config.reranker_max_length}
+                if "zerank" in config.reranker_model.lower():
+                    compatible, reason = _zerank_runtime_compatible()
+                    if not compatible:
+                        raise RuntimeError(reason)
+                    kwargs["trust_remote_code"] = True
+
+                if self._device.startswith("cuda"):
+                    cuda_kwargs = _build_cuda_model_kwargs(
+                        enable_flash_attn=RAG_USE_FLASH_ATTENTION,
+                        enable_multi_gpu=RAG_MULTI_GPU,
+                    )
+                    if "device_map" in cuda_kwargs:
+                        kwargs["model_kwargs"] = cuda_kwargs
+                    else:
+                        kwargs["device"] = self._device
+                        kwargs["model_kwargs"] = cuda_kwargs
+                else:
+                    kwargs["device"] = self._device
+
+                self._reranker = CrossEncoder(config.reranker_model, **kwargs)
+            except Exception as e:
+                logger.warning(f"Failed to load reranker on {self._device}: {e}")
+                if self._device == "mps":
+                    try:
+                        logger.info("Retrying reranker load on CPU due to MPS failure...")
+                        kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
+                        if "zerank" in config.reranker_model.lower():
+                            compatible, reason = _zerank_runtime_compatible()
+                            if not compatible:
+                                raise RuntimeError(reason)
+                            kwargs["trust_remote_code"] = True
+                        self._reranker = CrossEncoder(config.reranker_model, **kwargs)
+                        self._device = "cpu"
+                        logger.info("Reranker loaded successfully on CPU fallback.")
+                    except Exception as cpu_e:
+                        logger.warning(f"Failed to load reranker on CPU fallback: {cpu_e}")
+                        self._reranker = None
+                else:
+                    self._reranker = None
+            return self._reranker
+
+    @reranker.setter
+    def reranker(self, value):
+        """Allow tests and callers to inject a mock reranker directly."""
+        self._reranker = value
 
     def _get_semantic_splitter(self):
         """Lazy-init SemanticChunker for child-level semantic splitting."""
@@ -1175,62 +1239,93 @@ class RAGService:
         # 2. Cross-Encoder Reranking on ALL retrieved children
         reranked_children = []
         if self.reranker and search_results:
+            candidate_results = []
+            filtered_candidates = []
             try:
                 import numpy as np
 
-                candidate_results = search_results[: config.rerank_candidate_k]
-                blank_candidate_count = 0
-                filtered_candidates = []
-                for result in candidate_results:
-                    page_content = getattr(result.get("doc"), "page_content", "") or ""
-                    if not page_content.strip():
-                        blank_candidate_count += 1
-                        continue
-                    filtered_candidates.append(result)
-
-                logger.info(
-                    "RAG rerank boundary: total_candidates=%s filtered_candidates=%s blank_candidates=%s",
-                    len(candidate_results),
-                    len(filtered_candidates),
-                    blank_candidate_count,
-                )
-
-                if not filtered_candidates:
+                candidate_limit = int(config.rerank_candidate_k)
+                if candidate_limit <= 0:
+                    logger.info(
+                        "RAG rerank skipped: non-positive candidate limit=%s",
+                        candidate_limit,
+                    )
                     reranked_children = search_results
-                    raise ValueError("No non-empty rerank candidates available")
-
-                # Build query with instruction for zerank-2 instruction-following
-                if config.reranker_instruction and "zerank" in config.reranker_model.lower():
-                    query_text = f'<query> "{question}" </query>\n<instruction> {config.reranker_instruction} </instruction>'
+                    candidate_results = []
                 else:
-                    query_text = question
-                pairs = [[query_text, res["doc"].page_content] for res in filtered_candidates]
-                rerank_scores = self.reranker.predict(pairs)
+                    candidate_results = search_results[:candidate_limit]
+                blank_candidate_count = 0
+                if candidate_results:
+                    for result in candidate_results:
+                        page_content = getattr(result.get("doc"), "page_content", "") or ""
+                        if not page_content.strip():
+                            blank_candidate_count += 1
+                            continue
+                        filtered_candidates.append(result)
 
-                for i, score in enumerate(rerank_scores):
-                    filtered_candidates[i]["rerank_score"] = float(score)
+                    candidate_lengths = [len(res["doc"].page_content.strip()) for res in filtered_candidates]
+                    logger.info(
+                        "RAG rerank boundary: total_candidates=%s filtered_candidates=%s blank_candidates=%s min_chars=%s max_chars=%s",
+                        len(candidate_results),
+                        len(filtered_candidates),
+                        blank_candidate_count,
+                        min(candidate_lengths) if candidate_lengths else 0,
+                        max(candidate_lengths) if candidate_lengths else 0,
+                    )
 
-                # Normalize scores to 0-1 range using min-max
-                scores = np.array(rerank_scores)
-                min_s, max_s = scores.min(), scores.max()
-                if max_s > min_s:
-                    normalized = (scores - min_s) / (max_s - min_s)
-                else:
-                    normalized = np.ones_like(scores) * 0.5
+                    if not filtered_candidates:
+                        reranked_children = search_results
+                        raise ValueError("No non-empty rerank candidates available")
 
-                for i, r in enumerate(filtered_candidates):
-                    r["normalized_score"] = round(float(normalized[i]) * 100)
+                    query_text = question.strip()
 
-                # Filter by relevance threshold (>= 0.1 normalized)
-                reranked_children = [
-                    r for i, r in enumerate(filtered_candidates)
-                    if normalized[i] >= config.rerank_threshold
-                ]
-                # Sort by rerank score descending
-                reranked_children.sort(key=lambda x: x["rerank_score"], reverse=True)
+                    pairs = [[query_text, res["doc"].page_content] for res in filtered_candidates]
+                    rerank_batch_size = max(1, int(config.rerank_batch_size))
+                    rerank_scores = []
+                    for batch_start in range(0, len(pairs), rerank_batch_size):
+                        batch_pairs = pairs[batch_start: batch_start + rerank_batch_size]
+                        batch_scores = self.reranker.predict(batch_pairs)
+                        rerank_scores.extend(list(batch_scores))
+
+                    if len(rerank_scores) != len(filtered_candidates):
+                        raise ValueError(
+                            f"Reranker score count mismatch: expected {len(filtered_candidates)} got {len(rerank_scores)}"
+                        )
+
+                    scores = np.array(rerank_scores, dtype=float)
+                    if not np.isfinite(scores).all():
+                        raise ValueError("Reranker returned non-finite scores")
+
+                    for i, score in enumerate(scores):
+                        filtered_candidates[i]["rerank_score"] = float(score)
+
+                    # Normalize scores to 0-1 range using min-max
+                    min_s, max_s = scores.min(), scores.max()
+                    if max_s > min_s:
+                        normalized = (scores - min_s) / (max_s - min_s)
+                    else:
+                        normalized = np.ones_like(scores) * 0.5
+
+                    for i, r in enumerate(filtered_candidates):
+                        r["normalized_score"] = round(float(normalized[i]) * 100)
+
+                    # Filter by relevance threshold (>= configured normalized threshold)
+                    reranked_children = [
+                        r for i, r in enumerate(filtered_candidates)
+                        if normalized[i] >= config.rerank_threshold
+                    ]
+                    if not reranked_children:
+                        logger.warning(
+                            "RAG rerank produced zero survivors after threshold=%s; falling back to retrieval order.",
+                            config.rerank_threshold,
+                        )
+                        reranked_children = filtered_candidates or search_results
+                    else:
+                        # Sort by rerank score descending
+                        reranked_children.sort(key=lambda x: x["rerank_score"], reverse=True)
             except Exception as e:
                 logger.error(f"Reranking failed: {e}")
-                reranked_children = search_results
+                reranked_children = filtered_candidates or search_results
         else:
             reranked_children = search_results
 
@@ -1981,6 +2076,15 @@ Summary:"""
                 seen_hashes.add(h)
         return unique
 
+_rag_service: Optional[RAGService] = None
 
-# Singleton instance
-rag_service = RAGService()
+
+def get_rag_service() -> RAGService:
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = RAGService()
+    return _rag_service
+
+
+def peek_rag_service() -> Optional[RAGService]:
+    return _rag_service

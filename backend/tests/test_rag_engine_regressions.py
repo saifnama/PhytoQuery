@@ -174,6 +174,98 @@ def test_query_returns_no_context_without_calling_llm(monkeypatch):
     assert "couldn't find enough relevant context" in result["answer"].lower()
 
 
+def test_zerank_runtime_compatibility_rejects_transformers_drift(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    monkeypatch.setattr(
+        rag_engine.importlib_metadata,
+        "version",
+        lambda name: {
+            "sentence-transformers": "5.4.1",
+            "transformers": "4.58.0",
+        }[name],
+    )
+
+    is_compatible, reason = rag_engine._zerank_runtime_compatible()
+
+    assert is_compatible is False
+    assert "transformers" in reason
+
+
+def test_zerank_runtime_compatibility_accepts_expected_versions(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    monkeypatch.setattr(
+        rag_engine.importlib_metadata,
+        "version",
+        lambda name: {
+            "sentence-transformers": "5.4.1",
+            "transformers": "4.57.1",
+        }[name],
+    )
+
+    is_compatible, reason = rag_engine._zerank_runtime_compatible()
+
+    assert is_compatible is True
+    assert reason == ""
+
+
+def test_lazy_get_rag_service_initializes_once(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    class DummyService:
+        pass
+
+    created = {"count": 0}
+
+    def factory():
+        created["count"] += 1
+        return DummyService()
+
+    monkeypatch.setattr(rag_engine, "RAGService", factory)
+    rag_engine._rag_service = None
+
+    first = rag_engine.get_rag_service()
+    second = rag_engine.get_rag_service()
+
+    assert created["count"] == 1
+    assert first is second
+
+
+def test_peek_rag_service_does_not_initialize(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    rag_engine._rag_service = None
+
+    assert rag_engine.peek_rag_service() is None
+
+
+def test_ragservice_does_not_retry_zerank_on_cpu_when_versions_are_incompatible(monkeypatch):
+    rag_engine = load_rag_engine_module()
+
+    monkeypatch.setattr(rag_engine, "get_optimal_device", lambda: "mps")
+    monkeypatch.setattr(
+        rag_engine.importlib_metadata,
+        "version",
+        lambda name: {
+            "sentence-transformers": "5.4.1",
+            "transformers": "4.58.0",
+        }[name],
+    )
+
+    calls = {"count": 0}
+
+    class FailingCrossEncoder:
+        def __init__(self, *args, **kwargs):
+            calls["count"] += 1
+
+    monkeypatch.setattr(rag_engine, "CrossEncoder", FailingCrossEncoder)
+
+    service = rag_engine.RAGService()
+
+    assert calls["count"] == 0
+    assert service.reranker is None
+
+
 def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch):
     rag_engine = load_rag_engine_module()
     service = make_service(rag_engine)
@@ -410,6 +502,313 @@ def test_query_filters_blank_rerank_candidates(monkeypatch):
     assert captured["pairs"] is not None
     assert len(captured["pairs"]) == 2
     assert all(pair[1].strip() for pair in captured["pairs"])
+
+
+def test_query_skips_rerank_when_candidate_limit_is_non_positive(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+    captured = {"called": False}
+
+    class FakeReranker:
+        def predict(self, pairs):
+            captured["called"] = True
+            return [1.0 for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = FakeReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 0)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    "chunk one",
+                    {
+                        "content_type": "text",
+                        "parent_id": "p1",
+                        "source": "paper-1.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+        ],
+    )
+
+    result = asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert captured["called"] is False
+    assert result["sources"]
+
+
+def test_query_reranks_in_stable_sub_batches(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+    captured = {"batch_sizes": []}
+
+    class FakeReranker:
+        def predict(self, pairs):
+            captured["batch_sizes"].append(len(pairs))
+            return [float(len(pairs) - i) for i in range(len(pairs))]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = FakeReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 5)
+    monkeypatch.setattr(rag_engine.config, "rerank_batch_size", 2)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    f"chunk {i}",
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": f"paper-{i}.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+            for i in range(5)
+        ],
+    )
+
+    asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert captured["batch_sizes"] == [2, 2, 1]
+
+
+def test_query_uses_plain_question_for_zerank(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+    captured = {"pairs": None}
+
+    class FakeReranker:
+        def predict(self, pairs):
+            captured["pairs"] = pairs
+            return [1.0 for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = FakeReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 1)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    "chunk one",
+                    {
+                        "content_type": "text",
+                        "parent_id": "p1",
+                        "source": "paper-1.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+        ],
+    )
+
+    asyncio.run(service.query(" question ", user_id="sess_1"))
+
+    assert captured["pairs"] == [["question", "chunk one"]]
+
+
+def test_query_falls_back_when_rerank_score_count_mismatches_pairs(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+
+    class BadReranker:
+        def predict(self, pairs):
+            return [1.0]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = BadReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 2)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    f"chunk {i}",
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": f"paper-{i}.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+            for i in range(2)
+        ],
+    )
+
+    result = asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert result["sources"]
+
+
+def test_query_falls_back_when_rerank_scores_are_not_finite(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+
+    class BadReranker:
+        def predict(self, pairs):
+            return [float("nan") for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = BadReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 2)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    f"chunk {i}",
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": f"paper-{i}.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+            for i in range(2)
+        ],
+    )
+
+    result = asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert result["sources"]
+    assert all(source["source"] != "paper-blank.pdf" for source in result["sources"])
+
+
+def test_query_falls_back_to_filtered_candidates_instead_of_raw_search_results(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+
+    class BadReranker:
+        def predict(self, pairs):
+            return [float("nan") for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = BadReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 3)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    content,
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": source,
+                        "section_title": "Intro",
+                    },
+                )
+            }
+            for i, (content, source) in enumerate(
+                [
+                    ("good chunk", "paper-good-1.pdf"),
+                    ("   ", "paper-blank.pdf"),
+                    ("another chunk", "paper-good-2.pdf"),
+                ]
+            )
+        ],
+    )
+
+    result = asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert result["sources"]
+    assert all(source["source"] != "paper-blank.pdf" for source in result["sources"])
+
+
+def test_query_falls_back_when_threshold_filters_everything(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+
+    class FlatReranker:
+        def predict(self, pairs):
+            return [1.0 for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = FlatReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.9)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 2)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    f"chunk {i}",
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": f"paper-{i}.pdf",
+                        "section_title": "Intro",
+                    },
+                )
+            }
+            for i in range(2)
+        ],
+    )
+
+    result = asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert result["sources"]
 
 
 def test_ollama_invoke_enforces_timeout_budget(monkeypatch):
