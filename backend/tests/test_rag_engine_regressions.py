@@ -90,6 +90,10 @@ def load_rag_engine_module():
 def make_service(rag_engine):
     service = object.__new__(rag_engine.RAGService)
     service._get_user_collection = lambda user_id: SimpleNamespace()
+    service.embeddings = SimpleNamespace(
+        begin_timing_session=lambda: None,
+        consume_timing_session=lambda: {"calls": 0, "total_ms": 0.0, "texts": 0},
+    )
     return service
 
 
@@ -431,3 +435,41 @@ def test_build_cuda_model_kwargs_disabled(monkeypatch):
 
     kwargs = rag_engine._build_cuda_model_kwargs(enable_flash_attn=False, enable_multi_gpu=False)
     assert kwargs == {"torch_dtype": "auto"}
+
+
+def test_get_runtime_diagnostics_reports_slurm_and_cuda(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("SLURM_NODELIST", "gpu001")
+    monkeypatch.setenv("SLURM_LOCALID", "0")
+
+    class FakeCuda:
+        is_available = staticmethod(lambda: True)
+        device_count = staticmethod(lambda: 2)
+        get_device_name = staticmethod(lambda index: f"GPU-{index}")
+
+    class FakeBackends:
+        mps = type("FakeMps", (), {"is_available": staticmethod(lambda: False)})()
+
+    monkeypatch.setitem(sys.modules, "torch", type("T", (), {"cuda": FakeCuda(), "backends": FakeBackends()})())
+
+    diagnostics = rag_engine.get_runtime_diagnostics()
+    assert diagnostics["selected_device"] == "cuda"
+    assert diagnostics["cuda_visible_devices"] == "2"
+    assert diagnostics["slurm_job_id"] == "12345"
+    assert diagnostics["slurm_nodelist"] == "gpu001"
+    assert diagnostics["slurm_localid"] == "0"
+    assert diagnostics["cuda_available"] is True
+    assert diagnostics["cuda_device_count"] == 2
+    assert diagnostics["cuda_device_names"] == ["GPU-0", "GPU-1"]
+
+
+def test_format_phase_timings_is_stable():
+    rag_engine = load_rag_engine_module()
+    formatted = rag_engine._format_phase_timings({
+        "parse_and_chunk": 12.34,
+        "embed": 56.78,
+        "chroma_overhead": 9.87,
+    })
+    assert formatted == "parse_and_chunk=12.3ms, embed=56.8ms, chroma_overhead=9.9ms"

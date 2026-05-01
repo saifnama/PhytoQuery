@@ -5,13 +5,20 @@ from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from backend.core.http_client import HttpClientManager
 from backend.api import ner, ner_pdf, rag, health, doi, search, paper
+from backend.services.rag_engine import log_runtime_diagnostics
+import logging
 import os
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize the global HTTP client
     await HttpClientManager.get_client()
+    logger.info("PhytoQuery backend startup complete. Logging runtime diagnostics.")
+    log_runtime_diagnostics()
     yield
     # Shutdown: Close the global HTTP client
     await HttpClientManager.close_client()

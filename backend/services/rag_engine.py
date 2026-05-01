@@ -9,6 +9,7 @@ import json
 import asyncio
 import logging
 import tempfile
+import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -109,6 +110,65 @@ def _build_cuda_model_kwargs(enable_flash_attn: bool = True, enable_multi_gpu: b
     if enable_flash_attn and _flash_attn_available():
         kwargs["attn_implementation"] = "flash_attention_2"
     return kwargs
+
+
+def get_runtime_diagnostics() -> Dict[str, Any]:
+    """Collect runtime diagnostics useful on Slurm GPU nodes."""
+    diagnostics: Dict[str, Any] = {
+        "selected_device": get_optimal_device(),
+        "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES", ""),
+        "slurm_job_id": os.getenv("SLURM_JOB_ID", ""),
+        "slurm_nodelist": os.getenv("SLURM_NODELIST", ""),
+        "slurm_procid": os.getenv("SLURM_PROCID", ""),
+        "slurm_localid": os.getenv("SLURM_LOCALID", ""),
+        "cuda_available": False,
+        "cuda_device_count": 0,
+        "cuda_device_names": [],
+    }
+    try:
+        import torch
+
+        diagnostics["cuda_available"] = torch.cuda.is_available()
+        diagnostics["cuda_device_count"] = torch.cuda.device_count()
+        if torch.cuda.is_available():
+            diagnostics["cuda_device_names"] = [
+                torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())
+            ]
+    except ImportError:
+        pass
+    return diagnostics
+
+
+def log_runtime_diagnostics() -> None:
+    diagnostics = get_runtime_diagnostics()
+    logger.info(
+        "RAG runtime diagnostics: selected_device=%s cuda_available=%s cuda_device_count=%s "
+        "cuda_visible_devices=%r slurm_job_id=%r slurm_localid=%r slurm_nodelist=%r gpu_names=%s",
+        diagnostics["selected_device"],
+        diagnostics["cuda_available"],
+        diagnostics["cuda_device_count"],
+        diagnostics["cuda_visible_devices"],
+        diagnostics["slurm_job_id"],
+        diagnostics["slurm_localid"],
+        diagnostics["slurm_nodelist"],
+        diagnostics["cuda_device_names"],
+    )
+    if (
+        diagnostics["selected_device"].startswith("cuda")
+        and diagnostics["cuda_device_count"] > 1
+        and not diagnostics["cuda_visible_devices"]
+    ):
+        logger.warning(
+            "Multiple CUDA devices are visible but CUDA_VISIBLE_DEVICES is unset. "
+            "On shared Slurm nodes, pin the backend to a specific GPU before startup."
+        )
+
+
+def _format_phase_timings(timings_ms: Dict[str, float]) -> str:
+    ordered = []
+    for key, value in timings_ms.items():
+        ordered.append(f"{key}={value:.1f}ms")
+    return ", ".join(ordered)
 
 
 # --- RAG Configuration ---
@@ -333,9 +393,20 @@ class PhytoQueryEmbeddings:
         self.query_instruction = query_instruction
         self.model_name = primary_model
         self.model_dim: int = 2560  # Qwen3-Embedding-4B default
+        self._timing_local = threading.local()
 
         # Try primary model first
         self._model = self._load_model(primary_model, fallback_model)
+
+    def begin_timing_session(self) -> None:
+        self._timing_local.session = {"calls": 0, "total_ms": 0.0, "texts": 0}
+
+    def consume_timing_session(self) -> Dict[str, float]:
+        session = getattr(self._timing_local, "session", None)
+        self._timing_local.session = None
+        if not session:
+            return {"calls": 0, "total_ms": 0.0, "texts": 0}
+        return session
 
     def _load_model(self, primary: str, fallback: str):
         """Load embedding model with fallback on failure.
@@ -429,12 +500,19 @@ class PhytoQueryEmbeddings:
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents. No instruction prompt for documents."""
+        started = time.perf_counter()
         embeddings = self._model.encode(
             texts,
             normalize_embeddings=True,
             show_progress_bar=False,
             convert_to_numpy=True,
         ).tolist()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        session = getattr(self._timing_local, "session", None)
+        if session is not None:
+            session["calls"] += 1
+            session["texts"] += len(texts)
+            session["total_ms"] += elapsed_ms
         return self._maybe_truncate(embeddings)
 
     def embed_query(self, text: str) -> List[float]:
@@ -704,20 +782,35 @@ class RAGService:
         user_id: str = "default",
     ):
         """Extract, chunk, index, and return per-file extracted text for summaries."""
+        total_started = time.perf_counter()
         all_docs = []
         extracted_texts: Dict[str, str] = {}
         source_names = [os.path.basename(path) for path in pdf_paths]
+        parse_and_chunk_ms = 0.0
         for path in pdf_paths:
+            file_started = time.perf_counter()
             docs, extracted_text = self._process_pdf(
                 path,
                 user_id=user_id,
                 parser_type=parser_type,
             )
+            file_elapsed_ms = (time.perf_counter() - file_started) * 1000
+            parse_and_chunk_ms += file_elapsed_ms
             all_docs.extend(docs)
             if extracted_text:
                 extracted_texts[os.path.basename(path)] = extracted_text
+            logger.info(
+                "RAG upload phase: parser=%s file=%s parse_and_chunk=%.1fms chunks=%s extracted_chars=%s",
+                parser_type,
+                os.path.basename(path),
+                file_elapsed_ms,
+                len(docs),
+                len(extracted_text or ""),
+            )
 
         if all_docs:
+            self.embeddings.begin_timing_session()
+            index_started = time.perf_counter()
             try:
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
@@ -737,6 +830,40 @@ class RAGService:
                         f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
                     )
                     raise retry_err from retry_err
+            finally:
+                embed_stats = self.embeddings.consume_timing_session()
+
+            index_total_ms = (time.perf_counter() - index_started) * 1000
+            embed_ms = float(embed_stats.get("total_ms", 0.0))
+            embed_calls = int(embed_stats.get("calls", 0))
+            embed_texts = int(embed_stats.get("texts", 0))
+            chroma_overhead_ms = max(index_total_ms - embed_ms, 0.0)
+            total_elapsed_ms = (time.perf_counter() - total_started) * 1000
+            logger.info(
+                "RAG upload timings: parser=%s user=%s files=%s chunks=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
+                parser_type,
+                user_id,
+                len(pdf_paths),
+                len(all_docs),
+                _format_phase_timings({
+                    "parse_and_chunk": parse_and_chunk_ms,
+                    "embed": embed_ms,
+                    "chroma_overhead": chroma_overhead_ms,
+                    "index_total": index_total_ms,
+                }),
+                embed_calls,
+                embed_texts,
+                total_elapsed_ms,
+            )
+        else:
+            logger.info(
+                "RAG upload timings: parser=%s user=%s files=%s chunks=0 parse_and_chunk=%.1fms total=%.1fms",
+                parser_type,
+                user_id,
+                len(pdf_paths),
+                parse_and_chunk_ms,
+                (time.perf_counter() - total_started) * 1000,
+            )
 
         return source_names, extracted_texts
 
