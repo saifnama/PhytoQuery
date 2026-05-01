@@ -226,6 +226,46 @@ def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch
     assert cleanup_calls == ["sess_1"]
 
 
+def test_process_pdf_pymupdf_uses_simple_chunking_not_semantic(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+
+    service._extract_pdf_metadata = lambda path: {
+        "title": "Paper Title",
+        "authors": "",
+        "doi": "",
+        "journal": "",
+    }
+    service._extract_with_pymupdf = lambda path: (
+        "Introduction\n\nSome body text for chunking.",
+        [{"content": "| A | B |\n| 1 | 2 |", "page": 1}],
+    )
+    service._detect_sections = lambda text: [
+        {"title": "Introduction", "text": "Some body text for chunking."}
+    ]
+    service._add_parents = lambda user_id, parents: None
+    service._deduplicate_chunks = lambda chunks: chunks
+
+    called = {"semantic": False}
+
+    def fail_if_semantic_used(text):
+        called["semantic"] = True
+        raise AssertionError("PyMuPDF fast path should not use semantic chunking")
+
+    service._split_semantic_children = fail_if_semantic_used
+
+    documents, full_text = service._process_pdf(
+        "C:/tmp/paper.pdf",
+        user_id="sess_1",
+        parser_type="pymupdf",
+    )
+
+    assert full_text == "Introduction\n\nSome body text for chunking."
+    assert called["semantic"] is False
+    assert len(documents) >= 1
+    assert all(doc.metadata["parser_type"] == "pymupdf" for doc in documents)
+
+
 def test_query_caps_rerank_candidates(monkeypatch):
     rag_engine = load_rag_engine_module()
     service = make_service(rag_engine)

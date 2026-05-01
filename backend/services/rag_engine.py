@@ -855,7 +855,14 @@ class RAGService:
 
         # 2. Section detection & Chunking (Regex-based fallback)
         sections = self._detect_sections(full_text)
-        parent_chunks, chunks = self._chunk_by_sections(sections, tables, pdf_metadata, source)
+        use_semantic_children = parser_type != "pymupdf"
+        parent_chunks, chunks = self._chunk_by_sections(
+            sections,
+            tables,
+            pdf_metadata,
+            source,
+            use_semantic_children=use_semantic_children,
+        )
 
         # Store parent chunks for parent-child retrieval
         self._add_parents(user_id, parent_chunks)
@@ -1654,7 +1661,14 @@ Summary:"""
 
         return sections
 
-    def _chunk_by_sections(self, sections, tables, doc_metadata: Dict[str, str] = None, source: str = ""):
+    def _chunk_by_sections(
+        self,
+        sections,
+        tables,
+        doc_metadata: Dict[str, str] = None,
+        source: str = "",
+        use_semantic_children: bool = True,
+    ):
         """Create parent-child hierarchical chunks with Markdown splitting and contextual headers.
 
         Flow:
@@ -1753,8 +1767,15 @@ Summary:"""
                 )
 
                 # --- CHILD CHUNKS (from this parent) ---
-                # Use semantic chunking for coherent, meaning-based splits
-                child_texts = self._split_semantic_children(p_text)
+                # PyMuPDF uses a simpler fast child split; Docling keeps semantic splitting.
+                if use_semantic_children:
+                    child_texts = self._split_semantic_children(p_text)
+                else:
+                    child_splitter = MarkdownTextSplitter(
+                        chunk_size=config.child_chunk_size,
+                        chunk_overlap=config.child_chunk_overlap,
+                    )
+                    child_texts = child_splitter.split_text(p_text)
                 for c_idx, c_text in enumerate(child_texts):
                     # Prepend contextual header to child for embedding
                     child_with_header = header + c_text
