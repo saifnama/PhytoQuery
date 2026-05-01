@@ -2,9 +2,21 @@
 NER Configuration
 =================
 Named Entity Recognition settings and providers.
+
+Settings are read from environment variables. Place a `.env` file in the
+project root (PhytoQuery/) to configure per-environment. See `.env.example`.
 """
 
 import os
+from pathlib import Path
+
+# Auto-load .env file from project root (PhytoQuery/.env)
+try:
+    from dotenv import load_dotenv
+    _project_root = Path(__file__).resolve().parent.parent
+    load_dotenv(_project_root / ".env", override=False)
+except ImportError:
+    pass
 
 # =============================================================================
 # OLLAMA (Primary for NER)

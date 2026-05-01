@@ -22,6 +22,11 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 - Inline PDF viewer
 - Upload to RAG directly from paper (stays on page, no navigation)
 - Citations with source references
+- **Dual parser**: PyMuPDF (fast) or Docling (detailed, structure-preserving)
+- **Hybrid retrieval**: Vector search + BM25 keyword matching with Reciprocal Rank Fusion
+- **Instruction-Aware Architecture**: Custom domain prompts for both embedding (Qwen3) and reranking (zerank-2)
+- **MRL Truncation**: Storage-efficient vectors (1024 dims) using Matryoshka Representation Learning
+- **Lazy model loading**: RAG models only load on first use (~200MB startup)
 
 ### Named Entity Recognition (NER)
 - **Dictionary-backed**: PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
@@ -43,12 +48,15 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | Backend | FastAPI (Python), uvicorn (dev server) |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS |
 | NLP | spaCy PhraseMatcher (dictionary-backed) |
-| RAG | LangChain, ChromaDB, sentence-transformers |
-| PDF | pymupdf (fitz), BeautifulSoup |
+| Embeddings | Qwen3-Embedding-4B (primary), BAAI/bge-m3 (fallback) |
+| Reranker | zeroentropy/zerank-2 (CrossEncoder) |
+| RAG | LangChain, ChromaDB, sentence-transformers, rank-bm25 |
+| PDF Parsing | Docling (detailed), PyMuPDF/fitz (fast) |
 | Graph | vis-network |
 | Sanitization | nh3 (server), DOMPurify (client) |
 | Paper Sources | Europe PMC API, OpenAlex API |
 | LLM | OpenRouter / Ollama |
+| Config | python-dotenv (.env files per environment) |
 
 ## Project Structure
 
@@ -140,23 +148,65 @@ Open http://localhost:8000
 
 ### Environment Variables
 
-#### NER (Named Entity Recognition)
-```bash
-# Set OpenRouter key to enable LLM extraction
-export NER_OPENROUTER_API_KEY="sk-or-..."
+PhytoQuery uses `.env` files for per-environment configuration. Copy a preset:
 
-# Or use local Ollama
-export NER_OLLAMA_URL="http://localhost:11434"
-export NER_OLLAMA_MODEL="llama3.1:8b"
+```bash
+# Institute server (A100 GPU):
+cp .env.server .env
+
+# MacBook M4 Pro (24GB):
+cp .env.macbook .env
 ```
 
-#### RAG (Chat)
-```bash
-export RAG_OPENROUTER_API_KEY="sk-or-..."
+> **Priority**: Real env vars (e.g., Slurm's `CUDA_VISIBLE_DEVICES`) always override `.env` values.
 
-# Optional: local Ollama fallback
-export RAG_OLLAMA_URL="http://localhost:11434"
-export RAG_OLLAMA_MODEL="llama3.1:8b"
+#### GPU Auto-Detection
+
+| Environment | How It Works |
+|---|---|
+| Slurm A100 | Slurm sets `CUDA_VISIBLE_DEVICES` → PyTorch detects CUDA → uses GPU |
+| MacBook M4 | PyTorch detects `torch.backends.mps` → uses Apple Metal GPU |
+| Windows/CPU | No GPU detected → uses CPU |
+
+#### RAG Settings
+```bash
+# Embedding model (Qwen3-4B recommended, bge-m3 as fallback)
+RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-m3
+
+# MRL dimension truncation (None=full 2560, 1024=balanced, 512=fast)
+RAG_EMBEDDING_DIM=1024
+
+# Domain-specific instruction for embedding (Qwen3 only)
+RAG_EMBEDDING_INSTRUCTION="Instruct: Given a scientific query about phytochemistry, biology, or natural products, retrieve relevant research passages."
+
+# Reranker
+RAG_RERANKER_MODEL=zeroentropy/zerank-2
+
+# GPU acceleration (CUDA only)
+RAG_USE_FLASH_ATTENTION=true
+RAG_MULTI_GPU=false
+```
+
+#### LLM Providers
+```bash
+# OpenRouter (primary)
+RAG_OPENROUTER_API_KEY=sk-or-v1-...
+RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+
+# Ollama (fallback — runs locally)
+RAG_OLLAMA_URL=http://localhost:11434
+RAG_OLLAMA_MODEL=llama3.1:8b
+```
+
+#### NER Providers
+```bash
+# OpenRouter
+NER_OPENROUTER_API_KEY=sk-or-v1-...
+
+# Ollama
+NER_OLLAMA_URL=http://localhost:11434
+NER_OLLAMA_MODEL=llama3.1:8b
 ```
 
 ### Dictionary Matchers
@@ -197,7 +247,3 @@ pytest backend/tests/ -v
 | `↑` | Scroll up 100px |
 | `↓` | Scroll down 100px |
 | `e` | Extract entities (on paper page) |
-
-## License
-
-MIT

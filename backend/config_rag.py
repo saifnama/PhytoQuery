@@ -2,9 +2,22 @@
 RAG Configuration
 =================
 Retrieval-Augmented Generation settings and providers.
+
+Settings are read from environment variables. Place a `.env` file in the
+project root (PhytoQuery/) to configure per-environment. See `.env.example`.
 """
 
 import os
+from pathlib import Path
+
+# Auto-load .env file from project root (PhytoQuery/.env)
+# override=False means real env vars (e.g. from Slurm) take priority over .env
+try:
+    from dotenv import load_dotenv
+    _project_root = Path(__file__).resolve().parent.parent
+    load_dotenv(_project_root / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv not installed; rely on system env vars
 
 # =============================================================================
 # OPENROUTER (Primary for RAG)
@@ -39,6 +52,8 @@ RAG_EMBEDDING_DIM = int(RAG_EMBEDDING_DIM) if RAG_EMBEDDING_DIM else None
 RAG_EMBEDDING_INSTRUCTION = os.getenv("RAG_EMBEDDING_INSTRUCTION", "")
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "10"))
 RAG_SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.85"))
+# Reranker model: zeroentropy/zerank-2 (default, best quality) or cross-encoder/ms-marco-MiniLM-L-6-v2 (lightweight)
+RAG_RERANKER_MODEL = os.getenv("RAG_RERANKER_MODEL", "zeroentropy/zerank-2")
 # Accelerator override: "cuda" | "mps" | "cpu".  When unset the backend auto-detects
 # the best device (cuda > mps > cpu).
 RAG_DEVICE = os.getenv("RAG_DEVICE", "")

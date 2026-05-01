@@ -17,19 +17,20 @@ from dataclasses import dataclass
 from backend.core.http_client import HttpClientManager
 from backend.core.rag_storage import delete_user_upload_file, delete_user_uploads
 
-from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
-from langchain_experimental.text_splitter import SemanticChunker
-from sentence_transformers import CrossEncoder
-from langchain_core.documents import Document
-
-# --- Docling Advanced Imports ---
-try:
-    from docling.chunking import HybridChunker
-    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
-except ImportError:
-    HybridChunker = None
-    HuggingFaceTokenizer = None
+# ---------------------------------------------------------------------------
+# HEAVY IMPORTS ARE DEFERRED (lazy) to avoid loading PyTorch / transformers
+# into RAM at server startup.  Each class is imported locally inside the
+# method that first needs it.  This keeps startup at ~200 MB and < 2 seconds.
+#
+# Deferred:
+#   from langchain_chroma import Chroma
+#   from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
+#   from langchain_experimental.text_splitter import SemanticChunker
+#   from sentence_transformers import CrossEncoder
+#   from langchain_core.documents import Document
+#   from docling.chunking import HybridChunker
+#   from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+# ---------------------------------------------------------------------------
 
 # --- Import from RAG config ---
 from backend.config_rag import (
@@ -41,6 +42,7 @@ from backend.config_rag import (
     RAG_EMBEDDING_INSTRUCTION,
     RAG_TOP_K,
     RAG_SIMILARITY_THRESHOLD,
+    RAG_RERANKER_MODEL,
     RAG_MULTI_GPU,
     RAG_USE_FLASH_ATTENTION,
     get_rag_provider,
@@ -184,8 +186,9 @@ def _sanitize_metadata_value(value: Any) -> Any:
     return str(value)
 
 
-def _sanitize_documents_for_chroma(documents: List[Document]) -> List[Document]:
-    sanitized: List[Document] = []
+def _sanitize_documents_for_chroma(documents):
+    from langchain_core.documents import Document
+    sanitized = []
     for doc in documents:
         sanitized.append(
             Document(
@@ -259,7 +262,7 @@ class RAGConfig:
     embedding_dim: Optional[int] = RAG_EMBEDDING_DIM  # MRL truncation (None = full dim)
     embedding_instruction: Optional[str] = RAG_EMBEDDING_INSTRUCTION or None  # Query instruction for Qwen3
     # Reranker model
-    reranker_model: str = "zeroentropy/zerank-2"
+    reranker_model: str = RAG_RERANKER_MODEL
     reranker_max_length: int = 2048
     # Instruction prepended to queries for domain-aware reranking
     reranker_instruction: str = (
@@ -513,7 +516,9 @@ class PhytoQueryEmbeddings:
                 )
                 logger.info(
                     f"Embedding model loaded: {model_name} "
-                    f"(dim={self.model_dim}, device={self.device})"
+                    f"(dim={self.model_dim}, mrl_dim={self.mrl_dim or 'full'}, "
+                    f"instruction={'yes' if self.query_instruction else 'no'}, "
+                    f"device={self.device})"
                 )
                 return model
             except Exception as e:
@@ -583,17 +588,27 @@ class PhytoQueryEmbeddings:
         return self._maybe_truncate(embeddings)
 
     def embed_query(self, text: str) -> List[float]:
-        """Embed a query. Uses instruction prompt for Qwen3 models."""
+        """Embed a query. Uses instruction prompt for Qwen3 models.
+
+        Qwen3-Embedding models ship with built-in prompt templates ("query").
+        If RAG_EMBEDDING_INSTRUCTION is set, it is used as a custom prompt.
+        Non-Qwen models are encoded without prompts.
+        """
         self._ensure_model_loaded()
-        if "qwen" in self.model_name.lower() and self.query_instruction:
-            # Qwen3 supports prompt_name for built-in or custom prompts
-            embeddings = self._model.encode(
-                [text],
-                normalize_embeddings=True,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                prompt_name="query",
-            )
+        if "qwen" in self.model_name.lower():
+            # Qwen3 models have built-in prompt_name="query" for retrieval
+            encode_kwargs = {
+                "normalize_embeddings": True,
+                "show_progress_bar": False,
+                "convert_to_numpy": True,
+            }
+            if self.query_instruction:
+                # Custom domain instruction overrides the built-in prompt
+                encode_kwargs["prompt"] = self.query_instruction
+            else:
+                # Use the model's built-in "query" prompt template
+                encode_kwargs["prompt_name"] = "query"
+            embeddings = self._model.encode([text], **encode_kwargs)
         else:
             embeddings = self._model.encode(
                 [text],
@@ -633,7 +648,7 @@ class RAGService:
             api_key=LLM_PROVIDER.get("api_key"),
         )
         # Cache for per-user vectorstores
-        self._vectorstore_cache: Dict[str, Chroma] = {}
+        self._vectorstore_cache: Dict[str, Any] = {}
         # Cache for Docling converter to avoid reloading models
         self._docling_converter = None
         # Lazy-init semantic child splitter
@@ -661,6 +676,7 @@ class RAGService:
             if self._reranker is not ...:
                 return self._reranker
             try:
+                from sentence_transformers import CrossEncoder
                 logger.info(f"Loading reranker: {config.reranker_model} on {self._device}...")
                 kwargs: Dict[str, Any] = {"max_length": config.reranker_max_length}
                 if "zerank" in config.reranker_model.lower():
@@ -687,6 +703,7 @@ class RAGService:
                 logger.warning(f"Failed to load reranker on {self._device}: {e}")
                 if self._device == "mps":
                     try:
+                        from sentence_transformers import CrossEncoder
                         logger.info("Retrying reranker load on CPU due to MPS failure...")
                         kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
                         if "zerank" in config.reranker_model.lower():
@@ -712,6 +729,7 @@ class RAGService:
     def _get_semantic_splitter(self):
         """Lazy-init SemanticChunker for child-level semantic splitting."""
         if self._semantic_splitter is None:
+            from langchain_experimental.text_splitter import SemanticChunker
             logger.info("Initializing SemanticChunker for child splitting...")
             self._semantic_splitter = SemanticChunker(
                 self.embeddings,
@@ -730,6 +748,7 @@ class RAGService:
             splitter = self._get_semantic_splitter()
             raw_chunks = splitter.split_text(text)
         except Exception as e:
+            from langchain_text_splitters import MarkdownTextSplitter
             logger.warning(f"SemanticChunker failed, falling back to MarkdownTextSplitter: {e}")
             fallback = MarkdownTextSplitter(
                 chunk_size=config.child_chunk_size,
@@ -743,6 +762,7 @@ class RAGService:
                 continue
             if len(chunk) > config.child_chunk_size * 2:
                 # Oversized semantic chunk → fallback to character-based split
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
                 safety = RecursiveCharacterTextSplitter(
                     chunk_size=config.child_chunk_size,
                     chunk_overlap=config.child_chunk_overlap,
@@ -763,8 +783,9 @@ class RAGService:
         short_hash = hashlib.md5(model_key.encode()).hexdigest()[:8]
         return short_hash
 
-    def _get_user_collection(self, user_id: str) -> Chroma:
+    def _get_user_collection(self, user_id: str):
         """Get or create a ChromaDB collection for a specific user."""
+        from langchain_chroma import Chroma
         if user_id in self._vectorstore_cache:
             return self._vectorstore_cache[user_id]
 
@@ -1105,6 +1126,7 @@ class RAGService:
             meta["doc_authors"] = pdf_metadata.get("authors", "")
             meta["doc_doi"] = pdf_metadata.get("doi", "")
             meta["doc_journal"] = pdf_metadata.get("journal", "")
+            from langchain_core.documents import Document
             documents.append(Document(page_content=chunk["text"], metadata=meta))
 
         return documents, full_text
@@ -1112,7 +1134,7 @@ class RAGService:
     def _hybrid_search(
         self,
         question: str,
-        vectorstore: Chroma,
+        vectorstore,  # Chroma (lazy import)
         filter_files: Optional[List[str]] = None,
         k: int = None,
     ) -> List[Dict[str, Any]]:
@@ -1170,6 +1192,7 @@ class RAGService:
 
                 for idx in top_indices:
                     if bm25_scores[idx] > 0:
+                        from langchain_core.documents import Document
                         doc = Document(
                             page_content=all_docs_text[idx],
                             metadata=all_metas[idx] if idx < len(all_metas) else {},
@@ -1279,7 +1302,14 @@ class RAGService:
 
                     query_text = question.strip()
 
-                    pairs = [[query_text, res["doc"].page_content] for res in filtered_candidates]
+                    # zerank-2 supports instruction-aware reranking:
+                    # prepend the domain instruction to each query in the pair
+                    if config.reranker_instruction and "zerank" in config.reranker_model.lower():
+                        instructed_query = f"{config.reranker_instruction}\n{query_text}"
+                    else:
+                        instructed_query = query_text
+
+                    pairs = [[instructed_query, res["doc"].page_content] for res in filtered_candidates]
                     rerank_batch_size = max(1, int(config.rerank_batch_size))
                     rerank_scores = []
                     for batch_start in range(0, len(pairs), rerank_batch_size):
@@ -1348,6 +1378,7 @@ class RAGService:
             parent_ids_seen.add(parent_id)
             ptext = self._get_parent_text(parent_id, user_id)
             if ptext:
+                from langchain_core.documents import Document
                 # Create a synthetic result with parent text
                 parent_results.append({
                     "doc": Document(
@@ -1642,12 +1673,18 @@ Summary:"""
         extracted_text = result.document.export_to_markdown()
 
         # Initialize HybridChunker (respects headers and structure)
-        if HybridChunker and HuggingFaceTokenizer:
+        try:
+            from docling.chunking import HybridChunker
+            from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+            _hybrid_available = True
+        except ImportError:
+            _hybrid_available = False
+        if _hybrid_available:
             logger.info("Using Docling HybridChunker for semantic splitting...")
             from transformers import AutoTokenizer
             tokenizer = HuggingFaceTokenizer(
                 tokenizer=AutoTokenizer.from_pretrained(config.embedding_model),
-                max_tokens=min(config.parent_chunk_size, 384),
+                max_tokens=min(config.parent_chunk_size, 512),  # 512 is the sweet spot for standard embedding models
             )
             chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
             doc_chunks = list(chunker.chunk(result.document))
@@ -1655,6 +1692,7 @@ Summary:"""
             file_ext = os.path.splitext(source)[1].lower() or ".pdf"
             indexed_at = datetime.now(timezone.utc).isoformat()
             
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
             safety_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=config.parent_chunk_size,
                 chunk_overlap=config.parent_chunk_overlap,
@@ -1732,6 +1770,7 @@ Summary:"""
             total = len(unique_children)
             for c in unique_children:
                 c["metadata"]["total_chunks"] = total
+            from langchain_core.documents import Document
             return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children], extracted_text
         else:
             logger.warning("Docling chunking components missing, falling back to basic extraction")
@@ -1965,6 +2004,7 @@ Summary:"""
             return ""
 
         # Markdown splitters
+        from langchain_text_splitters import MarkdownTextSplitter
         parent_splitter = MarkdownTextSplitter(
             chunk_size=config.parent_chunk_size,
             chunk_overlap=config.parent_chunk_overlap,
@@ -2040,6 +2080,7 @@ Summary:"""
                 if use_semantic_children:
                     child_texts = self._split_semantic_children(p_text)
                 else:
+                    from langchain_text_splitters import MarkdownTextSplitter
                     child_splitter = MarkdownTextSplitter(
                         chunk_size=config.child_chunk_size,
                         chunk_overlap=config.child_chunk_overlap,
