@@ -39,31 +39,18 @@ async def _process_upload_job(job_id: str, saved_paths: List[str], parser_type: 
     try:
         async with user_lock_manager.lock(user_id):
             # Run CPU-bound embedding generation in a thread pool so the event loop stays responsive
-            indexed_files, extracted_texts = await asyncio.to_thread(
+            indexed_files, _ = await asyncio.to_thread(
                 service.process_and_index_pdfs_with_texts,
                 saved_paths,
                 parser_type=parser_type,
                 user_id=user_id,
             )
 
-            # Generate summaries (LLM call, already async)
-            summaries = {}
-            for path in saved_paths:
-                filename = os.path.basename(path)
-                extracted_text = extracted_texts.get(filename, "")
-                if extracted_text:
-                    try:
-                        summary = await service.summarize_document(extracted_text, filename)
-                        if summary:
-                            summaries[filename] = summary
-                    except Exception as e:
-                        logger.warning(f"Summary generation failed for {filename}: {e}")
-
             job_store.update(job_id, {
                 "status": "completed",
                 "message": f"Successfully indexed {len(indexed_files)} files using {parser_type}",
                 "files": indexed_files,
-                "summaries": summaries if summaries else None,
+                "summaries": None,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
         logger.info(f"Upload job {job_id} completed: {len(indexed_files)} files indexed")
