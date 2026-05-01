@@ -270,6 +270,56 @@ def test_process_pdf_pymupdf_uses_simple_chunking_not_semantic(monkeypatch):
     assert all(doc.metadata["parser_type"] == "pymupdf" for doc in documents)
 
 
+def test_process_and_index_pdfs_with_texts_sanitizes_complex_metadata(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+
+    class FakeCollection:
+        def get(self, where=None, include=None):
+            return {"ids": [], "metadatas": []}
+
+    class FakeVectorstore:
+        def __init__(self):
+            self._collection = FakeCollection()
+            self.added_documents = None
+
+        def add_documents(self, docs):
+            self.added_documents = docs
+            for doc in docs:
+                for value in doc.metadata.values():
+                    assert isinstance(value, (str, int, float, bool)) or value is None
+
+    vectorstore = FakeVectorstore()
+    service._get_user_collection = lambda user_id: vectorstore
+    service._invalidate_user_collection = lambda user_id: None
+    service._cleanup_parent_store = lambda user_id: None
+    service._process_pdf = lambda path, user_id="default", parser_type="pymupdf": (
+        [
+            doc_cls(
+                "new chunk",
+                {
+                    "source": "paper.pdf",
+                    "chunk_id": "paper.pdf_0",
+                    "content_type": "text",
+                    "publication_flags": ["OPEN ACCESS"],
+                    "nested": {"a": 1},
+                },
+            )
+        ],
+        "extracted body text",
+    )
+
+    indexed_files, extracted_texts = service.process_and_index_pdfs_with_texts(
+        ["C:/tmp/paper.pdf"],
+        user_id="sess_1",
+    )
+
+    assert indexed_files == ["paper.pdf"]
+    assert extracted_texts == {"paper.pdf": "extracted body text"}
+    assert vectorstore.added_documents is not None
+
+
 def test_query_caps_rerank_candidates(monkeypatch):
     rag_engine = load_rag_engine_module()
     service = make_service(rag_engine)

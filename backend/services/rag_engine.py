@@ -171,6 +171,33 @@ def _format_phase_timings(timings_ms: Dict[str, float]) -> str:
     return ", ".join(ordered)
 
 
+def _sanitize_metadata_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float)):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _sanitize_documents_for_chroma(documents: List[Document]) -> List[Document]:
+    sanitized: List[Document] = []
+    for doc in documents:
+        sanitized.append(
+            Document(
+                page_content=doc.page_content,
+                metadata={
+                    key: _sanitize_metadata_value(value)
+                    for key, value in doc.metadata.items()
+                },
+            )
+        )
+    return sanitized
+
+
 # --- RAG Configuration ---
 LLM_PROVIDER = get_rag_provider()
 LLM_TEMPERATURE = RAG_TEMPERATURE
@@ -809,12 +836,13 @@ class RAGService:
             )
 
         if all_docs:
+            sanitized_docs = _sanitize_documents_for_chroma(all_docs)
             self.embeddings.begin_timing_session()
             index_started = time.perf_counter()
             try:
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
-                vectorstore.add_documents(all_docs)
+                vectorstore.add_documents(sanitized_docs)
             except Exception:
                 logger.warning(
                     f"Indexing failed for user {user_id}; invalidating cached Chroma client and retrying once."
@@ -824,7 +852,7 @@ class RAGService:
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
                 try:
-                    vectorstore.add_documents(all_docs)
+                    vectorstore.add_documents(sanitized_docs)
                 except Exception as retry_err:
                     logger.error(
                         f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
