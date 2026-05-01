@@ -1179,17 +1179,36 @@ class RAGService:
                 import numpy as np
 
                 candidate_results = search_results[: config.rerank_candidate_k]
+                blank_candidate_count = 0
+                filtered_candidates = []
+                for result in candidate_results:
+                    page_content = getattr(result.get("doc"), "page_content", "") or ""
+                    if not page_content.strip():
+                        blank_candidate_count += 1
+                        continue
+                    filtered_candidates.append(result)
+
+                logger.info(
+                    "RAG rerank boundary: total_candidates=%s filtered_candidates=%s blank_candidates=%s",
+                    len(candidate_results),
+                    len(filtered_candidates),
+                    blank_candidate_count,
+                )
+
+                if not filtered_candidates:
+                    reranked_children = search_results
+                    raise ValueError("No non-empty rerank candidates available")
 
                 # Build query with instruction for zerank-2 instruction-following
                 if config.reranker_instruction and "zerank" in config.reranker_model.lower():
                     query_text = f'<query> "{question}" </query>\n<instruction> {config.reranker_instruction} </instruction>'
                 else:
                     query_text = question
-                pairs = [[query_text, res["doc"].page_content] for res in candidate_results]
+                pairs = [[query_text, res["doc"].page_content] for res in filtered_candidates]
                 rerank_scores = self.reranker.predict(pairs)
 
                 for i, score in enumerate(rerank_scores):
-                    candidate_results[i]["rerank_score"] = float(score)
+                    filtered_candidates[i]["rerank_score"] = float(score)
 
                 # Normalize scores to 0-1 range using min-max
                 scores = np.array(rerank_scores)
@@ -1199,12 +1218,12 @@ class RAGService:
                 else:
                     normalized = np.ones_like(scores) * 0.5
 
-                for i, r in enumerate(candidate_results):
+                for i, r in enumerate(filtered_candidates):
                     r["normalized_score"] = round(float(normalized[i]) * 100)
 
                 # Filter by relevance threshold (>= 0.1 normalized)
                 reranked_children = [
-                    r for i, r in enumerate(candidate_results)
+                    r for i, r in enumerate(filtered_candidates)
                     if normalized[i] >= config.rerank_threshold
                 ]
                 # Sort by rerank score descending

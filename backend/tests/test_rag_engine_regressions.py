@@ -365,6 +365,53 @@ def test_query_caps_rerank_candidates(monkeypatch):
     assert captured["count"] == 2
 
 
+def test_query_filters_blank_rerank_candidates(monkeypatch):
+    rag_engine = load_rag_engine_module()
+    service = make_service(rag_engine)
+    doc_cls = rag_engine.Document
+    captured = {"pairs": None}
+
+    class FakeReranker:
+        def predict(self, pairs):
+            captured["pairs"] = pairs
+            return [1.0 for _ in pairs]
+
+    class FakeLLM:
+        async def invoke(self, messages=None, prompt=None):
+            return SimpleNamespace(content="ok")
+
+    service.reranker = FakeReranker()
+    service.llm = FakeLLM()
+    service._get_parent_text = lambda parent_id, user_id: f"parent::{parent_id}"
+    monkeypatch.setattr(rag_engine.config, "rerank_threshold", 0.0)
+    monkeypatch.setattr(rag_engine.config, "rerank_candidate_k", 4)
+    monkeypatch.setattr(
+        service,
+        "_hybrid_search",
+        lambda *args, **kwargs: [
+            {
+                "doc": doc_cls(
+                    content,
+                    {
+                        "content_type": "text",
+                        "parent_id": f"p{i}",
+                        "source": f"paper-{i}.pdf",
+                        "section_title": "Intro",
+                        "parser_type": "pymupdf",
+                    },
+                )
+            }
+            for i, content in enumerate(["good chunk", "   ", "", "another chunk"])
+        ],
+    )
+
+    asyncio.run(service.query("question", user_id="sess_1"))
+
+    assert captured["pairs"] is not None
+    assert len(captured["pairs"]) == 2
+    assert all(pair[1].strip() for pair in captured["pairs"])
+
+
 def test_ollama_invoke_enforces_timeout_budget(monkeypatch):
     rag_engine = load_rag_engine_module()
 
