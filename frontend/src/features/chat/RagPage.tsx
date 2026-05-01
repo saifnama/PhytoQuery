@@ -5,6 +5,7 @@ import {
   Chats,
   Plus,
   ArrowUp,
+  CopySimple,
   FileText,
   FilePdf,
   FileDoc,
@@ -160,14 +161,19 @@ const RagPage: React.FC = () => {
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+      }
+      if (copyResetTimeoutRef.current) {
+        clearTimeout(copyResetTimeoutRef.current);
       }
     };
   }, []);
@@ -561,6 +567,24 @@ const RagPage: React.FC = () => {
     return dotIdx > 0 ? name.slice(0, dotIdx) : name;
   };
 
+  const handleCopyMessage = useCallback(async (messageId: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+
+      if (copyResetTimeoutRef.current) {
+        clearTimeout(copyResetTimeoutRef.current);
+      }
+
+      copyResetTimeoutRef.current = setTimeout(() => {
+        setCopiedMessageId((current) => (current === messageId ? null : current));
+        copyResetTimeoutRef.current = null;
+      }, 1500);
+    } catch (error) {
+      console.error('Copy failed:', error);
+    }
+  }, []);
+
   return (
     <div className="h-full flex px-0">
       {/* ─── Sources Sidebar ─── */}
@@ -810,46 +834,64 @@ const RagPage: React.FC = () => {
                   className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-2xl px-5 py-3 ${
-                      message.type === 'user'
-                        ? 'text-slate-900'
-                        : 'bg-white border border-slate-100 text-slate-900'
-                    }`}
-                    style={message.type === 'user' ? { backgroundColor: '#ffecf6' } : undefined}
+                    className="relative group/message max-w-[80%]"
                   >
-                    <div
-                      className={`text-sm prose prose-sm max-w-none`}
+                    <button
+                      type="button"
+                      onClick={() => handleCopyMessage(message.id, message.content)}
+                      className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white/95 text-slate-400 opacity-0 shadow-sm transition-all hover:border-slate-300 hover:text-slate-600 focus:opacity-100 focus:outline-none focus-visible:opacity-100 group-hover/message:opacity-100"
+                      title={copiedMessageId === message.id ? 'Copied' : 'Copy message'}
+                      aria-label={copiedMessageId === message.id ? 'Copied message' : 'Copy message'}
                     >
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
-                    </div>
-                    {message.sources && message.sources.length > 0 && (
-                      <div className="mt-3 pt-3 border-t border-slate-100">
-                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                          Sources
-                        </p>
-                        <div className="space-y-1.5">
-                          {message.sources.map((source, idx) => {
-                            const scoreColor = source.score >= 80 ? 'bg-green-100 text-green-700' : source.score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
-                            return (
-                              <div
-                                key={idx}
-                                className="flex items-center space-x-2 group/src cursor-pointer hover:bg-slate-50 rounded-md px-1.5 py-1 -mx-1.5 transition-colors"
-                                onClick={() => setPreviewSource(source)}
-                              >
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${scoreColor}`}>
-                                  {source.score}%
-                                </span>
-                                <span className="text-xs text-slate-600 truncate">
-                                  {source.source}
-                                  {source.section ? ` — ${source.section}` : ''}
-                                </span>
-                                <Eye size={12} className="text-slate-300 group-hover/src:text-slate-500 flex-shrink-0 transition-colors" />
-                              </div>
-                            );
-                          })}
-                        </div>
+                      {copiedMessageId === message.id ? (
+                        <Check size={14} weight="bold" className="text-green-600" />
+                      ) : (
+                        <CopySimple size={14} weight="regular" />
+                      )}
+                    </button>
+
+                    <div
+                      className={`rounded-2xl px-5 py-3 ${
+                        message.type === 'user'
+                          ? 'text-slate-900'
+                          : 'bg-white border border-slate-100 text-slate-900'
+                      }`}
+                      style={message.type === 'user' ? { backgroundColor: '#ffecf6' } : undefined}
+                    >
+                      <div
+                        className={`text-sm prose prose-sm max-w-none`}
+                      >
+                        <ReactMarkdown>{message.content}</ReactMarkdown>
                       </div>
-                    )}
+                      {message.sources && message.sources.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-100">
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                            Sources
+                          </p>
+                          <div className="space-y-1.5">
+                            {message.sources.map((source, idx) => {
+                              const scoreColor = source.score >= 80 ? 'bg-green-100 text-green-700' : source.score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+                              return (
+                                <div
+                                  key={idx}
+                                  className="flex items-center space-x-2 group/src cursor-pointer hover:bg-slate-50 rounded-md px-1.5 py-1 -mx-1.5 transition-colors"
+                                  onClick={() => setPreviewSource(source)}
+                                >
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${scoreColor}`}>
+                                    {source.score}%
+                                  </span>
+                                  <span className="text-xs text-slate-600 truncate">
+                                    {source.source}
+                                    {source.section ? ` — ${source.section}` : ''}
+                                  </span>
+                                  <Eye size={12} className="text-slate-300 group-hover/src:text-slate-500 flex-shrink-0 transition-colors" />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
