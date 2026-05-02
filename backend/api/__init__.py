@@ -1,1 +1,1 @@
-from . import ner, health
+from . import ner, health, dashboard

@@ -1,5 +1,5 @@
 scientific_name,common_name,source_db,source_url,taxon_id
-Lantana camara,Black Sage,GBIF,https://www.gbif.org/species/2925303,2925303
+Lantana camara,Wild Sage,GBIF,https://www.gbif.org/species/2925303,2925303
 Cymbopogon citratus,Lemon Grass,GBIF,https://www.gbif.org/species/2705275,2705275
 Satureja hortensis,Summer Savory,GBIF,https://www.gbif.org/species/2926885,2926885
 Alpinia galanga,Greater Galangal,GBIF,https://www.gbif.org/species/5302225,5302225
@@ -1531,7 +1531,7 @@ Citrus amblycarpa,Nasnaran mandarin,GBIF,https://www.gbif.org/species/3832830,38
 Syzygium ripicola,,GBIF,https://www.gbif.org/species/3184778,3184778
 Sphaeranthus africanus,,GBIF,https://www.gbif.org/species/7729020,7729020
 Triumfetta rhomboidea,Chinese burr,GBIF,https://www.gbif.org/species/3152069,3152069
-Chromolaena odorata,Christmas Bush,GBIF,https://www.gbif.org/species/3087725,3087725
+Chromolaena odorata,Siam Weed,GBIF,https://www.gbif.org/species/3087725,3087725
 Acanthospermum hispidum,Hispid Starbur,GBIF,https://www.gbif.org/species/3100375,3100375
 Lantana montevidensis,Trailing Shrubverbena,GBIF,https://www.gbif.org/species/2925314,2925314
 Ailanthus altissima,China-sumac,GBIF,https://www.gbif.org/species/3190653,3190653
@@ -204497,7 +204497,6 @@ Aster sinianus,,GBIF,https://www.gbif.org/species/5387621,5387621
 Aster sinoangustifolius,,GBIF,https://www.gbif.org/species/9462353,9462353
 Aster sugimotoi,,GBIF,https://www.gbif.org/species/5387506,5387506
 Aster taiwanensis,,GBIF,https://www.gbif.org/species/5387363,5387363
-Asteraceae,Composite,GBIF,https://www.gbif.org/species/3065,3065
 Asterella australis,,GBIF,https://www.gbif.org/species/7809110,7809110
 Asterella lateralis,,GBIF,https://www.gbif.org/species/7407173,7407173
 Asterella tenera,,GBIF,https://www.gbif.org/species/7735075,7735075

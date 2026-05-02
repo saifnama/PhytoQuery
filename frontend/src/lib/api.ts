@@ -251,6 +251,14 @@ export const searchTypesApi = {
   },
 };
 
+// Dashboard API
+export const dashboardApi = {
+  async getMetrics() {
+    const response = await api.get('/api/dashboard/metrics');
+    return response.data;
+  },
+};
+
 // Health API
 export const healthApi = {
   async check(): Promise<{ status: string }> {

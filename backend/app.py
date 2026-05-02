@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from backend.core.http_client import HttpClientManager
-from backend.api import ner, ner_pdf, rag, health, doi, search, paper
+from backend.api import ner, ner_pdf, rag, health, doi, search, paper, dashboard
 import logging
 import os
 
@@ -65,6 +65,7 @@ app.include_router(ner_pdf.router)
 app.include_router(rag.router)
 app.include_router(health.router)
 app.include_router(doi.router)
+app.include_router(dashboard.router)
 
 
 # Serve React app for all other routes (SPA routing)
