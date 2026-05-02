@@ -33,7 +33,7 @@ from backend.core.rag_storage import delete_user_upload_file, delete_user_upload
 # ---------------------------------------------------------------------------
 
 # --- Import from RAG config ---
-from backend.config_rag import (
+from backend.config import (
     RAG_TEMPERATURE,
     RAG_CONTEXT_WINDOW,
     RAG_EMBEDDING_MODEL,

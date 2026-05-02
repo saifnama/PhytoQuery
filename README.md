@@ -170,9 +170,12 @@ cp .env.macbook .env
 
 #### RAG Settings
 ```bash
-# Embedding model (Qwen3-4B recommended, bge-m3 as fallback)
-RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
-RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-m3
+# Embedding model
+# Primary: BAAI/bge-m3 (great quality, ~2GB RAM, recommended for testing)
+# Fallback: BAAI/bge-small-en-v1.5 (~130MB, blazing fast)
+# Production: Qwen/Qwen3-Embedding-4B (~8GB VRAM, best quality)
+RAG_EMBEDDING_MODEL=BAAI/bge-m3
+RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 
 # MRL dimension truncation (None=full 2560, 1024=balanced, 512=fast)
 RAG_EMBEDDING_DIM=1024
@@ -181,11 +184,19 @@ RAG_EMBEDDING_DIM=1024
 RAG_EMBEDDING_INSTRUCTION="Instruct: Given a scientific query about phytochemistry, biology, or natural products, retrieve relevant research passages."
 
 # Reranker
-RAG_RERANKER_MODEL=zeroentropy/zerank-2
+# Testing: cross-encoder/ms-marco-MiniLM-L-6-v2 (~90MB)
+# Production: zeroentropy/zerank-2 (~1GB)
+RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 
 # GPU acceleration (CUDA only)
 RAG_USE_FLASH_ATTENTION=true
 RAG_MULTI_GPU=false
+
+# RAG Tuning
+RAG_TEMPERATURE=0.1
+RAG_CONTEXT_WINDOW=8192
+RAG_TOP_K=10
+RAG_SIMILARITY_THRESHOLD=0.85
 ```
 
 #### LLM Providers

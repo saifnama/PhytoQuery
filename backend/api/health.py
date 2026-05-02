@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from backend.config_ner import NER_OLLAMA_URL
+from backend.config import NER_OLLAMA_URL
 from backend.core.http_client import HttpClientManager
 import logging
 

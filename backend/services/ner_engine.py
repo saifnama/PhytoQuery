@@ -17,7 +17,7 @@ from backend.gazetteer.bioactivity_matcher import match_bioactivities
 logger = logging.getLogger(__name__)
 
 # --- Import from NER config ---
-from backend.config_ner import (
+from backend.config import (
     NER_OLLAMA_URL,
     NER_OLLAMA_MODEL,
     NER_OPENROUTER_API_KEY,
