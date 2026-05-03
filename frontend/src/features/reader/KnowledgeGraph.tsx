@@ -1,13 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Graph, DownloadSimple } from '@phosphor-icons/react';
+/**
+ * KnowledgeGraph — per-paper graph using vis-network (npm, bundled).
+ * Includes: hover/click highlight focus, React-rendered tooltip, search-to-focus,
+ * layout switcher (force/hierarchical/circular), filter pills, double-click
+ * collapse, auto-disable physics after stabilization.
+ */
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Graph, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import type { Entity } from '../../types';
 
-// Declare vis to avoid TS errors
-declare global {
-  interface Window {
-    vis: any;
-  }
-}
+// vis-network's TS surface is overly strict for our loose option objects.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type VisModule = any;
 
 interface PaperIdentifier {
   type: string;
@@ -23,101 +27,198 @@ interface KnowledgeGraphProps {
   entityPaperMap?: Record<string, string[]>;
 }
 
-export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({ 
-  entities, 
-  paperIdentifier, 
+// ─── vis-network options (single force layout, physics stays alive) ──────
+//   • edges:   straight (no curves), DASHED by default, light grey
+//   • nodes:   no black border on highlight; halo (glow shadow) on selected
+//              applied dynamically via DataSet.update in click handler
+function buildOptions() {
+  return {
+    nodes: {
+      shape: 'dot',
+      borderWidth: 0,
+    },
+    edges: {
+      smooth: false, // straight lines
+      color: {
+        color: '#e2e8f0', // very light grey at rest
+        highlight: '#64748b', // medium grey when connected to selected
+        hover: '#64748b',
+        opacity: 1,
+      },
+      width: 0.8, // thin idle
+      hoverWidth: 1.5, // slightly bolder on hover/click
+      selectionWidth: 1.5,
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 9999, // suppress vis-network's built-in tooltip; we render our own
+      zoomView: true,
+      dragView: true,
+    },
+    layout: { randomSeed: 42 },
+    // Physics tuned to match the v4 HTML's feel:
+    //   springLength 130 ≈ "30% of smaller canvas dim" at typical view sizes —
+    //   keeps entities close to the paper instead of pinned to edges.
+    physics: {
+      enabled: true,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -100,
+        centralGravity: 0.015,
+        springLength: 130,
+        springConstant: 0.04,
+        damping: 0.85,
+        avoidOverlap: 0.6,
+      },
+      stabilization: { enabled: true, iterations: 300 },
+      minVelocity: 0.3, // sim runs longer → bounce on filter toggle is visible
+    },
+  };
+}
+
+// Pretty-print an entity label (e.g. PLANT_PART → "Plant Part")
+function prettyType(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
+  entities,
+  paperIdentifier,
   paperIdentifiers,
   entityConfig,
-  entityPaperMap
+  entityPaperMap,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const networkRef = useRef<any>(null);
-  const dataRef = useRef<{ nodes: any; edges: any }>({ nodes: null, edges: null });
-  const [isVisLoaded, setIsVisLoaded] = useState(!!window.vis);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nodesDS = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const edgesDS = useRef<any>(null);
+
+  const [vis, setVis] = useState<VisModule | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeLegend, setActiveLegend] = useState<{ label: string, color: string }[]>([]);
+  const [showLabels, setShowLabels] = useState(true);
+  const [search, setSearch] = useState('');
+  const [activeTypes, setActiveTypes] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; nodeId: string } | null>(null);
 
-  // Load vis-network dynamically
+  // Refs for closures inside vis-network event handlers (avoid stale state)
+  const selectedIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (window.vis) {
-      setIsVisLoaded(true);
-      return;
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+  const activeTypesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    activeTypesRef.current = activeTypes;
+  }, [activeTypes]);
+
+  const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
+
+  // ── Build node/edge data + per-type metadata ─────────────────────────────
+  const { nodesData, edgesData, typeColors, nodeInfo } = useMemo(() => {
+    if (entities.length === 0 || papers.length === 0) {
+      return {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        nodesData: [] as any[],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        edgesData: [] as any[],
+        typeColors: new Map<string, { name: string; color: string; count: number }>(),
+        nodeInfo: new Map<
+          string,
+          { type: string; name: string; freq: number; color: string; isPaper: boolean }
+        >(),
+      };
     }
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js';
-    script.onload = () => setIsVisLoaded(true);
-    document.head.appendChild(script);
-  }, []);
 
-  useEffect(() => {
-    const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
-    if (!isVisLoaded || !containerRef.current || entities.length === 0 || papers.length === 0) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nodesData: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const edgesData: any[] = [];
+    const typeColors = new Map<string, { name: string; color: string; count: number }>();
+    const nodeInfo = new Map<
+      string,
+      { type: string; name: string; freq: number; color: string; isPaper: boolean }
+    >();
 
-    // Build Nodes & Edges
-    const nodes = new window.vis.DataSet();
-    const edges = new window.vis.DataSet();
-
-    // Central Nodes (Papers)
+    // Paper anchor node(s)
     const paperNodeIds: string[] = [];
-    papers.forEach((p, idx) => {
+    papers.forEach((p) => {
       const nodeId = `paper-${p.value}`;
       paperNodeIds.push(nodeId);
-      nodes.add({
+      const isSingle = papers.length === 1;
+      const labelText = `DOI\n${p.value}`;
+      nodesData.push({
         id: nodeId,
-        label: papers.length === 1 ? `DOI\n${p.value}` : `Paper ${idx + 1}\n${p.value}`,
+        label: showLabels ? labelText : '',
+        _label: labelText,
+        _isPaper: true,
+        _type: 'PAPER',
+        _color: '#10B981', // for halo on selection
         shape: 'dot',
-        size: papers.length === 1 ? 40 : 28,
+        size: isSingle ? 34 : 28,
         color: {
           background: '#E1FBF1',
           border: '#6EE7B7',
-          borderWidth: papers.length === 1 ? 4 : 3,
-          highlight: { background: '#D1FAE5', border: '#34D399' }
+          // No colour change on highlight/hover — selection is shown via the
+          // halo shadow we set in the click handler, not a different border.
+          highlight: { background: '#E1FBF1', border: '#6EE7B7' },
+          hover: { background: '#E1FBF1', border: '#6EE7B7' },
         },
-        font: { color: '#1e293b', face: 'Inter', size: papers.length === 1 ? 16 : 13, bold: true, vadjust: -5 },
-        title: `Type: ${p.type.toUpperCase()}\nIdentifier: ${p.value}`,
-        shadow: true,
+        borderWidth: isSingle ? 4 : 3,
+        font: {
+          color: '#1e293b',
+          face: 'Inter',
+          size: isSingle ? 16 : 13,
+          bold: true,
+          vadjust: -5,
+        },
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.08)', size: 8, x: 0, y: 2 },
+      });
+      nodeInfo.set(nodeId, {
+        type: 'Paper',
+        name: p.value,
+        freq: 0,
+        color: '#10B981',
+        isPaper: true,
       });
     });
 
-    // We only want unique canonical entities to avoid clutter, and we count their occurrences
+    // Aggregate entity counts
     const uniqueEntities = new Map<string, Entity & { count: number }>();
-    entities.forEach(e => {
-      // Use text + label as unique key to prevent merging identical terms from different categories
+    entities.forEach((e) => {
       const key = `${e.label}-${e.text.toLowerCase()}`;
       const incomingCount = (e as Entity & { count?: number }).count || 1;
       if (!uniqueEntities.has(key)) {
         uniqueEntities.set(key, { ...e, count: incomingCount });
       } else {
-        const existing = uniqueEntities.get(key)!;
-        existing.count += incomingCount;
+        uniqueEntities.get(key)!.count += incomingCount;
       }
     });
 
-    // Helper to mix a color with white to lighten it, keeping it 100% opaque
+    // Helper: lighten an "r g b" string by mixing with white
     const lightenRgb = (rgbString: string, factor: number) => {
       const parts = rgbString.split(' ').map(Number);
-      if (parts.length !== 3 || parts.some(isNaN)) return rgbString; // fallback
+      if (parts.length !== 3 || parts.some(isNaN)) return rgbString;
       const [r, g, b] = parts;
-      const newR = Math.round(r + (255 - r) * factor);
-      const newG = Math.round(g + (255 - g) * factor);
-      const newB = Math.round(b + (255 - b) * factor);
-      return `rgb(${newR}, ${newG}, ${newB})`;
+      return `rgb(${Math.round(r + (255 - r) * factor)}, ${Math.round(g + (255 - g) * factor)}, ${Math.round(b + (255 - b) * factor)})`;
     };
 
-    const legendMap = new Map<string, string>();
-
-    // Add Entity Nodes
     uniqueEntities.forEach((ent, key) => {
-      const config = entityConfig[ent.label.toUpperCase()];
-      
-      let bgColor = '#cbd5e1'; // Default slate-300 lightened
+      const labelKey = ent.label.toUpperCase();
+      const config = entityConfig[labelKey];
+
+      let bgColor = '#cbd5e1';
       let solidColor = '#94a3b8';
 
       if (config?.accentVar) {
         const rootStyle = getComputedStyle(document.documentElement);
-        const rgbResolved = rootStyle.getPropertyValue(config.accentVar + '-rgb').trim();
+        const rgbResolved = rootStyle.getPropertyValue(`${config.accentVar}-rgb`).trim();
         if (rgbResolved) {
-          // Mix with 40% white to lighten it while keeping it completely solid/opaque
           bgColor = lightenRgb(rgbResolved, 0.4);
           solidColor = `rgb(${rgbResolved.split(' ').join(',')})`;
         } else {
@@ -128,257 +229,597 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
           }
         }
       }
-      
-      legendMap.set(ent.label.toUpperCase(), solidColor);
 
-      // Frequency-based sizing: logarithmic scale for dramatic differences
-      const freqSize = Math.max(8, Math.min(34, 8 + Math.log2((ent.count || 1) + 1) * 8));
-      const freqFontSize = Math.max(10, Math.min(16, 10 + Math.log2((ent.count || 1) + 1) * 3));
+      // Per-type metadata for legend / pills
+      const existing = typeColors.get(labelKey);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        typeColors.set(labelKey, { name: prettyType(labelKey), color: solidColor, count: 1 });
+      }
 
-      nodes.add({
+      // Frequency-driven sizing — sqrt with a small multiplier keeps the
+      // spread visible but compact. Range 8–22 px, font 10–14 px.
+      const count = ent.count || 1;
+      const freqSize = Math.max(8, Math.min(22, 8 + Math.sqrt(count) * 3.5));
+      const freqFontSize = Math.max(10, Math.min(14, 9 + Math.log2(count + 1) * 1.5));
+
+      nodesData.push({
         id: key,
-        label: ent.text,
+        label: showLabels ? ent.text : '',
+        _label: ent.text,
+        _isPaper: false,
+        _type: labelKey,
+        _color: solidColor, // for halo on selection
         shape: 'dot',
         size: freqSize,
         color: {
           background: bgColor,
           border: solidColor,
-          borderWidth: ent.count && ent.count > 5 ? 2 : 1.5,
-          highlight: { background: bgColor, border: '#1e293b' },
-          hover: { background: bgColor, border: '#1e293b' }
+          // No black border on highlight — selection shown via halo only
+          highlight: { background: bgColor, border: solidColor },
+          hover: { background: bgColor, border: solidColor },
         },
+        borderWidth: ent.count && ent.count > 5 ? 2 : 1.5,
         font: { color: '#334155', face: 'Inter', size: freqFontSize, vadjust: 2 },
-        title: `Type: ${ent.label.toUpperCase()}\nEntity: ${ent.text}\nMentions: ${ent.count || 1}`
+      });
+      nodeInfo.set(key, {
+        type: prettyType(labelKey),
+        name: ent.text,
+        freq: ent.count || 1,
+        color: solidColor,
+        isPaper: false,
       });
 
-      // Connect to paper node(s)
+      // Edges
       const papersForEntity = entityPaperMap?.[key];
       if (papersForEntity && papersForEntity.length > 0) {
-        // Compare mode: connect to all papers this entity appears in
-        papersForEntity.forEach(paperValue => {
-          const paperNodeId = `paper-${paperValue}`;
-          edges.add({
-            from: paperNodeId,
+        papersForEntity.forEach((paperValue) => {
+          edgesData.push({
+            id: `e-${paperValue}-${key}`,
+            from: `paper-${paperValue}`,
             to: key,
-            color: { color: '#DBDBDB', highlight: '#969696' },
-            width: 1.5
           });
         });
       } else {
-        // Single paper mode
-        edges.add({
-          from: paperNodeIds[0],
-          to: key,
-          color: { color: '#DBDBDB', highlight: '#969696' },
-          width: 1.5
-        });
+        edgesData.push({ id: `e-${paperNodeIds[0]}-${key}`, from: paperNodeIds[0], to: key });
       }
     });
 
-    setActiveLegend(Array.from(legendMap.entries()).map(([label, color]) => ({ label, color })));
+    return { nodesData, edgesData, typeColors, nodeInfo };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entities, paperIdentifier, paperIdentifiers, entityConfig, entityPaperMap]);
 
-    const data = { nodes, edges };
-    dataRef.current = data;
+  // Initialize / reset activeTypes whenever the type set changes (new paper)
+  useEffect(() => {
+    setActiveTypes(new Set(typeColors.keys()));
+  }, [typeColors]);
 
-    const options = {
-      physics: {
-        solver: "forceAtlas2Based",
-        forceAtlas2Based: {
-          gravitationalConstant: -100, // strong repulsion
-          centralGravity: 0.015, // weak pull to center
-          springLength: 200, // long springs
-          springConstant: 0.04,
-          damping: 0.4,
-          avoidOverlap: 0.6 // strongly push away overlapping nodes
-        },
-        stabilization: { enabled: true, iterations: 300 }
-      },
-      interaction: {
-        hover: true,
-        tooltipDelay: 100,
-        zoomView: true,
-        dragView: true
+  // ── Lazy-load vis-network bundle on mount ─────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    import('vis-network/standalone').then((mod) => {
+      if (!cancelled) setVis(mod);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ── CSS reset for vis-network's tooltip wrapper (we don't use it, but
+  //    keep the style clean if it ever flashes).
+  useEffect(() => {
+    if (document.getElementById('vis-tooltip-reset')) return;
+    const style = document.createElement('style');
+    style.id = 'vis-tooltip-reset';
+    style.textContent = `
+      .vis-tooltip {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        pointer-events: none !important;
       }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  // ── Mount vis-network ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!vis || !containerRef.current || nodesData.length === 0) return;
+
+    const data = {
+      nodes: new vis.DataSet(nodesData),
+      edges: new vis.DataSet(edgesData),
+    };
+    nodesDS.current = data.nodes;
+    edgesDS.current = data.edges;
+
+    const network = new vis.Network(containerRef.current, data, buildOptions());
+    networkRef.current = network;
+
+    // Slight zoom-out once the layout settles. Physics stays enabled so the
+    // user can drag nodes and watch the springs respond.
+    network.on('stabilizationIterationsDone', () => {
+      const scale = network.getScale();
+      network.moveTo({ scale: scale * 0.8 });
+    });
+
+    // Edge styling — thin light grey at rest, medium grey + slightly bolder
+    // when connected to a hovered/selected node.
+    const lightConnectedEdges = (nodeId: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      edgesDS.current.get().forEach((e: any) => {
+        const isConn = e.from === nodeId || e.to === nodeId;
+        edgesDS.current.update({
+          id: e.id,
+          width: isConn ? 1.5 : 0.8,
+          color: { color: isConn ? '#64748b' : '#e2e8f0', opacity: 1 },
+        });
+      });
+    };
+    const restoreAllEdges = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      edgesDS.current.get().forEach((e: any) => {
+        edgesDS.current.update({
+          id: e.id,
+          width: 0.8,
+          color: { color: '#e2e8f0', opacity: 1 },
+        });
+      });
     };
 
-    networkRef.current = new window.vis.Network(containerRef.current, data, options);
+    // Halo helpers — colored shadow on the selected node, default shadow on others
+    const applyHalo = (nodeId: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodesData.forEach((n: any) => {
+        if (n.id === nodeId) {
+          nodesDS.current.update({
+            id: n.id,
+            shadow: {
+              enabled: true,
+              color: n._color || '#10B981',
+              size: 22,
+              x: 0,
+              y: 0,
+            },
+          });
+        } else {
+          nodesDS.current.update({
+            id: n.id,
+            shadow: n._isPaper
+              ? { enabled: true, color: 'rgba(0,0,0,0.08)', size: 8, x: 0, y: 2 }
+              : false,
+          });
+        }
+      });
+    };
+    const clearHalo = () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodesData.forEach((n: any) => {
+        nodesDS.current.update({
+          id: n.id,
+          shadow: n._isPaper
+            ? { enabled: true, color: 'rgba(0,0,0,0.08)', size: 8, x: 0, y: 2 }
+            : false,
+        });
+      });
+    };
 
-    // Zoom out slightly upon initial stabilization
-    networkRef.current.once("stabilizationIterationsDone", () => {
-      const currentScale = networkRef.current.getScale();
-      networkRef.current.moveTo({ scale: currentScale * 0.8 });
+    // Hover: dim non-neighbours + light up edges + show React tooltip
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    network.on('hoverNode', (params: any) => {
+      const nodeId = params.node;
+      if (selectedIdRef.current === null) {
+        const connected = new Set<string>(network.getConnectedNodes(nodeId));
+        connected.add(nodeId);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        nodesDS.current.get().forEach((n: any) => {
+          nodesDS.current.update({ id: n.id, opacity: connected.has(n.id) ? 1 : 0.12 });
+        });
+        lightConnectedEdges(nodeId);
+      }
+      const pos = params.pointer.DOM;
+      setTooltip({ x: pos.x, y: pos.y, nodeId });
+    });
+
+    network.on('blurNode', () => {
+      if (selectedIdRef.current === null) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        nodesDS.current.get().forEach((n: any) => nodesDS.current.update({ id: n.id, opacity: 1 }));
+        restoreAllEdges();
+      }
+      setTooltip(null);
+    });
+
+    // Click: select → HIDE all non-connected nodes (vis-network auto-hides
+    //   their edges too); click empty → restore visibility per current filter.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    network.on('click', (params: any) => {
+      if (params.nodes.length === 0) {
+        setSelectedId(null);
+        // Restore everything to opacity 1 + visible according to filter
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        nodesData.forEach((n: any) => {
+          nodesDS.current.update({
+            id: n.id,
+            opacity: 1,
+            hidden: n._isPaper ? false : !activeTypesRef.current.has(n._type),
+          });
+        });
+        restoreAllEdges();
+        clearHalo();
+        return;
+      }
+      const nodeId = params.nodes[0];
+      const connected = new Set<string>(network.getConnectedNodes(nodeId));
+      connected.add(nodeId);
+      setSelectedId(nodeId);
+      // Hide everything except selected + its connected neighbours.
+      // (vis-network automatically hides edges whose endpoint is hidden)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      nodesData.forEach((n: any) => {
+        nodesDS.current.update({
+          id: n.id,
+          opacity: 1,
+          hidden: !connected.has(n.id),
+        });
+      });
+      lightConnectedEdges(nodeId);
+      applyHalo(nodeId);
+    });
+
+    // Double-click: collapse / expand neighbours (skip paper nodes)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    network.on('doubleClick', (params: any) => {
+      if (params.nodes.length === 0) return;
+      const nodeId: string = params.nodes[0];
+      if (nodeId.startsWith('paper-')) return;
+      const neighbours: string[] = network.getConnectedNodes(nodeId);
+      neighbours.forEach((id) => {
+        if (id.startsWith('paper-')) return; // never hide paper
+        const node = nodesDS.current.get(id);
+        if (!node) return;
+        nodesDS.current.update({ id, hidden: !node.hidden });
+      });
     });
 
     return () => {
-      if (networkRef.current) {
-        networkRef.current.destroy();
-        networkRef.current = null;
-      }
+      network.destroy();
+      networkRef.current = null;
+      nodesDS.current = null;
+      edgesDS.current = null;
     };
-  }, [isVisLoaded, entities, paperIdentifier, paperIdentifiers, entityConfig, entityPaperMap]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vis, nodesData, edgesData]);
 
-  // Handle resize when toggling fullscreen
+  // ── Sync labels toggle ────────────────────────────────────────────────
   useEffect(() => {
-    if (networkRef.current) {
-      setTimeout(() => {
-        networkRef.current.redraw();
-        networkRef.current.fit({ animation: false });
-        
-        setTimeout(() => {
-          const currentScale = networkRef.current.getScale();
-          networkRef.current.moveTo({ 
-            scale: currentScale * 0.85, 
-            animation: { duration: 300, easingFunction: 'easeInOutQuad' } 
-          });
-        }, 10);
-      }, 50);
+    if (!nodesDS.current) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesData.forEach((n: any) => {
+      nodesDS.current.update({ id: n.id, label: showLabels ? n._label : '' });
+    });
+  }, [showLabels, nodesData]);
+
+  // ── Sync type filter ──────────────────────────────────────────────────
+  // Animate the bounce: toggle hidden, perturb newly-revealed nodes, then
+  // call startSimulation() — vis-network animates frame-by-frame at 60 fps
+  // until the system reaches minVelocity. (stabilize(N) runs offscreen and
+  // shows no animation, which is why it didn't bounce visibly.)
+  useEffect(() => {
+    if (!nodesDS.current || !networkRef.current) return;
+    const network = networkRef.current;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesData.forEach((n: any) => {
+      if (n._isPaper) return;
+      const willHide = !activeTypes.has(n._type);
+      const current = nodesDS.current.get(n.id);
+      const wasHidden = !!current?.hidden;
+
+      nodesDS.current.update({ id: n.id, hidden: willHide });
+
+      // Re-showing: nudge position so physics has motion to resolve. Without
+      // a kick, a node sitting at its old equilibrium has nothing to do and
+      // the bounce is invisible.
+      if (wasHidden && !willHide) {
+        const positions = network.getPositions([n.id]);
+        const pos = positions[n.id];
+        if (pos) {
+          const dx = (Math.random() - 0.5) * 80;
+          const dy = (Math.random() - 0.5) * 80;
+          network.moveNode(n.id, pos.x + dx, pos.y + dy);
+        }
+      }
+    });
+
+    network.startSimulation();
+  }, [activeTypes, nodesData]);
+
+  // ── Search: focus matching node, dim others ───────────────────────────
+  useEffect(() => {
+    if (!networkRef.current || !nodesDS.current) return;
+    if (!search.trim()) {
+      // Restore opacity (unless a selection is active)
+      if (selectedIdRef.current === null) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        nodesDS.current.get().forEach((n: any) => nodesDS.current.update({ id: n.id, opacity: 1 }));
+      }
+      return;
     }
+    const q = search.toLowerCase();
+    const matches: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesData.forEach((n: any) => {
+      if (n._label && n._label.toLowerCase().includes(q)) matches.push(n.id);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesDS.current.get().forEach((n: any) => {
+      nodesDS.current.update({ id: n.id, opacity: matches.includes(n.id) ? 1 : 0.1 });
+    });
+    if (matches.length > 0) {
+      networkRef.current.focus(matches[0], {
+        scale: 1.6,
+        animation: { duration: 600, easingFunction: 'easeInOutQuad' },
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, nodesData]);
+
+  // ── Resize on fullscreen toggle ───────────────────────────────────────
+  useEffect(() => {
+    if (!networkRef.current) return;
+    setTimeout(() => {
+      networkRef.current.redraw();
+      networkRef.current.fit({ animation: false });
+      setTimeout(() => {
+        const scale = networkRef.current.getScale();
+        networkRef.current.moveTo({
+          scale: scale * 0.85,
+          animation: { duration: 300, easingFunction: 'easeInOutQuad' },
+        });
+      }, 10);
+    }, 50);
   }, [isFullscreen]);
 
-  const downloadHTML = () => {
-    if (!dataRef.current.nodes || !dataRef.current.edges) return;
-    
-    const nodesJSON = JSON.stringify(dataRef.current.nodes.get());
-    const edgesJSON = JSON.stringify(dataRef.current.edges.get());
-    
-    // Build legend HTML
-    const legendItemsHTML = activeLegend.map(item => `
-      <div class="legend-item">
-        <div class="legend-color" style="background-color: ${item.color}"></div>
-        <div class="legend-label">${item.label}</div>
-      </div>
-    `).join('');
-    
-    const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
-    const paperLabel = papers.length > 1 
-      ? `${papers.length} Papers` 
-      : (paperIdentifier?.value || 'Document');
+  // ── Helpers ───────────────────────────────────────────────────────────
+  const toggleType = useCallback((type: string) => {
+    setActiveTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }, []);
+
+  const resetLayout = useCallback(() => {
+    if (!networkRef.current) return;
+    // Re-shake the layout (physics is already enabled — just kick the simulation)
+    networkRef.current.stabilize(150);
+    setSearch('');
+    setSelectedId(null);
+    setActiveTypes(new Set(typeColors.keys()));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesDS.current?.get().forEach((n: any) => {
+      nodesDS.current.update({ id: n.id, opacity: 1, hidden: false });
+    });
+  }, [typeColors]);
+
+  // ── HTML export (standalone, vis-network from CDN inside the file) ────
+  const downloadHTML = useCallback(() => {
+    if (!nodesDS.current || !edgesDS.current) return;
+    const nodesJSON = JSON.stringify(nodesDS.current.get());
+    const edgesJSON = JSON.stringify(edgesDS.current.get());
+    const legendItemsHTML = [...typeColors.entries()]
+      .map(
+        ([, info]) =>
+          `<div class="legend-item"><div class="legend-color" style="background-color:${info.color}"></div><div class="legend-label">${info.name}</div></div>`,
+      )
+      .join('');
+    const paperLabel =
+      papers.length > 1 ? `${papers.length} Papers` : (paperIdentifier?.value || 'Document');
 
     const htmlContent = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Knowledge Graph - ${paperLabel}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
-    <style>
-      body { margin:0; padding:0; overflow:hidden; font-family: 'Inter', sans-serif; background: #f8fafc; }
-      #mynetwork { width:100vw; height:100vh; }
-      .header { position: absolute; top: 16px; left: 16px; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #e2e8f0; pointer-events: none; }
-      .title { font-size: 14px; font-weight: bold; color: #1e293b; margin: 0; }
-      .subtitle { font-size: 11px; color: #64748b; margin-top: 4px; }
-      .legend { position: absolute; top: 80px; left: 16px; background: rgba(255,255,255,0.9); backdrop-filter: blur(4px); padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); pointer-events: none; max-width: 200px; }
-      .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-      .legend-item:last-child { margin-bottom: 0; }
-      .legend-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-      .legend-label { font-size: 10px; font-weight: 500; color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    </style>
-</head>
-<body>
-<div class="header">
-  <h1 class="title">Graph View</h1>
-  <div class="subtitle">Entities linked to ${paperLabel}</div>
-</div>
-${activeLegend.length > 0 ? `
-<div class="legend">
-  ${legendItemsHTML}
-</div>
-` : ''}
+<html><head><meta charset="utf-8"><title>Knowledge Graph - ${paperLabel}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
+<style>
+  body{margin:0;padding:0;overflow:hidden;font-family:'Inter',sans-serif;background:#f8fafc}
+  #mynetwork{width:100vw;height:100vh}
+  .header{position:absolute;top:16px;left:16px;background:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);border:1px solid #e2e8f0;pointer-events:none}
+  .title{font-size:14px;font-weight:bold;color:#1e293b;margin:0}
+  .subtitle{font-size:11px;color:#64748b;margin-top:4px}
+  .legend{position:absolute;top:80px;left:16px;background:rgba(255,255,255,0.9);padding:10px;border-radius:8px;border:1px solid #e2e8f0;pointer-events:none;max-width:200px}
+  .legend-item{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .legend-color{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .legend-label{font-size:10px;font-weight:500;color:#334155}
+</style></head><body>
+<div class="header"><h1 class="title">Graph View</h1><div class="subtitle">Entities linked to ${paperLabel}</div></div>
+${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
 <div id="mynetwork"></div>
 <script>
-    const container = document.getElementById('mynetwork');
-    const data = { nodes: ${nodesJSON}, edges: ${edgesJSON} };
-    const options = {
-      physics: {
-        solver: "forceAtlas2Based",
-        forceAtlas2Based: { gravitationalConstant: -100, centralGravity: 0.015, springLength: 200, springConstant: 0.04, damping: 0.4, avoidOverlap: 0.6 },
-      }
-    };
-    const network = new vis.Network(container, data, options);
-    network.once("stabilizationIterationsDone", () => {
-      network.moveTo({ scale: network.getScale() * 0.8 });
-    });
-</script>
-</body>
-</html>`;
+  const data = { nodes: ${nodesJSON}, edges: ${edgesJSON} };
+  const options = {
+    physics: { solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -100, centralGravity: 0.015, springLength: 200, springConstant: 0.04, damping: 0.85, avoidOverlap: 0.6 }, minVelocity: 0.75 },
+    interaction: { hover: true, tooltipDelay: 100 }
+  };
+  const net = new vis.Network(document.getElementById('mynetwork'), data, options);
+  net.once("stabilizationIterationsDone", () => net.moveTo({ scale: net.getScale() * 0.8 }));
+</script></body></html>`;
 
     const blob = new Blob([htmlContent], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const safeLabel = papers.length > 1 
-      ? `compare-${papers.length}-papers` 
-      : (paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export');
+    const safeLabel =
+      papers.length > 1
+        ? `compare-${papers.length}-papers`
+        : paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export';
     a.download = `GraphView-${safeLabel}.html`;
     a.click();
     URL.revokeObjectURL(url);
-  };
+  }, [typeColors, papers, paperIdentifier]);
 
   const hasPaper = paperIdentifier || (paperIdentifiers && paperIdentifiers.length > 0);
-  if (entities.length === 0 || !hasPaper) {
-    return null; // Don't show if no entities are extracted
-  }
+  if (entities.length === 0 || !hasPaper) return null;
+
+  const presentTypes = [...typeColors.entries()];
+  const tooltipInfo = tooltip ? nodeInfo.get(tooltip.nodeId) : null;
 
   return (
     <div className="mt-8 flex flex-col">
       <h2 className="text-[14px] font-semibold text-slate-900 font-display mb-3 px-2">
         Graph View
       </h2>
-      
-      {/* Container switches between normal box and fullscreen modal overlay */}
-      <div className={isFullscreen 
-        ? "fixed inset-0 z-[100] bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 transition-all duration-200"
-        : "relative bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200"
-      }>
-        
-        {/* Backdrop click-to-close */}
+
+      <div
+        className={
+          isFullscreen
+            ? 'fixed inset-0 z-[100] bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 transition-all duration-200'
+            : 'relative bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200'
+        }
+      >
         {isFullscreen && (
-          <div className="absolute inset-0 cursor-pointer" onClick={() => setIsFullscreen(false)} />
+          <div
+            className="absolute inset-0 cursor-pointer"
+            onClick={() => setIsFullscreen(false)}
+          />
         )}
-        
-        {/* Main Card */}
-        <div className={isFullscreen 
-          ? "relative bg-white w-full max-w-5xl h-[85vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-10" 
-          : "relative w-full flex flex-col"
-        }>
-          
-          {/* Action Buttons Overlay */}
-          <div className="absolute top-3 right-3 z-20 flex gap-2">
+
+        <div
+          className={
+            isFullscreen
+              ? 'relative bg-white w-full max-w-5xl h-[85vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-10'
+              : 'relative w-full flex flex-col'
+          }
+        >
+          {/* Top control bar */}
+          <div className="absolute top-3 right-3 z-20 flex gap-2 items-center">
             {isFullscreen && (
-              <button 
-                onClick={downloadHTML}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
-                title="Download Graph as HTML"
-              >
-                <DownloadSimple weight="bold" size={18} />
-              </button>
+              <>
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search node…"
+                  className="text-[11px] px-2.5 py-1.5 rounded-md border border-slate-200 bg-white/90 text-slate-700 outline-none focus:border-slate-400 w-36"
+                />
+                <button
+                  onClick={resetLayout}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
+                  title="Reset layout"
+                >
+                  <ArrowCounterClockwise weight="bold" size={16} />
+                </button>
+                <button
+                  onClick={() => setShowLabels((v) => !v)}
+                  className={`text-[11px] px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
+                    showLabels
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                  title="Toggle labels"
+                >
+                  Labels
+                </button>
+                <button
+                  onClick={downloadHTML}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
+                  title="Download Graph as HTML"
+                >
+                  <DownloadSimple weight="bold" size={18} />
+                </button>
+              </>
             )}
-            <button 
+            <button
               onClick={() => setIsFullscreen(!isFullscreen)}
               className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
-              title={isFullscreen ? "Close fullscreen" : "Expand to fullscreen"}
+              title={isFullscreen ? 'Close fullscreen' : 'Expand to fullscreen'}
             >
               <Graph weight="regular" size={20} />
             </button>
           </div>
-          
-          {/* Legend Overlay - Only shown when fullscreen */}
-          {isFullscreen && activeLegend.length > 0 && (
-            <div className="absolute bottom-4 left-4 z-10 bg-white/90 backdrop-blur-sm border border-slate-200 rounded-lg p-3 shadow-sm max-w-[200px] pointer-events-none origin-bottom-left">
-              <div className="flex flex-col gap-2">
-                {activeLegend.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
-                    <span className="text-[11px] font-medium text-slate-700 truncate" title={item.label}>
-                      {item.label}
+
+          {/* Legend with counts — top-left, fullscreen only */}
+          {isFullscreen && presentTypes.length > 0 && (
+            <div className="absolute top-3 left-3 z-10 bg-white border border-slate-200 rounded-xl px-3.5 py-3 shadow-md min-w-[185px]">
+              {presentTypes.map(([type, info]) => {
+                const on = activeTypes.has(type);
+                return (
+                  <div
+                    key={type}
+                    onClick={() => toggleType(type)}
+                    className="flex items-center gap-2 mb-1.5 last:mb-0 cursor-pointer transition-opacity"
+                    style={{ opacity: on ? 1 : 0.28 }}
+                  >
+                    <div
+                      className="w-3 h-3 rounded-sm flex-shrink-0"
+                      style={{ background: info.color }}
+                    />
+                    <span className="text-[11px] text-slate-700 flex-1 truncate" title={info.name}>
+                      {info.name}
                     </span>
+                    <span className="font-mono text-[9px] text-slate-400">{info.count}</span>
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
           )}
-          
-          <div ref={containerRef} className={`w-full ${isFullscreen ? 'h-full flex-1' : 'h-[300px]'} cursor-grab active:cursor-grabbing bg-transparent`} />
+
+          {/* React tooltip — fires from network's hoverNode event */}
+          {tooltip && tooltipInfo && (
+            <div
+              className="absolute pointer-events-none z-30"
+              style={{
+                left: tooltip.x + 14,
+                top: tooltip.y - 10,
+                background: '#fff',
+                border: '1px solid #e2e2e2',
+                borderRadius: 8,
+                padding: '9px 12px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                minWidth: 155,
+                fontFamily: 'Inter, sans-serif',
+              }}
+            >
+              {!tooltipInfo.isPaper && (
+                <div
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                    color: tooltipInfo.color,
+                    marginBottom: 3,
+                  }}
+                >
+                  {tooltipInfo.type}
+                </div>
+              )}
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: '#111',
+                  marginBottom: 3,
+                  lineHeight: 1.3,
+                }}
+              >
+                {tooltipInfo.name}
+              </div>
+              {!tooltipInfo.isPaper && (
+                <div style={{ fontFamily: 'monospace', fontSize: 10, color: '#aaa' }}>
+                  frequency · {tooltipInfo.freq}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Graph container */}
+          <div
+            ref={containerRef}
+            className={`w-full ${isFullscreen ? 'h-full flex-1' : 'h-[300px]'} cursor-grab active:cursor-grabbing bg-transparent`}
+          />
         </div>
       </div>
     </div>

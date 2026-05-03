@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, FlowerLotus, Table, ChartBar, X, DotsThreeVertical, Trash } from '@phosphor-icons/react';
+import { Plus, FlowerLotus, Table, ChartBar, X, DotsThreeVertical, Trash, Cube } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
-import type { Entity } from '../../types';
+import { SunburstChart } from '../search/SunburstChart';
+import type { Entity, SunburstNode } from '../../types';
 
 interface UploadedPaper {
   id: string;
@@ -56,6 +57,7 @@ const MyPapersPage = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [activePaperMenu, setActivePaperMenu] = useState<string | null>(null);
+  const [sunburstVisible, setSunburstVisible] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -361,6 +363,34 @@ const MyPapersPage = () => {
   ENTITY_GROUP_ORDER.forEach((label) => {
     entityConfig[label] = { accentVar: getEntityAccentVar(label) };
   });
+
+  // Build local sunburst data from current paper(s)
+  const localSunburstData = useMemo((): SunburstNode | null => {
+    if (activePapers.length === 0) return null;
+    const typeMap: Record<string, Record<string, number>> = {};
+    activePapers.forEach(paper => {
+      Object.entries(paper.entity_counts).forEach(([label, items]) => {
+        if (!typeMap[label]) typeMap[label] = {};
+        items.forEach(item => {
+          const key = item.canonical || item.text;
+          typeMap[label][key] = (typeMap[label][key] || 0) + item.count;
+        });
+      });
+    });
+    const children = Object.entries(typeMap)
+      .sort(([a], [b]) => {
+        const order = ENTITY_GROUP_ORDER.indexOf(a as typeof ENTITY_GROUP_ORDER[number]);
+        const bOrder = ENTITY_GROUP_ORDER.indexOf(b as typeof ENTITY_GROUP_ORDER[number]);
+        return order - bOrder;
+      })
+      .map(([label, entities]) => ({
+        name: LABEL_NAMES[label] || label,
+        children: Object.entries(entities)
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, value]) => ({ name, value }))
+      }));
+    return children.length > 0 ? { name: 'Entities', children } : null;
+  }, [activePapers]);
 
   const showGraph = graphEntities.length > 0;
   const isComparing = isCompareMode && compareSelection.size >= 2;
@@ -683,16 +713,63 @@ const MyPapersPage = () => {
                 </div>
               </div>
 
-              {/* Knowledge Graph - Right Side */}
+              {/* Knowledge Graph + Sunburst — Right Side */}
               {showGraph && (
-                <div className="flex-1 bg-white overflow-hidden">
-                  <KnowledgeGraph
-                    entities={graphEntities}
-                    paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
-                    paperIdentifiers={isComparing ? paperIdentifiers : undefined}
-                    entityConfig={entityConfig}
-                    entityPaperMap={isComparing ? entityPaperMap : undefined}
-                  />
+                <div className="flex-1 bg-white overflow-hidden flex flex-col">
+                  {/* View toggle — only show graph/sunburst toggle in single-paper mode */}
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
+                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Entity View</span>
+                    {!isComparing && (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setSunburstVisible(false)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            !sunburstVisible ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          <ChartBar size={14} />
+                          Graph
+                        </button>
+                        <button
+                          onClick={() => setSunburstVisible(true)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            sunburstVisible ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          <Cube size={14} />
+                          Sunburst
+                        </button>
+                      </div>
+                    )}
+                    {isComparing && (
+                      <span className="text-[10px] text-slate-400">Compare mode</span>
+                    )}
+                  </div>
+
+                  {/* Content */}
+                  <div className="flex-1 overflow-hidden">
+                    {sunburstVisible ? (
+                      <div className="h-full overflow-y-auto p-4">
+                        {localSunburstData ? (
+                          <div className="h-full">
+                            <SunburstChart data={localSunburstData} height={Math.min(500, window.innerHeight - 200)} />
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-slate-400 text-sm">
+                            No entity data for sunburst.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <KnowledgeGraph
+                        entities={graphEntities}
+                        paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
+                        paperIdentifiers={isComparing ? paperIdentifiers : undefined}
+                        entityConfig={entityConfig}
+                        entityPaperMap={isComparing ? entityPaperMap : undefined}
+                      />
+                    )}
+                  </div>
                 </div>
               )}
             </div>

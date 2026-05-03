@@ -179,3 +179,37 @@ export interface RAGResult {
   answer: string;
   sources: Record<string, unknown>[];
 }
+
+// Shared graph types
+export interface PaperIdentifier {
+  type: string;
+  value: string;
+}
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  label: string;
+  count: number;
+  paper_count: number;
+  x?: number;
+  y?: number;
+  category?: number;
+}
+
+export interface GraphLink {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+export interface Graph3DData {
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
+
+export interface SunburstNode {
+  name: string;
+  value?: number;
+  children?: SunburstNode[];
+}

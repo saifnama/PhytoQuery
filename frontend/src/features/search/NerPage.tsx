@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import SearchForm from './SearchForm';
-import Dashboard from './Dashboard';
 import { nerApi } from '../../lib/api';
+
+const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.default })));
 import { formatTextWithFormatting } from '../../utils/sanitize';
 import type { SearchFilters, SearchResult } from '../../types';
 
@@ -163,7 +164,13 @@ const NerPage: React.FC = () => {
         )}
 
         {results.length === 0 && !isLoading && !error && (
-          <Dashboard />
+          <Suspense fallback={
+            <div className="flex items-center justify-center py-12">
+              <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+            </div>
+          }>
+            <Dashboard />
+          </Suspense>
         )}
 
         {results.length > 0 && pagination && (
