@@ -22,24 +22,31 @@ from backend.config import (
     NER_OLLAMA_MODEL,
     NER_OPENROUTER_API_KEY,
     NER_OPENROUTER_MODEL,
+    NER_GROQ_API_KEY,
+    NER_GROQ_MODEL,
     NER_CONFIDENCE_THRESHOLD,
     NER_CHUNK_SIZE_WORDS,
+    GROQ_URL,
+    OPENROUTER_URL,
     get_ner_provider,
 )
 
 
 def get_active_provider():
-    """Determine which LLM provider to use based on config.
+    """Determine which LLM provider to use as the primary for NER.
 
-    Fallback order: OpenRouter -> Ollama.
-    OpenRouter has top priority (better quality), Ollama as fallback.
+    Priority: Ollama (local, fast for bulk) > Groq (cloud-fast) > OpenRouter
+    (cloud-diverse). The other configured providers are still available as
+    fall-throughs in ``call_llm``.
     """
-    if NER_OPENROUTER_API_KEY:
-        return "openrouter"
     if NER_OLLAMA_URL:
         return "ollama"
+    if NER_GROQ_API_KEY:
+        return "groq"
+    if NER_OPENROUTER_API_KEY:
+        return "openrouter"
     raise ValueError(
-        "No LLM provider configured. Set NER_OPENROUTER_API_KEY or NER_OLLAMA_URL"
+        "No LLM provider configured. Set NER_OLLAMA_URL, NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
     )
 
 
@@ -689,56 +696,106 @@ class NERService:
                 logger.error(f"Error calling Ollama LLM: {e}")
                 # Fall through to try OpenRouter
 
-        # Try OpenRouter (fallback)
+        # Try Groq (fallback) — OpenAI-compatible wire format
+        if NER_GROQ_API_KEY:
+            content = await self._call_openai_compatible(
+                provider_name="Groq",
+                url=GROQ_URL,
+                api_key=NER_GROQ_API_KEY,
+                model=NER_GROQ_MODEL,
+                text_chunk=text_chunk,
+            )
+            if content:
+                return content
+
+        # Try OpenRouter (fallback) — OpenAI-compatible wire format
         if NER_OPENROUTER_API_KEY:
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {NER_OPENROUTER_API_KEY}"}
-            payload = {
-                "model": NER_OPENROUTER_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"Extract entities from:\n\n{text_chunk}\n\n/no_think",
-                    },
-                ],
-                "stream": False,
-                "temperature": 0.0,
-            }
+            content = await self._call_openai_compatible(
+                provider_name="OpenRouter",
+                url=OPENROUTER_URL,
+                api_key=NER_OPENROUTER_API_KEY,
+                model=NER_OPENROUTER_MODEL,
+                text_chunk=text_chunk,
+            )
+            if content:
+                return content
 
-            max_retries = 3
-            base_delay = 2.0
-            for attempt in range(max_retries):
-                try:
-                    client = await HttpClientManager.get_client()
-                    response = await client.post(
-                        url, json=payload, headers=headers, timeout=30.0
+        return ""
+
+    async def _call_openai_compatible(
+        self,
+        provider_name: str,
+        url: str,
+        api_key: str,
+        model: str,
+        text_chunk: str,
+    ) -> str:
+        """Generic OpenAI-compatible chat completion call (Groq, OpenRouter).
+
+        Both providers expose the same wire format: POST {model, messages,
+        temperature} to /chat/completions, Bearer auth, response shape
+        ``{ choices: [ { message: { content } } ] }``.
+        """
+        headers = {"Authorization": f"Bearer {api_key}"}
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Extract entities from:\n\n{text_chunk}\n\n/no_think",
+                },
+            ],
+            "stream": False,
+            "temperature": 0.0,
+        }
+
+        max_retries = 3
+        base_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                client = await HttpClientManager.get_client()
+                response = await client.post(
+                    url, json=payload, headers=headers, timeout=30.0
+                )
+
+                # Handle rate limiting (429) with retry
+                if response.status_code == 429:
+                    retry_after = int(
+                        response.headers.get(
+                            "retry-after", base_delay * (2**attempt)
+                        )
                     )
-
-                    # Handle rate limiting (429) with retry
-                    if response.status_code == 429:
-                        retry_after = int(
-                            response.headers.get(
-                                "retry-after", base_delay * (2**attempt)
-                            )
-                        )
-                        logger.warning(
-                            f"Rate limited (429). Retrying after {retry_after}s (attempt {attempt + 1}/{max_retries})"
-                        )
-                        await asyncio.sleep(retry_after)
-                        continue
-
-                    if response.status_code == 200:
-                        result = response.json()
-                        return (
-                            result.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "")
-                        )
-                except Exception as e:
-                    logger.error(f"Error calling OpenRouter LLM: {e}")
-                    await asyncio.sleep(base_delay * (2**attempt))
+                    logger.warning(
+                        f"{provider_name} rate limited (429). Retrying after "
+                        f"{retry_after}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(retry_after)
                     continue
+
+                if response.status_code == 200:
+                    result = response.json()
+                    return (
+                        result.get("choices", [{}])[0]
+                        .get("message", {})
+                        .get("content", "")
+                    )
+                # Non-200 non-429 → fall through to next retry/provider
+                logger.warning(
+                    f"{provider_name} returned status {response.status_code}: "
+                    f"{response.text[:200]}"
+                )
+            except Exception as e:
+                err_str = str(e)
+                if "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper():
+                    logger.error(
+                        f"SSL handshake failed calling {provider_name} at {url}: {e}. "
+                        f"Check that the URL scheme matches the server."
+                    )
+                else:
+                    logger.error(f"Error calling {provider_name} LLM: {e}")
+                await asyncio.sleep(base_delay * (2**attempt))
+                continue
 
         return ""
 

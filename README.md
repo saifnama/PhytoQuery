@@ -125,7 +125,7 @@ python -m spacy download en_core_web_sm
 # Option 1: Via uvicorn (recommended)
 # From PhytoQuery directory:
 cd C:\Users\saif\saifnama_lab\PhytoQuery
-python -m uvicorn backend.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend.app:app --host 0.0.0.0 --port 8000
 
 # Option 2: Direct Python
 cd C:\Users\saif\saifnama_lab\PhytoQuery
@@ -200,25 +200,48 @@ RAG_SIMILARITY_THRESHOLD=0.85
 ```
 
 #### LLM Providers
+
+PhytoQuery supports three LLM backends. Configure as many as you want — the
+first configured one in the priority order is used, the rest are fallbacks
+if the primary errors out.
+
+**RAG priority: Groq → OpenRouter → Ollama** (cloud-fast → cloud-diverse → local)
+
 ```bash
-# OpenRouter (primary)
+# Groq (recommended — fastest cloud, generous free tier)
+# Get a key at https://console.groq.com/keys
+RAG_GROQ_API_KEY=gsk_...
+RAG_GROQ_MODEL=llama-3.3-70b-versatile
+
+# OpenRouter (diverse model selection)
 RAG_OPENROUTER_API_KEY=sk-or-v1-...
 RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 
-# Ollama (fallback — runs locally)
+# Ollama (local fallback)
 RAG_OLLAMA_URL=http://localhost:11434
 RAG_OLLAMA_MODEL=llama3.1:8b
 ```
 
-#### NER Providers
-```bash
-# OpenRouter
-NER_OPENROUTER_API_KEY=sk-or-v1-...
+**NER priority: Ollama → Groq → OpenRouter** (local-first for bulk extraction)
 
-# Ollama
+```bash
+# Ollama (primary — local, fast for bulk per-paper extraction)
 NER_OLLAMA_URL=http://localhost:11434
 NER_OLLAMA_MODEL=llama3.1:8b
+
+# Groq (cloud-fast fallback)
+NER_GROQ_API_KEY=gsk_...
+NER_GROQ_MODEL=llama-3.3-70b-versatile
+
+# OpenRouter (cloud-diverse fallback)
+NER_OPENROUTER_API_KEY=sk-or-v1-...
+NER_OPENROUTER_MODEL=qwen/qwen3.6-plus:free
 ```
+
+> Groq and OpenRouter both speak OpenAI-compatible chat completions, so
+> swapping between them is a one-line config change. Ollama uses its own
+> `/api/chat` schema, so the URL must include the host:port (no trailing
+> path).
 
 ### Dictionary Matchers
 

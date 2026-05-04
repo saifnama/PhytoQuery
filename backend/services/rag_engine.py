@@ -339,7 +339,8 @@ class OllamaLLM:
 
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
-                "RAG is not configured. Set a valid RAG_OPENROUTER_API_KEY or configure RAG_OLLAMA_URL."
+                "RAG is not configured. Set RAG_GROQ_API_KEY, RAG_OPENROUTER_API_KEY, "
+                "or configure RAG_OLLAMA_URL."
             )
 
         headers = {}
@@ -350,7 +351,7 @@ class OllamaLLM:
                 "stream": False,
                 "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
             }
-        else:  # openrouter
+        else:  # OpenAI-compatible: openrouter, groq
             payload = {
                 "model": self.model,
                 "messages": msg_list,
@@ -363,7 +364,7 @@ class OllamaLLM:
             try:
                 client = await HttpClientManager.get_client()
                 kwargs = {"json": payload, "timeout": None}
-                if self.provider == "openrouter":
+                if self.provider != "ollama":
                     kwargs["headers"] = headers
                 try:
                     if timeout_seconds is not None:
@@ -375,9 +376,14 @@ class OllamaLLM:
                         f"RAG {self.provider} request exceeded {timeout_seconds}s timeout"
                     ) from exc
 
-                if self.provider == "openrouter" and response.status_code == 401:
+                if self.provider != "ollama" and response.status_code == 401:
+                    env_var = {
+                        "groq": "RAG_GROQ_API_KEY",
+                        "openrouter": "RAG_OPENROUTER_API_KEY",
+                    }.get(self.provider, "the provider's API key")
                     raise RAGProviderAuthError(
-                        "OpenRouter authentication failed. Check RAG_OPENROUTER_API_KEY or configure RAG_OLLAMA_URL as a fallback provider."
+                        f"{self.provider.title()} authentication failed. "
+                        f"Check {env_var} or configure RAG_OLLAMA_URL as a fallback."
                     )
 
                 # Handle rate limiting (429) with retry
@@ -400,7 +406,7 @@ class OllamaLLM:
 
                 if self.provider == "ollama":
                     return Response(result["message"]["content"])
-                else:
+                else:  # OpenAI-compatible: openrouter, groq
                     return Response(result["choices"][0]["message"]["content"])
             except Exception as e:
                 last_exception = e

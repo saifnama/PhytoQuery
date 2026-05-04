@@ -55,6 +55,8 @@ def env_optional(key: str):
 
 RAG_OPENROUTER_API_KEY = env("RAG_OPENROUTER_API_KEY")
 RAG_OPENROUTER_MODEL = env("RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+RAG_GROQ_API_KEY = env("RAG_GROQ_API_KEY")
+RAG_GROQ_MODEL = env("RAG_GROQ_MODEL", "llama-3.3-70b-versatile")
 RAG_OLLAMA_URL = env("RAG_OLLAMA_URL")
 RAG_OLLAMA_MODEL = env("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
@@ -79,6 +81,8 @@ NER_OLLAMA_URL = env("NER_OLLAMA_URL", "https://trycloudflare.com")
 NER_OLLAMA_MODEL = env("NER_OLLAMA_MODEL", "llama3.1:8b")
 NER_OPENROUTER_API_KEY = env("NER_OPENROUTER_API_KEY")
 NER_OPENROUTER_MODEL = env("NER_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
+NER_GROQ_API_KEY = env("NER_GROQ_API_KEY")
+NER_GROQ_MODEL = env("NER_GROQ_MODEL", "llama-3.3-70b-versatile")
 NER_CONFIDENCE_THRESHOLD = env_float("NER_CONFIDENCE_THRESHOLD", 0.7)
 NER_CHUNK_SIZE_WORDS = env_int("NER_CHUNK_SIZE_WORDS", 250)
 NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
@@ -88,47 +92,77 @@ NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
 # Provider Selection Logic
 # ---------------------------------------------------------------------------
 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _has_real_key(key: str, sentinels: set) -> bool:
+    """True if the key looks valid (non-empty, non-placeholder)."""
+    return bool(key) and key not in sentinels
+
+
 def get_rag_provider() -> dict:
-    """RAG: OpenRouter first (better quality), then Ollama as fallback."""
-    has_valid_key = bool(RAG_OPENROUTER_API_KEY) and RAG_OPENROUTER_API_KEY not in {"sk-", "sk"}
-    if has_valid_key:
+    """RAG provider priority: Groq > OpenRouter > Ollama.
+
+    Groq goes first because it's the fastest cloud option (free tier, sub-second
+    latency on Llama 3.3 70b). OpenRouter is the diverse-model fallback;
+    Ollama is the local fallback.
+    """
+    if _has_real_key(RAG_GROQ_API_KEY, {"gsk_", "gsk"}):
+        return {
+            "provider": "groq",
+            "url": GROQ_URL,
+            "model": RAG_GROQ_MODEL,
+            "api_key": RAG_GROQ_API_KEY,
+        }
+    if _has_real_key(RAG_OPENROUTER_API_KEY, {"sk-", "sk"}):
         return {
             "provider": "openrouter",
-            "url": "https://openrouter.ai/api/v1/chat/completions",
+            "url": OPENROUTER_URL,
             "model": RAG_OPENROUTER_MODEL,
             "api_key": RAG_OPENROUTER_API_KEY,
         }
-    elif RAG_OLLAMA_URL:
+    if RAG_OLLAMA_URL:
         return {
             "provider": "ollama",
             "url": f"{RAG_OLLAMA_URL}/api/chat",
             "model": RAG_OLLAMA_MODEL,
         }
-    else:
-        return {
-            "provider": "unconfigured",
-            "url": "",
-            "model": "",
-            "api_key": "",
-        }
+    return {
+        "provider": "unconfigured",
+        "url": "",
+        "model": "",
+        "api_key": "",
+    }
 
 
 def get_ner_provider() -> dict:
-    """NER: Ollama first, then OpenRouter as fallback."""
+    """NER provider priority: Ollama > Groq > OpenRouter.
+
+    Local Ollama wins for NER because the workload is bulk per-paper extraction
+    where local-GPU latency beats cloud round-trips. Groq is the cloud-fast
+    fallback, OpenRouter the diverse-model fallback.
+    """
     if NER_OLLAMA_URL:
         return {
             "provider": "ollama",
             "url": f"{NER_OLLAMA_URL}/api/chat",
             "model": NER_OLLAMA_MODEL,
         }
-    elif NER_OPENROUTER_API_KEY:
+    if _has_real_key(NER_GROQ_API_KEY, {"gsk_", "gsk"}):
+        return {
+            "provider": "groq",
+            "url": GROQ_URL,
+            "model": NER_GROQ_MODEL,
+            "api_key": NER_GROQ_API_KEY,
+        }
+    if NER_OPENROUTER_API_KEY:
         return {
             "provider": "openrouter",
-            "url": "https://openrouter.ai/api/v1/chat/completions",
+            "url": OPENROUTER_URL,
             "model": NER_OPENROUTER_MODEL,
             "api_key": NER_OPENROUTER_API_KEY,
         }
-    else:
-        raise ValueError(
-            "No NER provider configured. Set NER_OLLAMA_URL or NER_OPENROUTER_API_KEY"
-        )
+    raise ValueError(
+        "No NER provider configured. Set NER_OLLAMA_URL, NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
+    )
