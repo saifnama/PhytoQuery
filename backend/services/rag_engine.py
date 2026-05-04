@@ -784,12 +784,22 @@ class RAGService:
         return short_hash
 
     def _get_user_collection(self, user_id: str):
-        """Get or create a ChromaDB collection for a specific user."""
+        """Get or create a ChromaDB collection for a specific user.
+
+        Uses an explicit ``chromadb.PersistentClient`` rather than letting
+        ``Chroma(persist_directory=…)`` build one implicitly. The explicit
+        client deterministically creates ``default_tenant`` and
+        ``default_database`` on first init, avoiding a chromadb 1.x race that
+        can leave the SQLite schema with empty tenant tables — surfacing as
+        ``Could not connect to tenant default_tenant`` on subsequent reads.
+        """
+        import chromadb
+        from chromadb.config import Settings
         from langchain_chroma import Chroma
+
         if user_id in self._vectorstore_cache:
             return self._vectorstore_cache[user_id]
 
-        # Create user-specific collection
         # Sanitize user_id for collection name (alphanumeric + underscore only)
         safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
         model_suffix = self._get_collection_suffix()
@@ -800,13 +810,18 @@ class RAGService:
 
         # Retry logic for handling locked files on Windows
         max_retries = 3
+        vectorstore = None
         for attempt in range(max_retries):
             try:
                 os.makedirs(user_chroma_dir, exist_ok=True)
+                client = chromadb.PersistentClient(
+                    path=user_chroma_dir,
+                    settings=Settings(anonymized_telemetry=False, allow_reset=True),
+                )
                 vectorstore = Chroma(
-                    persist_directory=user_chroma_dir,
-                    embedding_function=self.embeddings,
+                    client=client,
                     collection_name=collection_name,
+                    embedding_function=self.embeddings,
                 )
                 break
             except Exception as e:
@@ -928,11 +943,25 @@ class RAGService:
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
                 vectorstore.add_documents(sanitized_docs)
-            except Exception:
+            except Exception as e:
+                # Detect schema/tenant corruption — chromadb 1.x can leave the
+                # SQLite with an empty tenants table after an interrupted init,
+                # surfacing as "Could not connect to tenant default_tenant".
+                # In that case, just invalidating the cache reuses the same
+                # broken file; we have to wipe the persist dir to recover.
+                msg = str(e).lower()
+                is_corrupt = "tenant" in msg or "database" in msg
                 logger.warning(
-                    f"Indexing failed for user {user_id}; invalidating cached Chroma client and retrying once."
+                    f"Indexing failed for user {user_id} ({e!r}); "
+                    f"{'wiping persist dir and ' if is_corrupt else ''}"
+                    f"invalidating cached Chroma client and retrying once."
                 )
                 self._invalidate_user_collection(user_id)
+                if is_corrupt:
+                    import shutil
+                    safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+                    user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
+                    shutil.rmtree(user_chroma_dir, ignore_errors=True)
                 time.sleep(0.3)  # Wait for SQLite file handles to release on Windows
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)

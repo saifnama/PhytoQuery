@@ -249,6 +249,51 @@ Gazetteer CSV files in `backend/gazetteer/data/`:
 pytest backend/tests/ -v
 ```
 
+## Troubleshooting
+
+### `Could not connect to tenant default_tenant` on PDF upload
+
+**Symptom** in backend logs:
+```
+Indexing failed for user sess_<id>; ... retrying once.
+Upload job <uuid> failed: Could not connect to tenant default_tenant. Are you sure it exists
+```
+
+**Cause.** This is a chromadb-1.x error. The per-user persist directory at
+`data/chroma_db/<sanitized_user_id>/` contains a SQLite file whose `tenants`
+table is missing or empty. It happens in two situations:
+
+1. **Interrupted init.** chromadb 1.x's `PersistentClient` writes the schema
+   in stages — if the process is killed mid-init (or SQLite file locks
+   contend on Windows), the directory is left with `chroma.sqlite3` present
+   but no `default_tenant` row.
+2. **Schema downgrade.** The directory was created by an older chromadb
+   (pre-1.0) that didn't have the tenant model, and chromadb was then
+   upgraded. The migration doesn't always backfill `default_tenant`.
+
+**The code already handles this.** `services/rag_engine.py` does two things
+to recover automatically:
+
+- `_get_user_collection` constructs an explicit `chromadb.PersistentClient`
+  rather than using `Chroma(persist_directory=…)` implicitly. The explicit
+  client deterministically creates `default_tenant` and `default_database`
+  on first init.
+- `process_and_index_pdfs_with_texts`'s retry path detects the tenant
+  error string (`"tenant"`/`"database"` in the exception message) and
+  **wipes the user's persist directory** before retrying. Without the wipe
+  the retry would re-open the same broken SQLite.
+
+**Manual recovery** (if logs show the error persisting after a retry):
+
+```powershell
+# Stop the backend process first.
+Remove-Item -Recurse -Force C:\Users\saif\saifnama_lab\PhytoQuery\data\chroma_db
+# Restart the backend; the directory is recreated cleanly on next upload.
+```
+
+Only the user's vector indexes are dropped — uploaded PDFs in
+`data/uploads/` and the paper cache in `data/cache/` are untouched.
+
 ## Keyboard Shortcuts
 
 | Key | Action |
