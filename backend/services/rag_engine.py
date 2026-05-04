@@ -416,7 +416,18 @@ class OllamaLLM:
                     )
                     await asyncio.sleep(delay)
                     continue
-                logger.error(f"Error calling {self.provider} LLM for RAG: {e}")
+                # Surface SSL/TLS handshake failures with a hint — usually
+                # caused by an https:// URL pointing at a plain-HTTP server
+                # (or vice versa).
+                err_str = str(e)
+                if "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper():
+                    logger.error(
+                        f"SSL handshake failed calling {self.provider} LLM at {self.url}: {e}. "
+                        f"Check that the URL scheme (http vs https) matches what the server is "
+                        f"actually serving. Plain Ollama runs on http; a Cloudflare tunnel needs https."
+                    )
+                else:
+                    logger.error(f"Error calling {self.provider} LLM for RAG: {e}")
                 raise
 
         # All retries exhausted
@@ -1330,6 +1341,13 @@ class RAGService:
                         raise ValueError("No non-empty rerank candidates available")
 
                     query_text = question.strip()
+                    # Guard against empty queries — cross-encoder tokenizers
+                    # can produce zero-length sequences for these and the
+                    # attention layer then fails on a reshape into
+                    # [batch, 0, -1, head_dim] (ambiguous -1 with 0 elements).
+                    if not query_text:
+                        reranked_children = filtered_candidates
+                        raise ValueError("Empty query — skipping rerank")
 
                     # zerank-2 supports instruction-aware reranking:
                     # prepend the domain instruction to each query in the pair
@@ -1338,7 +1356,21 @@ class RAGService:
                     else:
                         instructed_query = query_text
 
-                    pairs = [[instructed_query, res["doc"].page_content] for res in filtered_candidates]
+                    # Drop pairs where either side is whitespace-only — cross-encoder
+                    # tokenizers can yield zero-length tensors for these.
+                    pairs = []
+                    valid_candidates = []
+                    for res in filtered_candidates:
+                        passage = (res["doc"].page_content or "").strip()
+                        if not passage:
+                            continue
+                        pairs.append([instructed_query, passage])
+                        valid_candidates.append(res)
+                    if not pairs:
+                        reranked_children = filtered_candidates
+                        raise ValueError("No tokenizable rerank pairs after filtering")
+                    filtered_candidates = valid_candidates
+
                     rerank_batch_size = max(1, int(config.rerank_batch_size))
                     rerank_scores = []
                     for batch_start in range(0, len(pairs), rerank_batch_size):

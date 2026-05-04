@@ -294,6 +294,56 @@ Remove-Item -Recurse -Force C:\Users\saif\saifnama_lab\PhytoQuery\data\chroma_db
 Only the user's vector indexes are dropped — uploaded PDFs in
 `data/uploads/` and the paper cache in `data/cache/` are untouched.
 
+### `Reranking failed: cannot reshape tensor of 0 elements into shape [...]`
+
+**Cause.** The cross-encoder reranker's tokenizer produced a zero-length
+sequence for at least one (query, passage) pair. PyTorch then can't infer
+the `-1` dimension when reshaping a tensor of 0 elements (`8 × 0 × ? × 128`
+is 0 for any value of `?`).
+
+This happens when the query is empty / whitespace-only, or a passage
+slipped through with no extractable text after tokenization.
+
+**The code already handles this.** `rag_engine.py` does three layers of
+defence:
+
+1. **Filter out blank passages** before building rerank pairs.
+2. **Skip rerank entirely** if the query string is empty.
+3. **Drop pairs where either side is whitespace-only** before calling
+   `reranker.predict`.
+
+In all three cases the pipeline falls back to retrieval-order results, so
+queries still return — only the rerank step is skipped. If you see this
+log line, the system has already recovered; no manual action needed.
+
+### `Error calling ollama LLM for RAG: [SSL: WRONG_VERSION_NUMBER]`
+
+**Cause.** Almost always a URL-scheme mismatch:
+
+- `RAG_OLLAMA_URL` is set to `https://...` but the server on the other end
+  is serving plain HTTP, **or**
+- `RAG_OLLAMA_URL` is set to `http://...` but the server requires HTTPS
+  (e.g. behind a Cloudflare tunnel).
+
+The TLS handshake fails because the bytes the client receives aren't a
+valid TLS record.
+
+**Fix.**
+
+1. Check what `RAG_OLLAMA_URL` resolves to at runtime (real env vars
+   override `.env` values):
+   ```powershell
+   $env:RAG_OLLAMA_URL
+   ```
+2. Match the scheme to your server:
+   - **Local Ollama** (`ollama serve` on the same machine) → `http://localhost:11434`
+   - **Cloudflare tunnel / hosted endpoint** → `https://<your-tunnel>.trycloudflare.com`
+3. Restart the backend after changing.
+
+The backend now logs an actionable hint when this happens — look for the
+line "SSL handshake failed … Check that the URL scheme (http vs https)
+matches what the server is actually serving."
+
 ## Keyboard Shortcuts
 
 | Key | Action |
