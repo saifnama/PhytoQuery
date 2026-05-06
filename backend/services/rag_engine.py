@@ -857,14 +857,57 @@ class RAGService:
     def _invalidate_user_collection(self, user_id: str) -> None:
         """Drop a cached per-user Chroma client so the next access reopens it.
 
-        This is important after delete/reset/cleanup operations because SQLite/
-        Chroma handles can remain stale or locked across requests.
+        Note: do NOT call ``client._system.stop()`` here — chromadb 1.x uses
+        a process-wide rust bindings singleton, so stopping the system tears
+        down the runtime for every other client and produces phantom
+        "Could not connect to tenant default_tenant" errors on next access.
+        For real corruption recovery, use ``client.reset()`` which clears
+        data in-place via SQLite.
         """
-        vectorstore = self._vectorstore_cache.pop(user_id, None)
-        if vectorstore is not None:
-            vectorstore = None
+        self._vectorstore_cache.pop(user_id, None)
         gc.collect()
         time.sleep(0.1)
+
+    def _reset_user_chroma_in_place(self, user_id: str) -> None:
+        """Cross-OS recovery for a corrupt Chroma store.
+
+        Uses ``client.reset()`` to clear all collections via SQLite's own
+        TRUNCATE/DELETE — no filesystem operations. This avoids the
+        SQLITE_READONLY_DBMOVED (code 1032) race on macOS/Linux and the
+        permission-denied lock dance on Windows that ``shutil.rmtree``
+        triggers when a stale connection is still holding the inode open.
+
+        Falls back to ``rmtree`` only if ``reset()`` itself fails — e.g.
+        when the SQLite is so badly corrupted that no client can open it.
+        """
+        import chromadb
+        from chromadb.config import Settings
+
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
+        try:
+            client = chromadb.PersistentClient(
+                path=user_chroma_dir,
+                settings=Settings(anonymized_telemetry=False, allow_reset=True),
+            )
+            client.reset()
+            logger.info(
+                f"Reset Chroma data in-place for {user_id} (no filesystem ops)."
+            )
+            del client
+            gc.collect()
+            return
+        except Exception as reset_err:
+            logger.warning(
+                f"client.reset() failed for {user_id}: {reset_err!r}; "
+                f"falling back to filesystem wipe."
+            )
+
+        # Last-resort filesystem wipe. We're already in a degraded path —
+        # this can still race with a stale handle, but the next retry will
+        # get a fresh schema either way.
+        import shutil
+        shutil.rmtree(user_chroma_dir, ignore_errors=True)
 
     # --- Parent-Child Chunking: Parent Store ---
 
@@ -961,25 +1004,32 @@ class RAGService:
                 vectorstore = self._get_user_collection(user_id)
                 vectorstore.add_documents(sanitized_docs)
             except Exception as e:
-                # Detect schema/tenant corruption — chromadb 1.x can leave the
-                # SQLite with an empty tenants table after an interrupted init,
-                # surfacing as "Could not connect to tenant default_tenant".
-                # In that case, just invalidating the cache reuses the same
-                # broken file; we have to wipe the persist dir to recover.
+                # Detect known chromadb corruption signatures. We've seen:
+                #   "Could not connect to tenant default_tenant"
+                #     — empty/missing tenants table after interrupted init.
+                #   "attempt to write a readonly database" / "(code: 1032)"
+                #     — SQLITE_READONLY_DBMOVED, raised when the SQLite file
+                #       is replaced/unlinked while another connection still
+                #       holds it (cross-OS, but most visible on macOS/Linux).
+                #   Generic "Error updating collection: ..." also signals
+                #     stale-handle corruption.
                 msg = str(e).lower()
-                is_corrupt = "tenant" in msg or "database" in msg
+                is_corrupt = (
+                    "tenant" in msg
+                    or "readonly database" in msg
+                    or "code: 1032" in msg
+                    or "1032" in msg
+                    or ("error updating" in msg and "database" in msg)
+                )
                 logger.warning(
                     f"Indexing failed for user {user_id} ({e!r}); "
-                    f"{'wiping persist dir and ' if is_corrupt else ''}"
-                    f"invalidating cached Chroma client and retrying once."
+                    f"{'resetting Chroma data in-place and ' if is_corrupt else ''}"
+                    f"invalidating cached client and retrying once."
                 )
                 self._invalidate_user_collection(user_id)
                 if is_corrupt:
-                    import shutil
-                    safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-                    user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
-                    shutil.rmtree(user_chroma_dir, ignore_errors=True)
-                time.sleep(0.3)  # Wait for SQLite file handles to release on Windows
+                    self._reset_user_chroma_in_place(user_id)
+                time.sleep(0.3)  # Brief pause for handle settling across OSes
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
                 try:
@@ -1903,52 +1953,131 @@ Summary:"""
             logger.error(f"Docling extraction failed for {pdf_path}: {str(e)}", exc_info=True)
             return None, []
 
-    def _extract_with_pymupdf(self, pdf_path):
-        """Fast PDF extraction using PyMuPDF (fitz)
+    @staticmethod
+    def _ensure_pymupdf_layout_int64_patch() -> None:
+        """Workaround for pymupdf 1.27.2.3's layout ONNX model.
 
-        Extracts text in reading order and detects tables.
+        The bundled BoxRFDGNN model declares its `edge_index` input as
+        ``tensor(int64)``, but the calling code in
+        ``pymupdf.layout.onnx.BoxRFDGNN.predict`` sometimes constructs it
+        as int32. ONNX Runtime is strict about input types, so on real-world
+        multi-page PDFs this raises::
+
+            InvalidArgument: Unexpected input data type.
+                Actual: tensor(int32), expected: tensor(int64)
+
+        We wrap ``self.session.run`` inside ``predict`` to coerce any int
+        input narrower than int64 up to int64 before the model sees it.
+        Idempotent — runs at most once per process.
         """
         try:
-            import fitz  # PyMuPDF
+            from pymupdf.layout.onnx import BoxRFDGNN as _BRG
+        except ImportError as e:
+            # Could be: pymupdf_layout uninstalled, OR pymupdf upstream
+            # restructured the layout submodule. We log so the no-op is
+            # visible rather than mysterious if extractions start failing.
+            logger.info(
+                "pymupdf.layout.onnx not importable (%s); skipping int64 patch. "
+                "If the upstream ONNX dtype bug is unfixed, layout extraction "
+                "may crash on multi-page PDFs.", e
+            )
+            return
+
+        if getattr(_BRG.BoxRFDGNN, "_phytoquery_int64_patch", False):
+            return
+
+        if not hasattr(_BRG, "BoxRFDGNN") or not hasattr(_BRG.BoxRFDGNN, "predict"):
+            logger.warning(
+                "pymupdf.layout.onnx.BoxRFDGNN.predict not found; "
+                "upstream may have renamed the layout class. Patch skipped."
+            )
+            return
+
+        import numpy as _np
+
+        _orig_predict = _BRG.BoxRFDGNN.predict
+
+        def _patched_predict(self, *args, **kwargs):
+            _orig_run = self.session.run
+
+            def _cast_run(output_names, input_feed, run_options=None):
+                coerced = {}
+                for k, v in input_feed.items():
+                    if (
+                        hasattr(v, "dtype")
+                        and v.dtype.kind == "i"
+                        and v.dtype.itemsize < 8
+                    ):
+                        coerced[k] = v.astype(_np.int64)
+                    else:
+                        coerced[k] = v
+                return _orig_run(output_names, coerced, run_options)
+
+            self.session.run = _cast_run
+            try:
+                return _orig_predict(self, *args, **kwargs)
+            finally:
+                self.session.run = _orig_run
+
+        _BRG.BoxRFDGNN.predict = _patched_predict
+        _BRG.BoxRFDGNN._phytoquery_int64_patch = True
+        logger.info(
+            "Installed pymupdf_layout int32→int64 coercion patch (one-time)."
+        )
+
+    def _extract_with_pymupdf(self, pdf_path):
+        """Layout-aware PDF extraction using pymupdf4llm.
+
+        Built on top of PyMuPDF, pymupdf4llm.to_markdown() adds:
+          • Multi-column reading order detection
+          • Heading hierarchy preserved as Markdown headers (#, ##, …)
+          • Tables emitted inline as GFM pipe tables
+          • Image positions preserved (text reflows around them)
+
+        Returns (full_text, tables) where ``tables`` is always an empty list:
+        tables are now embedded inside ``full_text`` as Markdown so the
+        downstream MarkdownTextSplitter handles them naturally without a
+        separate index path. The empty list is kept for API compatibility
+        with the docling branch which still returns tables separately.
+        """
+        try:
+            import pymupdf4llm
+
+            # One-time runtime fix for pymupdf_layout's ONNX int dtype mismatch.
+            self._ensure_pymupdf_layout_int64_patch()
+
+            # page_chunks=True returns per-page dicts so we can preserve the
+            # "<!-- Page N -->" markers that the rest of the pipeline relies
+            # on for citations and section attribution.
+            chunks = pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
 
             text_parts = []
-            tables = []
-
-            doc = fitz.open(pdf_path)
-            for page_num, page in enumerate(doc):
-                # sort=True preserves visual reading order (top-left to bottom-right)
-                text = page.get_text("text", sort=True)
-                if text.strip():
-                    text_parts.append(f"<!-- Page {page_num + 1} -->\n\n{text}")
-
-                # Extract tables using PyMuPDF's built-in detector
-                try:
-                    tab_finder = page.find_tables()
-                    for tab in tab_finder.tables:
-                        rows = tab.extract()
-                        if rows:
-                            # Convert list-of-lists to markdown table
-                            md_rows = []
-                            for r in rows:
-                                cells = [str(cell).replace("|", "\\|") if cell is not None else "" for cell in r]
-                                md_rows.append("| " + " | ".join(cells) + " |")
-                            if len(md_rows) >= 2:
-                                # Insert separator after first row
-                                md_rows.insert(1, "|" + "|".join([" --- " for _ in rows[0]]) + "|")
-                            table_md = "\n".join(md_rows)
-                            tables.append({"content": table_md, "page": page_num + 1})
-                except Exception:
-                    pass  # Table extraction is best-effort
-
-            doc.close()
+            for idx, chunk in enumerate(chunks):
+                meta = chunk.get("metadata", {}) or {}
+                # pymupdf4llm 0.0.27 uses 1-based "page". Newer versions
+                # use 0-based "page_number". Handle both, fall back to the
+                # enumeration index if neither is present.
+                if "page" in meta and meta["page"] is not None:
+                    page_num = meta["page"]
+                elif "page_number" in meta and meta["page_number"] is not None:
+                    page_num = meta["page_number"] + 1
+                else:
+                    page_num = idx + 1
+                text = (chunk.get("text") or "").strip()
+                if text:
+                    text_parts.append(f"<!-- Page {page_num} -->\n\n{text}")
 
             full_text = "\n\n".join(text_parts)
             if not full_text.strip():
-                logger.warning(f"PyMuPDF extracted empty text from {pdf_path}")
+                logger.warning(
+                    f"pymupdf4llm extracted empty text from {pdf_path}"
+                )
                 return None, []
-            return full_text, tables
+            return full_text, []
         except Exception as e:
-            logger.warning(f"PyMuPDF extraction failed for {pdf_path}: {e}")
+            logger.warning(
+                f"pymupdf4llm extraction failed for {pdf_path}: {e}"
+            )
             return None, []
 
     def _detect_sections(self, text):

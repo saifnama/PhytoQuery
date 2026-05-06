@@ -274,43 +274,48 @@ pytest backend/tests/ -v
 
 ## Troubleshooting
 
-### `Could not connect to tenant default_tenant` on PDF upload
+### Chroma indexing errors on PDF upload
 
-**Symptom** in backend logs:
-```
-Indexing failed for user sess_<id>; ... retrying once.
-Upload job <uuid> failed: Could not connect to tenant default_tenant. Are you sure it exists
-```
+The backend recognises and auto-recovers from several chromadb-1.x failure
+modes. If you see one of these in the logs:
 
-**Cause.** This is a chromadb-1.x error. The per-user persist directory at
-`data/chroma_db/<sanitized_user_id>/` contains a SQLite file whose `tenants`
-table is missing or empty. It happens in two situations:
+| Symptom in logs | What it means |
+|---|---|
+| `Could not connect to tenant default_tenant. Are you sure it exists` | SQLite tenants table is missing/empty. Happens after an interrupted init or when the directory was created by a pre-1.0 chromadb that didn't have the tenant model. |
+| `attempt to write a readonly database` / `(code: 1032)` | SQLite's `SQLITE_READONLY_DBMOVED` — the database file was replaced or unlinked while a connection still held it. Most visible on macOS/Linux because of how their filesystems handle still-open deleted inodes; can also bite Windows. |
+| `Error updating collection: Database error: …` | Generic stale-handle corruption that wraps either of the above. |
 
-1. **Interrupted init.** chromadb 1.x's `PersistentClient` writes the schema
-   in stages — if the process is killed mid-init (or SQLite file locks
-   contend on Windows), the directory is left with `chroma.sqlite3` present
-   but no `default_tenant` row.
-2. **Schema downgrade.** The directory was created by an older chromadb
-   (pre-1.0) that didn't have the tenant model, and chromadb was then
-   upgraded. The migration doesn't always backfill `default_tenant`.
+**Auto-recovery (already in place).** `services/rag_engine.py` does three
+things to recover without manual intervention:
 
-**The code already handles this.** `services/rag_engine.py` does two things
-to recover automatically:
-
-- `_get_user_collection` constructs an explicit `chromadb.PersistentClient`
+- `_get_user_collection` constructs an explicit
+  `chromadb.PersistentClient(path=…, settings=Settings(allow_reset=True))`
   rather than using `Chroma(persist_directory=…)` implicitly. The explicit
   client deterministically creates `default_tenant` and `default_database`
   on first init.
-- `process_and_index_pdfs_with_texts`'s retry path detects the tenant
-  error string (`"tenant"`/`"database"` in the exception message) and
-  **wipes the user's persist directory** before retrying. Without the wipe
-  the retry would re-open the same broken SQLite.
+- The indexing retry path detects any of the corruption signatures above
+  and calls a helper `_reset_user_chroma_in_place(user_id)` that uses
+  **`client.reset()`** to clear collections via SQLite's own TRUNCATE — no
+  filesystem operations, no moved-inode race, cross-OS safe.
+- If `reset()` itself fails (rare — only when the SQLite is so badly
+  corrupted that no client can open it at all), the helper falls back to
+  `shutil.rmtree` as a last resort.
 
-**Manual recovery** (if logs show the error persisting after a retry):
+**Why we don't just `rmtree` and reopen.** That's what we tried first, and
+on macOS/Linux it produces the very `SQLITE_READONLY_DBMOVED` error this
+section is about. SQLite tracks the inode of the file at open time; if you
+delete the file and a new one shows up at the same path, SQLite refuses to
+write to avoid corruption. `client.reset()` operates through the open
+connection so SQLite never sees a "moved" file.
 
-```powershell
+**Manual recovery** (only if auto-recovery somehow loops):
+
+```bash
 # Stop the backend process first.
-Remove-Item -Recurse -Force C:\Users\saif\saifnama_lab\PhytoQuery\data\chroma_db
+# macOS / Linux:
+rm -rf data/chroma_db
+# Windows (PowerShell):
+Remove-Item -Recurse -Force data\chroma_db
 # Restart the backend; the directory is recreated cleanly on next upload.
 ```
 
@@ -366,6 +371,19 @@ valid TLS record.
 The backend now logs an actionable hint when this happens — look for the
 line "SSL handshake failed … Check that the URL scheme (http vs https)
 matches what the server is actually serving."
+
+### `InvalidArgument: Unexpected input data type. Actual: tensor(int32), expected: tensor(int64)` from pymupdf
+
+**Cause.** `pymupdf 1.27.2.3`'s bundled layout submodule (`pymupdf.layout.onnx.BoxRFDGNN`) constructs `edge_index` as `int32` but its ONNX model declares the input as `tensor(int64)`. ONNX Runtime is strict about input types, so any non-trivial multi-page PDF crashes during layout analysis.
+
+**Auto-recovery (already in place).** `rag_engine.py` has a one-time runtime patch (`_ensure_pymupdf_layout_int64_patch`) that wraps `BoxRFDGNN.predict`'s ONNX `session.run` call to coerce any int input narrower than `int64` up to `int64` before the model sees it. The patch:
+
+- Runs once per process, idempotent via a class flag.
+- Logged at INFO level on first install ("Installed pymupdf_layout int32→int64 coercion patch").
+- Logs a clear warning if the upstream module path moves so a future pymupdf upgrade doesn't silently break extraction.
+- Only touches the `BoxRFDGNN.predict` method — no monkey-patching of pip-installed source files (which `pip install -r requirements.txt` would wipe).
+
+If you see this error in logs, the patch failed to apply — check the preceding log lines for the "skipping int64 patch" reason.
 
 ## Keyboard Shortcuts
 
