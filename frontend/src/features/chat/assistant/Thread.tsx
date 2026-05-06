@@ -1,15 +1,19 @@
 /**
- * assistant-ui chat thread for the PhytoQuery RAG page.
+ * assistant-ui chat thread for the PhytoQuery RAG page — daisyUI build.
  *
  * Composes ThreadPrimitive + MessagePrimitive + ComposerPrimitive into
- * a single <Thread /> component. Custom slots:
- *   - AssistantMessage renders text via react-markdown and follows it
- *     with a source-pills row, fed from message.metadata.custom.sources
- *     (set by the runtime adapter in ./runtime.ts).
- *   - UserMessage stays plain text inside a styled bubble.
+ * a single <Thread /> component, with all surface styling expressed
+ * through daisyUI component classes (`chat chat-end chat-bubble`,
+ * `btn btn-primary btn-circle`, `loading loading-dots`, `textarea`,
+ * etc.) so the component picks up your daisyUI theme tokens
+ * automatically.
  *
- * Tailwind-only styling so it composes cleanly with the rest of the
- * app (and future daisyUI adoption).
+ * Custom slots:
+ *   - AssistantMessage renders text via react-markdown and follows it
+ *     with a source-pills row, fed from message.metadata.custom.sources.
+ *   - UserMessage uses the chat-bubble pattern with the pink brand
+ *     color preserved via inline style (so daisyUI theme primary
+ *     doesn't shadow the existing branding).
  */
 
 import { type FC, useState } from 'react';
@@ -38,11 +42,11 @@ interface ThreadProps {
 
 export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
   return (
-    <ThreadPrimitive.Root className="flex h-full flex-col bg-white">
+    <ThreadPrimitive.Root className="flex h-full flex-col bg-base-100">
       <ThreadHeader />
-      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6">
         <ThreadPrimitive.Empty>
-          <div className="flex h-full items-center justify-center text-slate-500">
+          <div className="flex h-full items-center justify-center text-base-content/60">
             {emptyContent ?? <DefaultEmpty />}
           </div>
         </ThreadPrimitive.Empty>
@@ -86,11 +90,11 @@ const ThreadHeader: FC = () => {
   };
 
   return (
-    <div className="flex items-center justify-end border-b border-slate-100 bg-white/80 px-6 py-2 backdrop-blur-sm">
+    <div className="flex items-center justify-end border-b border-base-200 bg-base-100/80 px-6 py-2 backdrop-blur-sm">
       <button
         type="button"
         onClick={handleExportChat}
-        className="flex items-center gap-1.5 rounded-lg border border-transparent px-3 py-1.5 text-xs font-medium text-slate-500 transition-colors hover:border-slate-200 hover:bg-slate-100 hover:text-slate-800"
+        className="btn btn-ghost btn-sm gap-1.5"
         title="Download the entire chat as a PDF"
       >
         <ArrowDown size={14} weight="bold" />
@@ -100,46 +104,38 @@ const ThreadHeader: FC = () => {
   );
 };
 
-/** Three-dot bouncing indicator shown only while the assistant is
- * still streaming/computing a response. Mirrors the loading dots from
- * the pre-migration UI. */
+/** daisyUI loading-dots indicator shown while the assistant is still
+ * streaming/computing a response. Wrapped in a chat-bubble so it sits
+ * in the message column at the start side. */
 const TypingIndicator: FC = () => {
   const thread = useThread();
   if (!thread.isRunning) return null;
   return (
-    <div className="flex justify-start">
-      <div className="rounded-2xl border border-slate-100 bg-white px-5 py-3 shadow-sm">
-        <div className="flex items-center space-x-1.5">
-          <span className="h-2 w-2 animate-bounce rounded-full bg-slate-300" />
-          <span
-            className="h-2 w-2 animate-bounce rounded-full bg-slate-300"
-            style={{ animationDelay: '0.1s' }}
-          />
-          <span
-            className="h-2 w-2 animate-bounce rounded-full bg-slate-300"
-            style={{ animationDelay: '0.2s' }}
-          />
-        </div>
+    <div className="chat chat-start">
+      <div className="chat-bubble chat-bubble-neutral bg-base-200 text-base-content">
+        <span className="loading loading-dots loading-md" />
       </div>
     </div>
   );
 };
 
 const DefaultEmpty: FC = () => (
-  <div className="max-w-md text-center">
-    <h2 className="text-xl font-semibold text-slate-900">Ask about your papers</h2>
-    <p className="mt-2 text-sm text-slate-600">
-      Upload PDFs in the sidebar, then ask questions. Answers cite the
-      source paper and section.
-    </p>
+  <div className="card max-w-md bg-base-100 shadow-none">
+    <div className="card-body items-center text-center">
+      <h2 className="card-title text-base-content">Ask about your papers</h2>
+      <p className="text-sm text-base-content/70">
+        Upload PDFs in the sidebar, then ask questions. Answers cite the
+        source paper and section.
+      </p>
+    </div>
   </div>
 );
 
 const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="flex justify-end">
+  <MessagePrimitive.Root className="chat chat-end">
     <div
-      className="max-w-[80%] rounded-2xl px-4 py-2 text-slate-900 shadow-sm"
-      style={{ backgroundColor: PINK_USER_BG }}
+      className="chat-bubble shadow-sm"
+      style={{ backgroundColor: PINK_USER_BG, color: '#1f2937' }}
     >
       <MessagePrimitive.Content
         components={{
@@ -154,8 +150,7 @@ interface AssistantMessageProps {
   onSourceClick?: (source: RagSource) => void;
 }
 
-/** Extract the plain-text body of a ThreadMessage (concatenates all
- * text parts, ignores tool/file parts that don't apply here). */
+/** Extract the plain-text body of a ThreadMessage. */
 function readMessageText(message: { content: readonly { type: string; text?: string }[] | undefined }): string {
   if (!message?.content) return '';
   return message.content
@@ -170,32 +165,33 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
   const sources = customData.sources ?? [];
 
   return (
-    <MessagePrimitive.Root className="flex justify-start">
-      <div className="max-w-[85%] space-y-3">
-        <div className="rounded-2xl border border-slate-100 bg-white px-5 py-3 text-slate-900 shadow-sm">
-          <MessagePrimitive.Content
-            components={{
-              Text: ({ text }) => (
-                <div className="prose prose-sm max-w-none">
-                  <ReactMarkdown>{text}</ReactMarkdown>
-                </div>
-              ),
-            }}
-          />
-        </div>
+    <MessagePrimitive.Root className="chat chat-start">
+      <div className="chat-bubble bg-base-100 border border-base-200 text-base-content shadow-sm">
+        <MessagePrimitive.Content
+          components={{
+            Text: ({ text }) => (
+              <div className="prose prose-sm max-w-none">
+                <ReactMarkdown>{text}</ReactMarkdown>
+              </div>
+            ),
+          }}
+        />
+      </div>
 
-        {sources.length > 0 && (
+      {sources.length > 0 && (
+        <div className="chat-footer mt-2">
           <SourcePills sources={sources} onSourceClick={onSourceClick} />
-        )}
+        </div>
+      )}
 
+      <div className="chat-footer mt-2">
         <CopyMessageButton text={readMessageText(message)} />
       </div>
     </MessagePrimitive.Root>
   );
 };
 
-/** Per-message Copy button. Restores the copy-to-clipboard affordance
- * the pre-migration UI had on each assistant bubble. */
+/** Per-message Copy button using daisyUI btn classes. */
 const CopyMessageButton: FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
@@ -209,27 +205,25 @@ const CopyMessageButton: FC<{ text: string }> = ({ text }) => {
     }
   };
   return (
-    <div className="flex items-center gap-2 pt-0.5">
-      <button
-        type="button"
-        onClick={handleCopy}
-        className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"
-        title={copied ? 'Copied!' : 'Copy answer'}
-        aria-label={copied ? 'Copied!' : 'Copy answer'}
-      >
-        {copied ? (
-          <>
-            <Check size={14} weight="bold" className="text-green-600" />
-            <span>Copied</span>
-          </>
-        ) : (
-          <>
-            <CopySimple size={14} weight="regular" />
-            <span>Copy</span>
-          </>
-        )}
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="btn btn-ghost btn-xs gap-1"
+      title={copied ? 'Copied!' : 'Copy answer'}
+      aria-label={copied ? 'Copied!' : 'Copy answer'}
+    >
+      {copied ? (
+        <>
+          <Check size={14} weight="bold" className="text-success" />
+          <span>Copied</span>
+        </>
+      ) : (
+        <>
+          <CopySimple size={14} weight="regular" />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
   );
 };
 
@@ -239,27 +233,28 @@ interface SourcePillsProps {
 }
 
 const SourcePills: FC<SourcePillsProps> = ({ sources, onSourceClick }) => (
-  <div className="flex flex-wrap gap-2">
+  <div className="flex flex-wrap gap-1.5">
     {sources.map((source, idx) => {
       const label = source.section
         ? `${source.source} · ${source.section}`
         : source.source;
-      const scoreColor =
+      // Map score to a daisyUI semantic badge color.
+      const badgeClass =
         source.score >= 80
-          ? 'border-green-300 bg-green-50 text-green-700'
+          ? 'badge-success'
           : source.score >= 60
-            ? 'border-yellow-300 bg-yellow-50 text-yellow-700'
-            : 'border-slate-300 bg-slate-50 text-slate-600';
+            ? 'badge-warning'
+            : 'badge-ghost';
       return (
         <button
           key={`${source.source}-${idx}`}
           type="button"
           onClick={() => onSourceClick?.(source)}
-          className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors hover:bg-white ${scoreColor}`}
+          className={`badge badge-sm ${badgeClass} gap-1 cursor-pointer hover:badge-outline`}
           title={source.chunk_text.slice(0, 240)}
         >
           <span className="truncate max-w-[200px]">{label}</span>
-          <span className="text-[10px] opacity-70">{source.score}%</span>
+          <span className="opacity-70">{source.score}%</span>
         </button>
       );
     })}
@@ -267,27 +262,23 @@ const SourcePills: FC<SourcePillsProps> = ({ sources, onSourceClick }) => (
 );
 
 const Composer: FC = () => (
-  <ComposerPrimitive.Root className="border-t border-slate-200 bg-white p-4">
-    <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-slate-200/80 bg-white px-2 py-1.5 shadow-2xl shadow-slate-200/50 focus-within:border-slate-300">
+  <ComposerPrimitive.Root className="border-t border-base-200 bg-base-100 p-4">
+    <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-base-200 bg-base-100 px-2 py-1.5 shadow-2xl shadow-base-300/40 focus-within:border-base-300">
       <ComposerPrimitive.Input
         rows={1}
         autoFocus
         placeholder="Ask anything..."
-        className="min-h-[44px] flex-1 resize-none bg-transparent px-3 py-2.5 text-base text-slate-800 placeholder:text-slate-400 focus:outline-none"
+        className="textarea textarea-ghost min-h-[44px] flex-1 resize-none bg-transparent text-base focus:outline-none focus:bg-transparent"
       />
-      <div className="pb-1.5">
+      <div className="pb-1">
         <ComposerPrimitive.Send asChild>
           <button
             type="submit"
-            className="group flex h-10 w-10 items-center justify-center rounded-full text-white shadow-md transition-all hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
+            className="btn btn-circle btn-md border-none text-white shadow-md transition-all hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
             style={{ backgroundColor: PINK_ACCENT }}
             aria-label="Send message"
           >
-            <ArrowUp
-              size={18}
-              weight="bold"
-              className="transition-transform group-hover:-translate-y-px"
-            />
+            <ArrowUp size={18} weight="bold" />
           </button>
         </ComposerPrimitive.Send>
       </div>

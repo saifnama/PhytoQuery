@@ -3,6 +3,10 @@
 
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+/* daisyUI 5 — CSS-import path. Tailwind v4's `@plugin "daisyui"` directive
+   triggers a Node ESM `.css` load failure on bun + vite; the direct
+   CSS @import sidesteps that and produces identical utility output. */
+@import "daisyui/daisyui.css";
 
 /* Tailwind v4 dark variant — class-based, opt-in via <html class="dark">.
    Driven by the useTheme() hook in src/lib/theme.ts (flower-icon click). */
