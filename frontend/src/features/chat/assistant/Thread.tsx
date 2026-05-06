@@ -19,9 +19,11 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useMessage,
+  useThread,
 } from '@assistant-ui/react';
-import { ArrowUp } from '@phosphor-icons/react';
+import { ArrowUp, DownloadSimple } from '@phosphor-icons/react';
 import type { RagMessageCustomData, RagSource } from './runtime';
+import { exportAnswerAsPdf } from './exportPdf';
 
 interface ThreadProps {
   /** Optional: invoked when the user clicks a source pill. The parent
@@ -80,10 +82,46 @@ interface AssistantMessageProps {
   onSourceClick?: (source: RagSource) => void;
 }
 
+/** Extract the plain-text body of a ThreadMessage (concatenates all
+ * text parts, ignores tool/file parts that don't apply here). */
+function readMessageText(message: { content: readonly { type: string; text?: string }[] | undefined }): string {
+  if (!message?.content) return '';
+  return message.content
+    .map((part) => (part.type === 'text' ? part.text ?? '' : ''))
+    .join('')
+    .trim();
+}
+
 const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
   const message = useMessage();
+  const thread = useThread();
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
   const sources = customData.sources ?? [];
+
+  const handleExportPdf = () => {
+    // Find the user message immediately preceding this assistant turn
+    // (skipping any system messages) so the PDF carries the question.
+    const ourIndex = thread.messages.findIndex((m) => m.id === message.id);
+    let priorUserText = '';
+    if (ourIndex > 0) {
+      for (let i = ourIndex - 1; i >= 0; i--) {
+        const candidate = thread.messages[i];
+        if (candidate.role === 'user') {
+          priorUserText = readMessageText(candidate);
+          break;
+        }
+      }
+    }
+
+    exportAnswerAsPdf({
+      question: priorUserText,
+      answer: readMessageText(message),
+      sources,
+      timestamp: message.createdAt
+        ? new Date(message.createdAt).toISOString()
+        : undefined,
+    });
+  };
 
   return (
     <MessagePrimitive.Root className="flex justify-start">
@@ -103,6 +141,18 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
         {sources.length > 0 && (
           <SourcePills sources={sources} onSourceClick={onSourceClick} />
         )}
+
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleExportPdf}
+            className="flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+            title="Download this answer as a PDF"
+          >
+            <DownloadSimple size={14} weight="bold" />
+            <span>Export PDF</span>
+          </button>
+        </div>
       </div>
     </MessagePrimitive.Root>
   );

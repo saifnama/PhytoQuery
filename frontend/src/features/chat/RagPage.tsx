@@ -1,11 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import {
-  Chats,
   Plus,
-  ArrowUp,
-  CopySimple,
   FileText,
   FilePdf,
   FileDoc,
@@ -13,7 +10,6 @@ import {
   StackSimple,
   Check,
   Trash,
-  DownloadSimple,
   Warning,
   SidebarSimple,
   Eye,
@@ -21,29 +17,16 @@ import {
   ArrowsOutSimple,
 } from '@phosphor-icons/react';
 import { buildChatFileContentUrl, paperApi, ragApi } from '../../lib/api';
+import { Thread } from './assistant/Thread';
+import {
+  clearPersistedChatHistory,
+  usePhytoQueryRuntime,
+  type RagSource,
+} from './assistant/runtime';
 
-interface Source {
-  source: string;
-  section: string;
-  parser_type: string;
-  score: number;
-  chunk_text: string;
-}
-
-interface Message {
-  id: string;
-  type: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-  sources?: Source[];
-}
-
-function formatTimestamp(): string {
-  return new Date().toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+// Source alias kept for callsite stability — same shape as the
+// assistant-ui runtime's RagSource (source/section/parser_type/score/chunk_text).
+type Source = RagSource;
 
 interface UploadedFile {
   name: string;
@@ -123,8 +106,10 @@ function SimplePdfViewer({
   );
 }
 
+// Chat history is now persisted by the assistant-ui runtime under
+// `pq_chat_history` (see ./assistant/runtime.ts). The keys below are
+// only for state outside the chat thread itself.
 const SESSION_KEYS = {
-  MESSAGES: 'pq_chat_messages',
   FILES: 'pq_chat_files',
   PARSER: 'pq_chat_parser',
   SIDEBAR: 'pq_chat_sidebar',
@@ -134,18 +119,11 @@ const RagPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = location.state as RagLocationState | null;
-  // Initialize state from sessionStorage
-  const [messages, setMessages] = useState<Message[]>(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.MESSAGES);
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [query, setQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [isUploading, setIsUploading] = useState(false);
   const [parserType, setParserType] = useState<'pymupdf' | 'docling'>(() => {
     const saved = sessionStorage.getItem(SESSION_KEYS.PARSER);
-    return (saved as any) || 'pymupdf';
+    return (saved as 'pymupdf' | 'docling' | null) || 'pymupdf';
   });
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(() => {
     const saved = sessionStorage.getItem(SESSION_KEYS.FILES);
@@ -155,16 +133,31 @@ const RagPage: React.FC = () => {
     const saved = sessionStorage.getItem(SESSION_KEYS.SIDEBAR);
     return saved === 'true';
   });
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Build the assistant-ui runtime. The selected-file getter is read on
+  // every send so the user's checkbox state always reflects in the
+  // outgoing /api/chat/query/json request.
+  const uploadedFilesRef = useRef(uploadedFiles);
+  uploadedFilesRef.current = uploadedFiles;
+  const getSelectedFiles = useCallback(
+    () =>
+      uploadedFilesRef.current
+        .filter((f) => f.selected)
+        .map((f) => f.name),
+    [],
+  );
+  const runtime = usePhytoQueryRuntime(
+    useMemo(
+      () => ({ getSelectedFiles, enableSessionPersistence: true }),
+      [getSelectedFiles],
+    ),
+  );
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -172,20 +165,8 @@ const RagPage: React.FC = () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
-      if (copyResetTimeoutRef.current) {
-        clearTimeout(copyResetTimeoutRef.current);
-      }
     };
   }, []);
-
-  // Auto-expand textarea
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`; // Max 192px (approx 8 lines)
-    }
-  }, [query]);
 
   // Load indexed files from backend and merge with persisted selection status
   const loadIndexedFiles = useCallback(async () => {
@@ -292,11 +273,9 @@ const RagPage: React.FC = () => {
     setActivePdfUrl(buildChatFileContentUrl(file.name));
   }, []);
 
-  // Persist state changes to sessionStorage
-  useEffect(() => {
-    sessionStorage.setItem(SESSION_KEYS.MESSAGES, JSON.stringify(messages));
-  }, [messages]);
-
+  // Persist state changes to sessionStorage. Chat messages are no
+  // longer persisted here — the assistant-ui runtime owns that via its
+  // ThreadHistoryAdapter, see ./assistant/runtime.ts.
   useEffect(() => {
     sessionStorage.setItem(SESSION_KEYS.FILES, JSON.stringify(uploadedFiles));
   }, [uploadedFiles]);
@@ -367,10 +346,6 @@ const RagPage: React.FC = () => {
     importPaperPdf();
   }, [applyUploadResult, loadIndexedFiles, location.pathname, locationState, navigate, parserType]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -433,42 +408,6 @@ const RagPage: React.FC = () => {
     );
   };
 
-  const handleExportMarkdown = () => {
-    let mdContent = `# Source Documents\n`;
-    const selected = uploadedFiles.filter((f) => f.selected).map((f) => f.name);
-    mdContent += selected.length > 0 ? selected.map(s => `- ${s}`).join('\n') : "None";
-    mdContent += `\n\n---\n\n`;
-
-    messages.forEach((msg) => {
-      if (msg.type === 'user') {
-        mdContent += `### You\n${msg.content}\n\n`;
-      } else {
-        mdContent += `### PhytoQuery Assistant\n${msg.content}\n\n`;
-        if (msg.sources && msg.sources.length > 0) {
-          mdContent += `> **Sources:**\n`;
-          msg.sources.forEach((src: any) => {
-            let srcText = `> - ${src.source}`;
-            if (src.section) srcText += ` — ${src.section}`;
-            if (src.parser_type) {
-              srcText += ` (${src.parser_type === 'pymupdf' ? 'Fast' : 'Detailed'})`;
-            }
-            mdContent += `${srcText}\n`;
-          });
-          mdContent += `\n`;
-        }
-      }
-    });
-
-    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `PhytoQuery_Chat_${new Date().toISOString().slice(0, 10)}.md`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const handleResetAll = async () => {
     const confirmMessage =
       "Are you sure you want to permanently delete ALL chat history and source files? This cannot be undone.";
@@ -476,88 +415,19 @@ const RagPage: React.FC = () => {
       try {
         await ragApi.resetChat();
         closePdfViewer();
-        setMessages([]);
         setUploadedFiles([]);
-        sessionStorage.removeItem(SESSION_KEYS.MESSAGES);
+        // Chat history lives in the runtime now — clear its session key
+        // and the file list key so a refresh shows a clean slate.
+        clearPersistedChatHistory();
         sessionStorage.removeItem(SESSION_KEYS.FILES);
+        // Wipe in-runtime thread state too. The runtime exposes
+        // .thread.cancelRun and reset via thread-list, but the simplest
+        // reliable path is a hard reload after the storage purge.
+        window.location.reload();
       } catch (error) {
         console.error('Reset failed:', error);
         alert('Failed to reset chat. Please try again.');
       }
-    }
-  };
-
-  // --- Chat logic ---
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim() || isLoading) return;
-
-    // Require at least one file selected
-    const selectedFiles = uploadedFiles.filter((f) => f.selected).map((f) => f.name);
-    if (uploadedFiles.length > 0 && selectedFiles.length === 0) {
-      const errorMsg: Message = {
-        id: Date.now().toString(),
-        type: 'assistant',
-        content: 'Please select at least one source document before asking a question.',
-        timestamp: formatTimestamp(),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
-      return;
-    }
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: query.trim(),
-      timestamp: formatTimestamp(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setQuery('');
-    setIsLoading(true);
-    scrollToBottom();
-
-    try {
-      // Pass selected files for filtered retrieval (or undefined for global search)
-      const filterFiles = selectedFiles.length > 0 ? selectedFiles : undefined;
-
-      // Build conversation history for multi-turn context (last 5 Q&A pairs)
-      const chatHistory = messages.slice(-10).map((m) => ({
-        role: m.type === 'user' ? 'user' : 'assistant',
-        content: m.content,
-      }));
-
-      const result = await ragApi.query(query.trim(), filterFiles, chatHistory.length > 0 ? chatHistory : undefined);
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content: result.answer,
-        timestamp: formatTimestamp(),
-        sources: result.sources,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error) {
-      console.error('RAG query failed:', error);
-      const errorText =
-        (error as any)?.response?.data?.detail ||
-        'Sorry, I encountered an error. Please try again.';
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'assistant',
-        content: errorText,
-        timestamp: formatTimestamp(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-      scrollToBottom();
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e as unknown as React.FormEvent);
     }
   };
 
@@ -566,24 +436,6 @@ const RagPage: React.FC = () => {
     const dotIdx = name.lastIndexOf('.');
     return dotIdx > 0 ? name.slice(0, dotIdx) : name;
   };
-
-  const handleCopyMessage = useCallback(async (messageId: string, content: string) => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopiedMessageId(messageId);
-
-      if (copyResetTimeoutRef.current) {
-        clearTimeout(copyResetTimeoutRef.current);
-      }
-
-      copyResetTimeoutRef.current = setTimeout(() => {
-        setCopiedMessageId((current) => (current === messageId ? null : current));
-        copyResetTimeoutRef.current = null;
-      }, 1500);
-    } catch (error) {
-      console.error('Copy failed:', error);
-    }
-  }, []);
 
   return (
     <div className="h-full flex px-0">
@@ -800,156 +652,11 @@ const RagPage: React.FC = () => {
         )}
       </aside>
 
-      {/* ─── Chat Area ─── */}
+      {/* ─── Chat Area (assistant-ui Thread) ─── */}
       <div className="flex-1 flex flex-col relative">
-        {/* Chat header with export */}
-        {messages.length > 0 && (
-          <div className="flex items-center justify-end px-6 py-2 border-b border-slate-100 bg-white/80 backdrop-blur-sm">
-            <button
-              onClick={handleExportMarkdown}
-              className="flex items-center space-x-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors px-3 py-1.5 rounded-lg hover:bg-slate-100 border border-transparent hover:border-slate-200"
-            >
-              <DownloadSimple size={14} />
-              <span>Export Chat (.md)</span>
-            </button>
-          </div>
-        )}
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-8 pb-32 space-y-6">
-          {messages.length === 0 ? (
-            <div className="text-center max-w-xl mx-auto mt-20">
-              <div className="w-16 h-16 bg-blue-50 text-blue-300 rounded-2xl flex items-center justify-center mx-auto mb-6">
-                <Chats size={32} weight="thin" />
-              </div>
-              
-              <p className="text-sm text-slate-500">
-                Upload research papers and ask questions about them
-              </p>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto space-y-6">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className="relative group/message max-w-[80%]"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleCopyMessage(message.id, message.content)}
-                      className="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white/95 text-slate-400 opacity-0 shadow-sm transition-all hover:border-slate-300 hover:text-slate-600 focus:opacity-100 focus:outline-none focus-visible:opacity-100 group-hover/message:opacity-100"
-                      title={copiedMessageId === message.id ? 'Copied' : 'Copy message'}
-                      aria-label={copiedMessageId === message.id ? 'Copied message' : 'Copy message'}
-                    >
-                      {copiedMessageId === message.id ? (
-                        <Check size={14} weight="bold" className="text-green-600" />
-                      ) : (
-                        <CopySimple size={14} weight="regular" />
-                      )}
-                    </button>
-
-                    <div
-                      className={`rounded-2xl px-5 py-3 ${
-                        message.type === 'user'
-                          ? 'text-slate-900'
-                          : 'bg-white border border-slate-100 text-slate-900'
-                      }`}
-                      style={message.type === 'user' ? { backgroundColor: '#ffecf6' } : undefined}
-                    >
-                      <div
-                        className={`text-sm prose prose-sm max-w-none`}
-                      >
-                        <ReactMarkdown>{message.content}</ReactMarkdown>
-                      </div>
-                      {message.sources && message.sources.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-slate-100">
-                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                            Sources
-                          </p>
-                          <div className="space-y-1.5">
-                            {message.sources.map((source, idx) => {
-                              const scoreColor = source.score >= 80 ? 'bg-green-100 text-green-700' : source.score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
-                              return (
-                                <div
-                                  key={idx}
-                                  className="flex items-center space-x-2 group/src cursor-pointer hover:bg-slate-50 rounded-md px-1.5 py-1 -mx-1.5 transition-colors"
-                                  onClick={() => setPreviewSource(source)}
-                                >
-                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${scoreColor}`}>
-                                    {source.score}%
-                                  </span>
-                                  <span className="text-xs text-slate-600 truncate">
-                                    {source.source}
-                                    {source.section ? ` — ${source.section}` : ''}
-                                  </span>
-                                  <Eye size={12} className="text-slate-300 group-hover/src:text-slate-500 flex-shrink-0 transition-colors" />
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {isLoading && (
-                <div className="flex justify-start">
-                  <div className="bg-white border border-slate-100 rounded-2xl px-5 py-3">
-                    <div className="flex items-center space-x-1.5">
-                      <div className="w-2 h-2 bg-slate-300 rounded-full animate-bounce" />
-                      <div
-                        className="w-2 h-2 bg-slate-300 rounded-full animate-bounce"
-                        style={{ animationDelay: '0.1s' }}
-                      />
-                      <div
-                        className="w-2 h-2 bg-slate-300 rounded-full animate-bounce"
-                        style={{ animationDelay: '0.2s' }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Input Bar */}
-        <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-gray-50 via-gray-50/90 to-transparent pointer-events-none">
-          <form onSubmit={handleSubmit} className="max-w-3xl mx-auto pointer-events-auto">
-            <div className="bg-white border border-slate-200/80 rounded-[28px] p-1.5 pr-2.5 shadow-2xl shadow-slate-200/50 flex items-end">
-              <textarea
-                ref={textareaRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask anything..."
-                className="flex-1 bg-transparent border-none focus:ring-0 text-base text-slate-800 placeholder:text-slate-400 resize-none py-3 px-4 min-h-[52px]"
-                rows={1}
-              />
-              <div className="pb-1.5">
-                <button
-                  type="submit"
-                  disabled={!query.trim() || isLoading}
-                  className="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md disabled:opacity-40 disabled:shadow-none hover:shadow-lg active:scale-95 group"
-                  style={{ backgroundColor: '#ff6dba' }}
-                >
-                  <ArrowUp 
-                    size={20} 
-                    weight="bold" 
-                    className="text-white group-hover:translate-y-[-1px] transition-transform" 
-                  />
-                </button>
-              </div>
-            </div>
-            <p className="text-[10px] text-center text-slate-400 mt-3 tracking-wide">
-              PhytoQuery can make mistakes. Verify important information.
-            </p>
-          </form>
-        </div>
+        <AssistantRuntimeProvider runtime={runtime}>
+          <Thread onSourceClick={setPreviewSource} />
+        </AssistantRuntimeProvider>
       </div>
 
       {activePdfFile && (

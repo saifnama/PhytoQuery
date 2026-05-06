@@ -21,10 +21,14 @@
 import type {
   ChatModelAdapter,
   ChatModelRunResult,
+  ThreadHistoryAdapter,
   ThreadMessage,
+  ThreadMessageLike,
 } from '@assistant-ui/react';
 import { useLocalRuntime } from '@assistant-ui/react';
 import { useMemo, useRef } from 'react';
+
+const HISTORY_STORAGE_KEY = 'pq_chat_history';
 
 /** Source attribution as our backend returns it. */
 export interface RagSource {
@@ -97,11 +101,59 @@ async function postQuery(
   return response.json();
 }
 
+/** sessionStorage-backed history adapter. Lets the chat survive a page
+ * reload during the same browser session. Cleared via the existing
+ * "Reset all" flow which clears all `pq_chat_*` keys.
+ *
+ * Lives outside the hook so all instances share the same adapter shape
+ * — the runtime is responsible for deduping append calls.
+ */
+function createSessionHistoryAdapter(): ThreadHistoryAdapter {
+  return {
+    async load() {
+      try {
+        const raw = sessionStorage.getItem(HISTORY_STORAGE_KEY);
+        if (!raw) return { messages: [] };
+        const parsed = JSON.parse(raw);
+        // Defensive: must look like ExportedMessageRepository.
+        if (parsed && Array.isArray(parsed.messages)) {
+          return parsed;
+        }
+        return { messages: [] };
+      } catch {
+        return { messages: [] };
+      }
+    },
+    async append(item) {
+      try {
+        const raw = sessionStorage.getItem(HISTORY_STORAGE_KEY);
+        const repo =
+          raw && JSON.parse(raw).messages
+            ? JSON.parse(raw)
+            : { messages: [] as Array<unknown> };
+        repo.messages.push(item);
+        sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(repo));
+      } catch (e) {
+        // sessionStorage may be unavailable (private mode, quota); the
+        // chat still works in-memory.
+        console.warn('Failed to persist chat history:', e);
+      }
+    },
+  };
+}
+
 export interface PhytoQueryRuntimeOptions {
   /** Returns the list of currently-selected source filenames. Called on
    * every send so the user's checkbox state always reflects in the
    * outgoing request without re-creating the adapter. */
   getSelectedFiles: () => string[];
+  /** Initial messages to seed the thread with on first mount. Used for
+   * "import paper from /search" handoff that pre-populates a question
+   * about the imported PDF. */
+  initialMessages?: readonly ThreadMessageLike[];
+  /** When true, persists thread state to sessionStorage so it survives
+   * a page reload within the same browser session. Default true. */
+  enableSessionPersistence?: boolean;
 }
 
 export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
@@ -145,5 +197,23 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
     [],
   );
 
-  return useLocalRuntime(adapter);
+  const history = useMemo<ThreadHistoryAdapter | undefined>(
+    () => (opts.enableSessionPersistence === false ? undefined : createSessionHistoryAdapter()),
+    [opts.enableSessionPersistence],
+  );
+
+  return useLocalRuntime(adapter, {
+    initialMessages: opts.initialMessages,
+    adapters: history ? { history } : undefined,
+  });
+}
+
+/** Public so the parent (RagPage's "Reset all" handler) can clear the
+ * persisted thread state in addition to the per-user index. */
+export function clearPersistedChatHistory(): void {
+  try {
+    sessionStorage.removeItem(HISTORY_STORAGE_KEY);
+  } catch {
+    /* noop */
+  }
 }
