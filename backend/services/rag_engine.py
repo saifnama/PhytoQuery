@@ -8,8 +8,17 @@ import hashlib
 import json
 import asyncio
 import logging
-import tempfile
 import threading
+import warnings
+
+# Local Qdrant doesn't support payload indexes; LlamaIndex still tries to
+# create them under enable_hybrid=True and emits a warning every time.
+# Filtering still works (Qdrant scans instead), so the warning is benign
+# noise at our scale.
+warnings.filterwarnings(
+    "ignore",
+    message=".*Payload indexes have no effect in the local Qdrant.*",
+)
 from importlib import metadata as importlib_metadata
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -23,14 +32,28 @@ from backend.core.rag_storage import delete_user_upload_file, delete_user_upload
 # method that first needs it.  This keeps startup at ~200 MB and < 2 seconds.
 #
 # Deferred:
-#   from langchain_chroma import Chroma
-#   from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
-#   from langchain_experimental.text_splitter import SemanticChunker
-#   from sentence_transformers import CrossEncoder
-#   from langchain_core.documents import Document
+#   from sentence_transformers import SentenceTransformer
+#   from llama_index.core.node_parser import HierarchicalNodeParser, ...
+#   from llama_index.core.retrievers import AutoMergingRetriever, QueryFusionRetriever
+#   from llama_index.retrievers.bm25 import BM25Retriever
+#   from llama_index.vector_stores.qdrant import QdrantVectorStore
+#   from qdrant_client import QdrantClient
 #   from docling.chunking import HybridChunker
 #   from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+#
+# Re-exported for test patchability: Document, CrossEncoder.
 # ---------------------------------------------------------------------------
+
+from llama_index.core import Document  # re-exported for test patchability
+
+# CrossEncoder is patched by tests via ``monkeypatch.setattr(rag_engine,
+# "CrossEncoder", ...)``. Keep it as a module-level name so the patch
+# actually takes effect inside the lazy-load path below.
+try:
+    from sentence_transformers import CrossEncoder  # noqa: F401
+except Exception:  # pragma: no cover - allow tests to inject a stub
+    CrossEncoder = None  # type: ignore[assignment]
+
 
 # --- Import from RAG config ---
 from backend.config import (
@@ -186,20 +209,9 @@ def _sanitize_metadata_value(value: Any) -> Any:
     return str(value)
 
 
-def _sanitize_documents_for_chroma(documents):
-    from langchain_core.documents import Document
-    sanitized = []
-    for doc in documents:
-        sanitized.append(
-            Document(
-                page_content=doc.page_content,
-                metadata={
-                    key: _sanitize_metadata_value(value)
-                    for key, value in doc.metadata.items()
-                },
-            )
-        )
-    return sanitized
+def _sanitize_metadata_dict(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce metadata into JSON-friendly scalar/string values for Qdrant payloads."""
+    return {key: _sanitize_metadata_value(value) for key, value in metadata.items()}
 
 
 # --- RAG Configuration ---
@@ -275,10 +287,16 @@ class RAGConfig:
         "medicinal plants, ethnobotany, and traditional medicine. "
         "Methods, results, and data-driven findings are highly relevant."
     )
-    chroma_dir: str = os.path.join(
+    # Vector store and per-user docstore directories.
+    qdrant_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data",
-        "chroma_db",
+        "qdrant",
+    )
+    storage_dir: str = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "data",
+        "qdrant_storage",
     )
 
 
@@ -449,9 +467,11 @@ class OllamaLLM:
 class PhytoQueryEmbeddings:
     """Custom embeddings with Qwen3-Embedding-4B primary and bge-m3 fallback.
 
-    Implements the LangChain Embeddings interface for ChromaDB compatibility.
-    For Qwen3, queries use prompt_name="query" for instruction-aware retrieval;
-    documents are encoded without prompts. Falls back to bge-m3 on load failure.
+    Implements a minimal embed_documents / embed_query interface, used both
+    directly and via the ``PhytoQueryLIEmbedding`` adapter so LlamaIndex can
+    consume the same wrapper. Queries on Qwen3 use ``prompt_name="query"``
+    for instruction-aware retrieval; documents are encoded without prompts.
+    Falls back to bge-m3 on load failure.
     """
 
     def __init__(
@@ -639,6 +659,29 @@ class PhytoQueryEmbeddings:
         return result
 
 
+# ---------------------------------------------------------------------------
+# Per-user storage state.
+#
+# Each RAG user gets:
+#   - A Qdrant collection in the shared local Qdrant DB (data/qdrant/).
+#   - A LlamaIndex StorageContext whose docstore is a SimpleDocumentStore
+#     persisted under data/qdrant_storage/<safe_user_id>/.
+#
+# Parents and children both live in the docstore (so AutoMergingRetriever
+# can walk children → parents). Only LEAF nodes are embedded into Qdrant.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _UserStorage:
+    """Cached per-user LlamaIndex storage handles."""
+
+    collection_name: str
+    persist_dir: str
+    storage_context: Any  # llama_index.core.StorageContext
+    vector_store: Any     # llama_index.vector_stores.qdrant.QdrantVectorStore
+
+
 class RAGService:
     def __init__(self):
         self._device = get_optimal_device()
@@ -664,12 +707,44 @@ class RAGService:
             provider=LLM_PROVIDER["provider"],
             api_key=LLM_PROVIDER.get("api_key"),
         )
-        # Cache for per-user vectorstores
-        self._vectorstore_cache: Dict[str, Any] = {}
-        # Cache for Docling converter to avoid reloading models
+        # Per-user storage cache (Qdrant collection + LlamaIndex StorageContext).
+        self._user_storage: Dict[str, _UserStorage] = {}
+        self._user_storage_lock = threading.Lock()
+        # Cache for Docling converter to avoid reloading models.
         self._docling_converter = None
-        # Lazy-init semantic child splitter
-        self._semantic_splitter = None
+        # Shared Qdrant client (single local DB at config.qdrant_dir).
+        self._qdrant_client = None
+        self._qdrant_lock = threading.Lock()
+        # Configure LlamaIndex Settings once (replaces deprecated ServiceContext).
+        self._configure_llama_index_settings()
+
+    # ------------------------------------------------------------------
+    # LlamaIndex Settings wiring
+    # ------------------------------------------------------------------
+
+    def _configure_llama_index_settings(self) -> None:
+        """Plug our LLM + embeddings into LlamaIndex's global Settings.
+
+        This is idempotent — every RAGService construction overwrites the
+        Settings.llm / Settings.embed_model with the freshly-built adapters
+        so tests that swap the singleton get coherent state.
+        """
+        from llama_index.core import Settings
+        from backend.services.llamaindex_adapters import (
+            PhytoQueryLLM,
+            PhytoQueryLIEmbedding,
+        )
+
+        Settings.llm = PhytoQueryLLM(
+            ollama_llm=self.llm,
+            context_window=LLM_CONTEXT_WINDOW,
+            num_output=2048,
+            request_timeout=RAG_QUERY_TIMEOUT_SECONDS,
+        )
+        Settings.embed_model = PhytoQueryLIEmbedding(
+            embeddings=self.embeddings,
+            embed_batch_size=16,
+        )
 
     async def _invoke_llm(self, *, prompt: str = None, messages: list = None, timeout_seconds: Optional[float] = None, max_retries: int = 3):
         try:
@@ -684,6 +759,34 @@ class RAGService:
                 raise
             return await self.llm.invoke(prompt=prompt, messages=messages)
 
+    def _reranker_max_length(self) -> Optional[int]:
+        """Resolve a safe ``max_length`` for the configured reranker.
+
+        ``config.reranker_max_length`` (default 2048) is only safe for
+        long-context rerankers like zerank-2 and bge-reranker-v2-m3.
+        Classic 512-token models (ms-marco-MiniLM, bge-reranker base)
+        crash with a tensor-size mismatch when fed inputs longer than
+        their architecture supports. Returning ``None`` here lets the
+        CrossEncoder fall back to the tokenizer's ``model_max_length``
+        — the right answer for any pretrained model.
+        """
+        name = config.reranker_model.lower()
+        long_context_markers = ("zerank", "bge-reranker-v2", "bge-reranker-v3")
+        if any(marker in name for marker in long_context_markers):
+            return config.reranker_max_length
+        return None  # use tokenizer-native max length
+
+    def _make_reranker_kwargs(self) -> Dict[str, Any]:
+        """Build CrossEncoder constructor kwargs honoring the resolved
+        max_length and zerank-specific options."""
+        kwargs: Dict[str, Any] = {}
+        max_len = self._reranker_max_length()
+        if max_len is not None:
+            kwargs["max_length"] = max_len
+        if "zerank" in config.reranker_model.lower():
+            kwargs["trust_remote_code"] = True
+        return kwargs
+
     @property
     def reranker(self):
         """Lazy-load the reranker on first access."""
@@ -693,14 +796,16 @@ class RAGService:
             if self._reranker is not ...:
                 return self._reranker
             try:
-                from sentence_transformers import CrossEncoder
+                # Resolve via module-level CrossEncoder so tests can monkeypatch it.
+                _ce_cls = globals().get("CrossEncoder")
+                if _ce_cls is None:
+                    from sentence_transformers import CrossEncoder as _ce_cls
                 logger.info(f"Loading reranker: {config.reranker_model} on {self._device}...")
-                kwargs: Dict[str, Any] = {"max_length": config.reranker_max_length}
+                kwargs: Dict[str, Any] = dict(self._make_reranker_kwargs())
                 if "zerank" in config.reranker_model.lower():
                     compatible, reason = _zerank_runtime_compatible()
                     if not compatible:
                         raise RuntimeError(reason)
-                    kwargs["trust_remote_code"] = True
 
                 if self._device.startswith("cuda"):
                     cuda_kwargs = _build_cuda_model_kwargs(
@@ -715,20 +820,28 @@ class RAGService:
                 else:
                     kwargs["device"] = self._device
 
-                self._reranker = CrossEncoder(config.reranker_model, **kwargs)
+                self._reranker = _ce_cls(config.reranker_model, **kwargs)
+                logger.info(
+                    "Reranker loaded (model=%s, max_length=%s, device=%s)",
+                    config.reranker_model,
+                    kwargs.get("max_length", "tokenizer-default"),
+                    self._device,
+                )
             except Exception as e:
                 logger.warning(f"Failed to load reranker on {self._device}: {e}")
                 if self._device == "mps":
                     try:
-                        from sentence_transformers import CrossEncoder
+                        _ce_cls = globals().get("CrossEncoder")
+                        if _ce_cls is None:
+                            from sentence_transformers import CrossEncoder as _ce_cls
                         logger.info("Retrying reranker load on CPU due to MPS failure...")
-                        kwargs = {"max_length": config.reranker_max_length, "device": "cpu"}
+                        kwargs = dict(self._make_reranker_kwargs())
+                        kwargs["device"] = "cpu"
                         if "zerank" in config.reranker_model.lower():
                             compatible, reason = _zerank_runtime_compatible()
                             if not compatible:
                                 raise RuntimeError(reason)
-                            kwargs["trust_remote_code"] = True
-                        self._reranker = CrossEncoder(config.reranker_model, **kwargs)
+                        self._reranker = _ce_cls(config.reranker_model, **kwargs)
                         self._device = "cpu"
                         logger.info("Reranker loaded successfully on CPU fallback.")
                     except Exception as cpu_e:
@@ -743,224 +856,238 @@ class RAGService:
         """Allow tests and callers to inject a mock reranker directly."""
         self._reranker = value
 
-    def _get_semantic_splitter(self):
-        """Lazy-init SemanticChunker for child-level semantic splitting."""
-        if self._semantic_splitter is None:
-            from langchain_experimental.text_splitter import SemanticChunker
-            logger.info("Initializing SemanticChunker for child splitting...")
-            self._semantic_splitter = SemanticChunker(
-                self.embeddings,
-                breakpoint_threshold_type="standard_deviation",
-                breakpoint_threshold_amount=1.5,
-            )
-        return self._semantic_splitter
+    # ------------------------------------------------------------------
+    # Qdrant + per-user storage helpers
+    # ------------------------------------------------------------------
 
-    def _split_semantic_children(self, text: str) -> List[str]:
-        """Split parent text into semantically coherent child chunks.
-
-        Uses SemanticChunker to group sentences by meaning, then applies
-        size guards to ensure chunks stay within configured bounds.
-        """
-        try:
-            splitter = self._get_semantic_splitter()
-            raw_chunks = splitter.split_text(text)
-        except Exception as e:
-            from langchain_text_splitters import MarkdownTextSplitter
-            logger.warning(f"SemanticChunker failed, falling back to MarkdownTextSplitter: {e}")
-            fallback = MarkdownTextSplitter(
-                chunk_size=config.child_chunk_size,
-                chunk_overlap=config.child_chunk_overlap,
-            )
-            return fallback.split_text(text)
-
-        result: List[str] = []
-        for chunk in raw_chunks:
-            if len(chunk) < config.min_chunk_size:
-                continue
-            if len(chunk) > config.child_chunk_size * 2:
-                # Oversized semantic chunk → fallback to character-based split
-                from langchain_text_splitters import RecursiveCharacterTextSplitter
-                safety = RecursiveCharacterTextSplitter(
-                    chunk_size=config.child_chunk_size,
-                    chunk_overlap=config.child_chunk_overlap,
-                    separators=["\n\n", "\n", ". ", " ", ""],
-                )
-                result.extend(safety.split_text(chunk))
-            else:
-                result.append(chunk)
-        return result
+    def _safe_user_id(self, user_id: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
 
     def _get_collection_suffix(self) -> str:
-        """Generate a short suffix based on the active embedding model and dimension.
+        """Short hash key versioning collections by embedding model + dim.
 
-        This ensures ChromaDB collections are versioned by embedding config,
-        preventing dimension mismatch when switching models.
+        This keeps collections from colliding across embedding model upgrades
+        (different dims would otherwise raise on insert).
         """
         model_key = f"{self.embeddings.model_name}:{self.embeddings.model_dim}"
-        short_hash = hashlib.md5(model_key.encode()).hexdigest()[:8]
-        return short_hash
+        return hashlib.md5(model_key.encode()).hexdigest()[:8]
 
-    def _get_user_collection(self, user_id: str):
-        """Get or create a ChromaDB collection for a specific user.
+    def _get_user_collection_name(self, user_id: str) -> str:
+        return f"user_{self._safe_user_id(user_id)}_{self._get_collection_suffix()}"
 
-        Uses an explicit ``chromadb.PersistentClient`` rather than letting
-        ``Chroma(persist_directory=…)`` build one implicitly. The explicit
-        client deterministically creates ``default_tenant`` and
-        ``default_database`` on first init, avoiding a chromadb 1.x race that
-        can leave the SQLite schema with empty tenant tables — surfacing as
-        ``Could not connect to tenant default_tenant`` on subsequent reads.
+    def _get_user_persist_dir(self, user_id: str) -> str:
+        return os.path.join(config.storage_dir, self._safe_user_id(user_id))
+
+    def _get_qdrant_client(self):
+        """Lazy-init the shared local QdrantClient.
+
+        We use a single client pointed at ``data/qdrant/`` rather than
+        per-user directories. Qdrant collections are first-class so this
+        gives us the same isolation Chroma offered via per-user dirs but
+        without the SQLite-tenant gymnastics that plagued
+        ``_reset_user_chroma_in_place``.
         """
-        import chromadb
-        from chromadb.config import Settings
-        from langchain_chroma import Chroma
+        if self._qdrant_client is not None:
+            return self._qdrant_client
+        with self._qdrant_lock:
+            if self._qdrant_client is not None:
+                return self._qdrant_client
+            from qdrant_client import QdrantClient
 
-        if user_id in self._vectorstore_cache:
-            return self._vectorstore_cache[user_id]
+            os.makedirs(config.qdrant_dir, exist_ok=True)
+            self._qdrant_client = QdrantClient(path=config.qdrant_dir)
+            logger.info(f"Initialized Qdrant local client at {config.qdrant_dir}")
+            return self._qdrant_client
 
-        # Sanitize user_id for collection name (alphanumeric + underscore only)
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        model_suffix = self._get_collection_suffix()
-        collection_name = f"user_{safe_user_id}_{model_suffix}"
+    def _build_user_storage(self, user_id: str) -> _UserStorage:
+        """Construct the StorageContext + Qdrant vector store for a user.
 
-        # User-specific persist directory
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
-
-        # Retry logic for handling locked files on Windows
-        max_retries = 3
-        vectorstore = None
-        for attempt in range(max_retries):
-            try:
-                os.makedirs(user_chroma_dir, exist_ok=True)
-                client = chromadb.PersistentClient(
-                    path=user_chroma_dir,
-                    settings=Settings(anonymized_telemetry=False, allow_reset=True),
-                )
-                vectorstore = Chroma(
-                    client=client,
-                    collection_name=collection_name,
-                    embedding_function=self.embeddings,
-                )
-                break
-            except Exception as e:
-                if attempt < max_retries - 1 and "locked" in str(e).lower():
-                    logger.warning(
-                        f"Chroma folder locked for {user_id}, retry {attempt + 1}/{max_retries}"
-                    )
-                    time.sleep(0.3)
-                    continue
-                raise
-
-        self._vectorstore_cache[user_id] = vectorstore
-        logger.info(f"Created ChromaDB collection for user: {user_id}")
-        return vectorstore
-
-    def _invalidate_user_collection(self, user_id: str) -> None:
-        """Drop a cached per-user Chroma client so the next access reopens it.
-
-        Note: do NOT call ``client._system.stop()`` here — chromadb 1.x uses
-        a process-wide rust bindings singleton, so stopping the system tears
-        down the runtime for every other client and produces phantom
-        "Could not connect to tenant default_tenant" errors on next access.
-        For real corruption recovery, use ``client.reset()`` which clears
-        data in-place via SQLite.
+        Loads a persisted SimpleDocumentStore if one exists under
+        ``data/qdrant_storage/<safe_user_id>/``; otherwise creates an
+        empty one. The Qdrant collection is created on first insert by
+        QdrantVectorStore — we don't need to pre-create it.
         """
-        self._vectorstore_cache.pop(user_id, None)
-        gc.collect()
-        time.sleep(0.1)
+        from llama_index.core import StorageContext
+        from llama_index.core.storage.docstore import SimpleDocumentStore
+        from llama_index.core.storage.index_store import SimpleIndexStore
+        from llama_index.vector_stores.qdrant import QdrantVectorStore
 
-    def _reset_user_chroma_in_place(self, user_id: str) -> None:
-        """Cross-OS recovery for a corrupt Chroma store.
+        client = self._get_qdrant_client()
+        collection_name = self._get_user_collection_name(user_id)
+        persist_dir = self._get_user_persist_dir(user_id)
+        os.makedirs(persist_dir, exist_ok=True)
 
-        Uses ``client.reset()`` to clear all collections via SQLite's own
-        TRUNCATE/DELETE — no filesystem operations. This avoids the
-        SQLITE_READONLY_DBMOVED (code 1032) race on macOS/Linux and the
-        permission-denied lock dance on Windows that ``shutil.rmtree``
-        triggers when a stale connection is still holding the inode open.
-
-        Falls back to ``rmtree`` only if ``reset()`` itself fails — e.g.
-        when the SQLite is so badly corrupted that no client can open it.
-        """
-        import chromadb
-        from chromadb.config import Settings
-
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
-        try:
-            client = chromadb.PersistentClient(
-                path=user_chroma_dir,
-                settings=Settings(anonymized_telemetry=False, allow_reset=True),
-            )
-            client.reset()
-            logger.info(
-                f"Reset Chroma data in-place for {user_id} (no filesystem ops)."
-            )
-            del client
-            gc.collect()
-            return
-        except Exception as reset_err:
-            logger.warning(
-                f"client.reset() failed for {user_id}: {reset_err!r}; "
-                f"falling back to filesystem wipe."
-            )
-
-        # Last-resort filesystem wipe. We're already in a degraded path —
-        # this can still race with a stale handle, but the next retry will
-        # get a fresh schema either way.
-        import shutil
-        shutil.rmtree(user_chroma_dir, ignore_errors=True)
-
-    # --- Parent-Child Chunking: Parent Store ---
-
-    def _get_parent_store_path(self, user_id: str) -> str:
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        return os.path.join(config.chroma_dir, f"{safe_user_id}_parents.json")
-
-    def _load_parent_store(self, user_id: str) -> Dict[str, str]:
-        path = self._get_parent_store_path(user_id)
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
-
-    def _save_parent_store(self, user_id: str, store: Dict[str, str]) -> None:
-        path = self._get_parent_store_path(user_id)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(
-            dir=os.path.dirname(path),
-            prefix=os.path.basename(path),
-            suffix=".tmp",
+        # Hybrid mode: dense vectors come from our PhytoQueryEmbeddings
+        # (Qwen3 / bge-m3); sparse vectors come from FastEmbed's BM25
+        # tokenizer (NOT the default SPLADE++ — that's a 500MB neural
+        # model we don't want). ``Qdrant/bm25`` is just a vocabulary +
+        # IDF table, ships small, runs on CPU, and matches the algorithm
+        # we used to run in Python via rank_bm25 — only now sparse
+        # vectors live in Qdrant and RRF fusion happens server-side.
+        vector_store = QdrantVectorStore(
+            client=client,
+            collection_name=collection_name,
+            enable_hybrid=True,
+            fastembed_sparse_model="Qdrant/bm25",
+            batch_size=20,
         )
+
+        docstore_path = os.path.join(persist_dir, "docstore.json")
+        index_store_path = os.path.join(persist_dir, "index_store.json")
+        if os.path.exists(docstore_path):
+            try:
+                docstore = SimpleDocumentStore.from_persist_path(docstore_path)
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to load docstore for {user_id} ({exc!r}); starting empty."
+                )
+                docstore = SimpleDocumentStore()
+        else:
+            docstore = SimpleDocumentStore()
+
+        if os.path.exists(index_store_path):
+            try:
+                index_store = SimpleIndexStore.from_persist_path(index_store_path)
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to load index_store for {user_id} ({exc!r}); starting empty."
+                )
+                index_store = SimpleIndexStore()
+        else:
+            index_store = SimpleIndexStore()
+
+        storage_context = StorageContext.from_defaults(
+            docstore=docstore,
+            index_store=index_store,
+            vector_store=vector_store,
+            persist_dir=persist_dir,
+        )
+        return _UserStorage(
+            collection_name=collection_name,
+            persist_dir=persist_dir,
+            storage_context=storage_context,
+            vector_store=vector_store,
+        )
+
+    def _get_user_storage(self, user_id: str) -> _UserStorage:
+        """Return cached storage for a user, building it on first access."""
+        if user_id in self._user_storage:
+            return self._user_storage[user_id]
+        with self._user_storage_lock:
+            if user_id in self._user_storage:
+                return self._user_storage[user_id]
+            storage = self._build_user_storage(user_id)
+            self._user_storage[user_id] = storage
+            logger.info(
+                f"Created storage context for user: {user_id} "
+                f"(collection={storage.collection_name})"
+            )
+            return storage
+
+    def _persist_user_storage(self, user_id: str) -> None:
+        storage = self._user_storage.get(user_id)
+        if storage is None:
+            return
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(store, f, ensure_ascii=False)
-            os.replace(temp_path, path)
+            storage.storage_context.persist(persist_dir=storage.persist_dir)
+        except Exception as exc:
+            logger.warning(f"Failed to persist storage for {user_id}: {exc!r}")
+
+    def _invalidate_user_storage(self, user_id: str) -> None:
+        """Drop cached storage so the next access reloads from disk."""
+        self._user_storage.pop(user_id, None)
+        gc.collect()
+
+    def _reset_user_qdrant_in_place(self, user_id: str) -> None:
+        """Delete a user's Qdrant collection.
+
+        Replacement for the old ``_reset_user_chroma_in_place``. Qdrant
+        ``delete_collection`` is a single atomic call — no SQLite-tenant
+        gymnastics, no SQLITE_READONLY_DBMOVED race, no shutil.rmtree
+        fallback dance.
+        """
+        try:
+            client = self._get_qdrant_client()
+            collection_name = self._get_user_collection_name(user_id)
+            try:
+                client.delete_collection(collection_name=collection_name)
+                logger.info(
+                    f"Deleted Qdrant collection {collection_name} for user {user_id}"
+                )
+            except Exception as exc:
+                # Likely "collection not found" — benign.
+                logger.info(
+                    f"Qdrant collection delete for {user_id} skipped/failed: {exc!r}"
+                )
         finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            self._invalidate_user_storage(user_id)
+
+    # ------------------------------------------------------------------
+    # Source management
+    # ------------------------------------------------------------------
 
     def _delete_existing_sources(self, user_id: str, source_names: List[str]) -> None:
-        """Delete existing chunks for sources that are being re-uploaded."""
+        """Remove all nodes (parents + children) for the given source filenames."""
         if not source_names:
             return
 
-        vectorstore = self._get_user_collection(user_id)
-        collection = vectorstore._collection
-        deleted_any = False
-        for source_name in sorted(set(source_names)):
-            result = collection.get(where={"source": source_name}, include=["metadatas"])
-            ids_to_delete = result.get("ids", [])
-            if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
-                deleted_any = True
+        from qdrant_client.http import models as qmodels
+
+        storage = self._get_user_storage(user_id)
+        client = self._get_qdrant_client()
+        unique_sources = sorted(set(source_names))
+
+        # 1. Delete from Qdrant (vectors). Collection is created lazily on
+        #    first insert — if it doesn't exist yet, skip.
+        try:
+            existing = {c.name for c in client.get_collections().collections}
+        except Exception:
+            existing = set()
+        if storage.collection_name in existing:
+            try:
+                client.delete(
+                    collection_name=storage.collection_name,
+                    points_selector=qmodels.FilterSelector(
+                        filter=qmodels.Filter(
+                            should=[
+                                qmodels.FieldCondition(
+                                    key="source",
+                                    match=qmodels.MatchValue(value=name),
+                                )
+                                for name in unique_sources
+                            ]
+                        )
+                    ),
+                )
                 logger.info(
-                    f"Replaced existing indexed chunks for '{source_name}' from user {user_id}'s ChromaDB"
+                    f"Replaced existing indexed chunks for {unique_sources} from user {user_id}'s Qdrant collection"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"Qdrant point delete failed for {user_id} sources={unique_sources}: {exc!r}"
                 )
 
-        if deleted_any:
-            self._cleanup_parent_store(user_id)
+        # 2. Delete from docstore (parents + children).
+        docstore = storage.storage_context.docstore
+        try:
+            doomed_ids = []
+            for node_id, node in list(docstore.docs.items()):
+                src = (getattr(node, "metadata", None) or {}).get("source")
+                if src in unique_sources:
+                    doomed_ids.append(node_id)
+            for node_id in doomed_ids:
+                try:
+                    docstore.delete_document(node_id, raise_error=False)
+                except TypeError:
+                    docstore.delete_document(node_id)
+        except Exception as exc:
+            logger.warning(f"Docstore prune failed for {user_id}: {exc!r}")
+
+        self._persist_user_storage(user_id)
+
+    # ------------------------------------------------------------------
+    # Indexing pipeline
+    # ------------------------------------------------------------------
 
     def process_and_index_pdfs_with_texts(
         self,
@@ -969,140 +1096,145 @@ class RAGService:
         user_id: str = "default",
     ):
         """Extract, chunk, index, and return per-file extracted text for summaries."""
+        from llama_index.core import VectorStoreIndex
+        from llama_index.core.node_parser import HierarchicalNodeParser, get_leaf_nodes
+
         total_started = time.perf_counter()
-        all_docs = []
+        all_documents: List[Any] = []
         extracted_texts: Dict[str, str] = {}
         source_names = [os.path.basename(path) for path in pdf_paths]
         parse_and_chunk_ms = 0.0
+
+        # Pass 1: extract per-file text + LlamaIndex Documents.
         for path in pdf_paths:
             file_started = time.perf_counter()
-            docs, extracted_text = self._process_pdf(
+            documents, extracted_text = self._process_pdf(
                 path,
                 user_id=user_id,
                 parser_type=parser_type,
             )
             file_elapsed_ms = (time.perf_counter() - file_started) * 1000
             parse_and_chunk_ms += file_elapsed_ms
-            all_docs.extend(docs)
+            all_documents.extend(documents)
             if extracted_text:
                 extracted_texts[os.path.basename(path)] = extracted_text
             logger.info(
-                "RAG upload phase: parser=%s file=%s parse_and_chunk=%.1fms chunks=%s extracted_chars=%s",
+                "RAG upload phase: parser=%s file=%s parse=%.1fms documents=%s extracted_chars=%s",
                 parser_type,
                 os.path.basename(path),
                 file_elapsed_ms,
-                len(docs),
+                len(documents),
                 len(extracted_text or ""),
             )
 
-        if all_docs:
-            sanitized_docs = _sanitize_documents_for_chroma(all_docs)
-            self.embeddings.begin_timing_session()
-            index_started = time.perf_counter()
-            try:
-                self._delete_existing_sources(user_id, source_names)
-                vectorstore = self._get_user_collection(user_id)
-                vectorstore.add_documents(sanitized_docs)
-            except Exception as e:
-                # Detect known chromadb corruption signatures. We've seen:
-                #   "Could not connect to tenant default_tenant"
-                #     — empty/missing tenants table after interrupted init.
-                #   "attempt to write a readonly database" / "(code: 1032)"
-                #     — SQLITE_READONLY_DBMOVED, raised when the SQLite file
-                #       is replaced/unlinked while another connection still
-                #       holds it (cross-OS, but most visible on macOS/Linux).
-                #   Generic "Error updating collection: ..." also signals
-                #     stale-handle corruption.
-                msg = str(e).lower()
-                is_corrupt = (
-                    "tenant" in msg
-                    or "readonly database" in msg
-                    or "code: 1032" in msg
-                    or "1032" in msg
-                    or ("error updating" in msg and "database" in msg)
-                )
-                logger.warning(
-                    f"Indexing failed for user {user_id} ({e!r}); "
-                    f"{'resetting Chroma data in-place and ' if is_corrupt else ''}"
-                    f"invalidating cached client and retrying once."
-                )
-                self._invalidate_user_collection(user_id)
-                if is_corrupt:
-                    self._reset_user_chroma_in_place(user_id)
-                time.sleep(0.3)  # Brief pause for handle settling across OSes
-                self._delete_existing_sources(user_id, source_names)
-                vectorstore = self._get_user_collection(user_id)
-                try:
-                    vectorstore.add_documents(sanitized_docs)
-                except Exception as retry_err:
-                    logger.error(
-                        f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
-                    )
-                    raise retry_err from retry_err
-            finally:
-                embed_stats = self.embeddings.consume_timing_session()
-
-            index_total_ms = (time.perf_counter() - index_started) * 1000
-            embed_ms = float(embed_stats.get("total_ms", 0.0))
-            embed_calls = int(embed_stats.get("calls", 0))
-            embed_texts = int(embed_stats.get("texts", 0))
-            chroma_overhead_ms = max(index_total_ms - embed_ms, 0.0)
-            total_elapsed_ms = (time.perf_counter() - total_started) * 1000
+        if not all_documents:
             logger.info(
-                "RAG upload timings: parser=%s user=%s files=%s chunks=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
-                parser_type,
-                user_id,
-                len(pdf_paths),
-                len(all_docs),
-                _format_phase_timings({
-                    "parse_and_chunk": parse_and_chunk_ms,
-                    "embed": embed_ms,
-                    "chroma_overhead": chroma_overhead_ms,
-                    "index_total": index_total_ms,
-                }),
-                embed_calls,
-                embed_texts,
-                total_elapsed_ms,
-            )
-        else:
-            logger.info(
-                "RAG upload timings: parser=%s user=%s files=%s chunks=0 parse_and_chunk=%.1fms total=%.1fms",
+                "RAG upload timings: parser=%s user=%s files=%s chunks=0 parse=%.1fms total=%.1fms",
                 parser_type,
                 user_id,
                 len(pdf_paths),
                 parse_and_chunk_ms,
                 (time.perf_counter() - total_started) * 1000,
             )
+            return source_names, extracted_texts
+
+        # Pass 2: hierarchical chunking — one shared parser across all docs.
+        node_parser = HierarchicalNodeParser.from_defaults(
+            chunk_sizes=[config.parent_chunk_size, config.child_chunk_size],
+        )
+        all_nodes = node_parser.get_nodes_from_documents(all_documents)
+        leaf_nodes = get_leaf_nodes(all_nodes)
+
+        # Distribute the contextual chunk header (Doc Title > Section)
+        # across leaf nodes so each embedded child carries the breadcrumb.
+        # Parents keep their natural text (which already starts with the
+        # header from _process_pdf).
+        for leaf in leaf_nodes:
+            header = (leaf.metadata or {}).get("cch_header") or ""
+            if header and not leaf.text.startswith(header):
+                leaf.text = header + leaf.text
+
+        index_started = time.perf_counter()
+        self.embeddings.begin_timing_session()
+        try:
+            self._delete_existing_sources(user_id, source_names)
+            storage = self._get_user_storage(user_id)
+            # Add parents + children to docstore so AutoMergingRetriever
+            # can resolve children → parents at query time.
+            storage.storage_context.docstore.add_documents(all_nodes)
+
+            # Embed and insert ONLY leaves into Qdrant. VectorStoreIndex
+            # constructor handles the embedding + insertion.
+            try:
+                VectorStoreIndex(
+                    nodes=leaf_nodes,
+                    storage_context=storage.storage_context,
+                    show_progress=False,
+                )
+            except Exception as e:
+                # Detect known Qdrant corruption / lock signatures and
+                # recover by resetting the collection in place. We do NOT
+                # reset on every error — point inserts can also fail for
+                # transient reasons; only recover on clearly persistent
+                # signatures.
+                msg = str(e).lower()
+                is_corrupt = (
+                    "wrong vector size" in msg
+                    or "dimension" in msg
+                    or ("collection" in msg and "not found" in msg)
+                )
+                logger.warning(
+                    f"Indexing failed for user {user_id} ({e!r}); "
+                    f"{'resetting Qdrant collection and ' if is_corrupt else ''}"
+                    f"invalidating cached storage and retrying once."
+                )
+                self._invalidate_user_storage(user_id)
+                if is_corrupt:
+                    self._reset_user_qdrant_in_place(user_id)
+                self._delete_existing_sources(user_id, source_names)
+                storage = self._get_user_storage(user_id)
+                storage.storage_context.docstore.add_documents(all_nodes)
+                try:
+                    VectorStoreIndex(
+                        nodes=leaf_nodes,
+                        storage_context=storage.storage_context,
+                        show_progress=False,
+                    )
+                except Exception as retry_err:
+                    logger.error(
+                        f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
+                    )
+                    raise retry_err from retry_err
+
+            self._persist_user_storage(user_id)
+        finally:
+            embed_stats = self.embeddings.consume_timing_session()
+
+        index_total_ms = (time.perf_counter() - index_started) * 1000
+        embed_ms = float(embed_stats.get("total_ms", 0.0))
+        embed_calls = int(embed_stats.get("calls", 0))
+        embed_texts = int(embed_stats.get("texts", 0))
+        store_overhead_ms = max(index_total_ms - embed_ms, 0.0)
+        total_elapsed_ms = (time.perf_counter() - total_started) * 1000
+        logger.info(
+            "RAG upload timings: parser=%s user=%s files=%s parents=%s leaves=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
+            parser_type,
+            user_id,
+            len(pdf_paths),
+            len(all_nodes) - len(leaf_nodes),
+            len(leaf_nodes),
+            _format_phase_timings({
+                "parse": parse_and_chunk_ms,
+                "embed": embed_ms,
+                "store_overhead": store_overhead_ms,
+                "index_total": index_total_ms,
+            }),
+            embed_calls,
+            embed_texts,
+            total_elapsed_ms,
+        )
 
         return source_names, extracted_texts
-
-    def _add_parents(self, user_id: str, parent_chunks: List[Dict[str, str]]) -> None:
-        store = self._load_parent_store(user_id)
-        for p in parent_chunks:
-            store[p["parent_id"]] = p["text"]
-        self._save_parent_store(user_id, store)
-
-    def _get_parent_text(self, parent_id: str, user_id: str) -> str:
-        store = self._load_parent_store(user_id)
-        return store.get(parent_id, "")
-
-    def _cleanup_parent_store(self, user_id: str) -> None:
-        """Remove parent store entries that are no longer referenced by any child chunk."""
-        vectorstore = self._get_user_collection(user_id)
-        collection = vectorstore._collection
-        try:
-            result = collection.get(include=["metadatas"])
-            metadatas = result.get("metadatas", [])
-            active_parent_ids = set()
-            for meta in metadatas:
-                pid = meta.get("parent_id")
-                if pid:
-                    active_parent_ids.add(pid)
-            store = self._load_parent_store(user_id)
-            new_store = {k: v for k, v in store.items() if k in active_parent_ids}
-            self._save_parent_store(user_id, new_store)
-        except Exception:
-            pass
 
     def process_and_index_pdfs(
         self,
@@ -1110,13 +1242,7 @@ class RAGService:
         parser_type: str = "pymupdf",
         user_id: str = "default",
     ):
-        """Extract, chunk, and index PDFs for a specific user.
-
-        Args:
-            pdf_paths: List of PDF file paths to process
-            parser_type: "pymupdf" for fast extraction, "docling" for detailed
-            user_id: Unique identifier for the user (isolates their documents)
-        """
+        """Extract, chunk, and index PDFs for a specific user."""
         indexed_files, _ = self.process_and_index_pdfs_with_texts(
             pdf_paths,
             parser_type=parser_type,
@@ -1165,22 +1291,74 @@ class RAGService:
             logger.warning(f"Metadata extraction failed for {pdf_path}: {e}")
         return metadata
 
+    def _build_cch_header(self, doc_title: str, section_title: str) -> str:
+        """``[Doc Title] > [Section Title]\\n\\n`` — only emitted when non-empty."""
+        parts = []
+        if doc_title:
+            parts.append(doc_title)
+        if section_title and section_title != "Start":
+            parts.append(section_title)
+        if parts:
+            return " > ".join(parts) + "\n\n"
+        return ""
+
+    def _make_document(self, text: str, metadata: Dict[str, Any]) -> Any:
+        """Construct a LlamaIndex ``Document`` with metadata excluded from
+        embed and LLM templates.
+
+        By default LlamaIndex prepends every metadata key into the text
+        the embedder sees ("source: x\\nparser_type: y\\n..."). With our
+        12-key metadata that consumes ~200 chars per chunk — out of a
+        250-char child chunk, only ~50 chars of actual content reach the
+        embedding model, which destroys retrieval quality.
+
+        We exclude all metadata from both templates because:
+          * The semantic breadcrumb the embedder needs is already
+            prepended to leaf text via ``cch_header`` in
+            ``process_and_index_pdfs_with_texts``.
+          * Our ``query()`` reads metadata via ``node.metadata.get(...)``
+            directly, bypassing any LlamaIndex template — so excluding
+            keys from the LLM template doesn't lose us anything either.
+        """
+        keys = list(metadata.keys())
+        return Document(
+            text=text,
+            metadata=metadata,
+            excluded_embed_metadata_keys=keys,
+            excluded_llm_metadata_keys=keys,
+        )
+
     def _process_pdf(self, pdf_path: str, user_id: str = "default", parser_type: str = "pymupdf"):
-        """PDF processing pipeline (Preserved from notebook)"""
+        """PDF processing pipeline.
+
+        Returns ``(documents, extracted_text)`` where ``documents`` is a list
+        of LlamaIndex ``Document`` objects (one per detected section, plus
+        one per extracted table). HierarchicalNodeParser will further split
+        these into 2500-char parents and 250-char children.
+        """
         source = os.path.basename(pdf_path)
 
         # 0. Extract metadata (DOI, authors, journal)
         pdf_metadata = self._extract_pdf_metadata(pdf_path)
 
-        # 1. Extract using selected parser
+        # 1. Extract using selected parser.
+        # The user-facing toggle dictates the engine: Fast=PyMuPDF,
+        # Detailed=Docling. We do NOT silently swap engines on failure —
+        # if Docling crashes the user's "Detailed" choice should surface
+        # as an error, not produce a Fast-quality result mislabeled as
+        # Detailed. Within Docling, the advanced HybridChunker skill
+        # path falls back to plain Docling extraction (still Docling),
+        # which is fine because both are the same engine.
         if parser_type == "docling":
             try:
                 return self._process_with_docling_skill(pdf_path, source, pdf_metadata, user_id)
             except Exception as e:
-                logger.error(f"Docling skill processing failed, falling back: {e}")
-                # Fall through to standard extraction if skill fails
-        
-        # Fallback/Standard Pipeline (PyMuPDF or Docling fallback)
+                logger.error(
+                    f"Docling skill processing failed for {source} ({e!r}); "
+                    f"retrying with plain Docling extraction (still Detailed)."
+                )
+                # Fall through to plain Docling — same engine, lighter pipeline.
+
         if parser_type == "pymupdf":
             full_text, tables = self._extract_with_pymupdf(pdf_path)
         else:
@@ -1189,149 +1367,312 @@ class RAGService:
         if not full_text:
             return [], ""
 
-        # 2. Section detection & Chunking (Regex-based fallback)
+        # 2. Section detection
         sections = self._detect_sections(full_text)
-        use_semantic_children = parser_type != "pymupdf"
-        parent_chunks, chunks = self._chunk_by_sections(
-            sections,
-            tables,
-            pdf_metadata,
-            source,
-            use_semantic_children=use_semantic_children,
-        )
-
-        # Store parent chunks for parent-child retrieval
-        self._add_parents(user_id, parent_chunks)
-
-        # 3. Deduplication
-        unique_chunks = self._deduplicate_chunks(chunks)
-
-        documents = []
+        documents: List[Any] = []
         file_ext = os.path.splitext(source)[1].lower() or ".pdf"
         indexed_at = datetime.now(timezone.utc).isoformat()
-        for i, chunk in enumerate(unique_chunks):
-            meta = chunk.get("metadata", {})
-            meta["source"] = source
-            meta["chunk_id"] = f"{source}_{i}"
-            meta["parser_type"] = parser_type
-            meta["file_type"] = file_ext
-            meta["indexed_at"] = indexed_at
-            meta["total_chunks"] = len(unique_chunks)
-            # Add document-level metadata to every chunk
-            meta["doc_title"] = pdf_metadata.get("title", "")
-            meta["doc_authors"] = pdf_metadata.get("authors", "")
-            meta["doc_doi"] = pdf_metadata.get("doi", "")
-            meta["doc_journal"] = pdf_metadata.get("journal", "")
-            from langchain_core.documents import Document
-            documents.append(Document(page_content=chunk["text"], metadata=meta))
+        doc_title = pdf_metadata.get("title", "")
+
+        # One Document per section. The section header is prepended into
+        # the text so the parent chunk preserves it; the leaf-level CCH is
+        # added later via the cch_header metadata key.
+        for sec_idx, section in enumerate(sections):
+            sec_text = (section.get("text") or "").strip()
+            if not sec_text:
+                continue
+            section_title = section.get("title", "")
+            cch_header = self._build_cch_header(doc_title, section_title)
+
+            if section_title and section_title != "Start":
+                section_text_with_header = f"## {section_title}\n\n{sec_text}"
+            else:
+                section_text_with_header = sec_text
+
+            metadata = _sanitize_metadata_dict({
+                "source": source,
+                "parser_type": parser_type,
+                "file_type": file_ext,
+                "indexed_at": indexed_at,
+                "content_type": "text",
+                "section_title": section_title,
+                "cch_header": cch_header,
+                "doc_title": doc_title,
+                "doc_authors": pdf_metadata.get("authors", ""),
+                "doc_doi": pdf_metadata.get("doi", ""),
+                "doc_journal": pdf_metadata.get("journal", ""),
+                "section_index": sec_idx,
+            })
+            documents.append(self._make_document(section_text_with_header, metadata))
+
+        # Tables: index each as its own short Document. Table content is
+        # usually small enough that HierarchicalNodeParser keeps it as a
+        # single leaf with no parent (which is what we want).
+        for tbl_idx, table in enumerate(tables):
+            content = (table.get("content") or "").strip()
+            if not content:
+                continue
+            metadata = _sanitize_metadata_dict({
+                "source": source,
+                "parser_type": parser_type,
+                "file_type": file_ext,
+                "indexed_at": indexed_at,
+                "content_type": "table",
+                "section_title": "",
+                "cch_header": self._build_cch_header(doc_title, "Table"),
+                "doc_title": doc_title,
+                "doc_authors": pdf_metadata.get("authors", ""),
+                "doc_doi": pdf_metadata.get("doi", ""),
+                "doc_journal": pdf_metadata.get("journal", ""),
+                "page": int(table.get("page", 0) or 0),
+                "table_index": tbl_idx,
+            })
+            documents.append(self._make_document(f"## Table\n\n{content}", metadata))
 
         return documents, full_text
 
-    def _hybrid_search(
+    # ------------------------------------------------------------------
+    # Query
+    # ------------------------------------------------------------------
+
+    def _build_metadata_filters(self, filter_files: Optional[List[str]]):
+        """Translate the public ``filter_files`` list into LlamaIndex MetadataFilters."""
+        if not filter_files:
+            return None
+        from llama_index.core.vector_stores.types import (
+            FilterOperator,
+            MetadataFilter,
+            MetadataFilters,
+        )
+
+        return MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="source",
+                    value=list(filter_files),
+                    operator=FilterOperator.IN,
+                )
+            ]
+        )
+
+    def _retrieve_candidate_nodes(
         self,
         question: str,
-        vectorstore,  # Chroma (lazy import)
-        filter_files: Optional[List[str]] = None,
-        k: int = None,
-    ) -> List[Dict[str, Any]]:
-        """Hybrid search combining vector similarity + BM25 keyword matching.
+        user_id: str,
+        filter_files: Optional[List[str]],
+    ):
+        """Hybrid (vector + sparse) retrieval returning CHILD nodes.
 
-        Uses Reciprocal Rank Fusion (RRF) to merge results from both methods.
-        Returns list of dicts with 'doc', 'score' keys.
+        Uses Qdrant's native hybrid mode: sparse vectors (FastEmbed BM25)
+        are stored alongside dense vectors at index time and fused
+        server-side via RRF on every query.
+
+        Importantly, this does NOT wrap in ``AutoMergingRetriever``.
+        Auto-merging swaps children for parents *before* the cross-encoder
+        rerank, which sends 2500-char parent passages into a reranker
+        capped at 512 tokens — overflows the tokenizer and the reranker
+        silently fails. We instead resolve children → parents AFTER
+        reranking (see ``_resolve_parents`` and ``query``), matching the
+        proven LangChain-era ordering.
         """
-        if k is None:
-            k = config.top_k
-        rrf_k = 60  # RRF constant
+        from llama_index.core import VectorStoreIndex
 
-        # --- 1. Vector similarity search ---
-        search_kwargs = {"k": k}
-        if filter_files:
-            search_kwargs["filter"] = {"source": {"$in": filter_files}}
+        storage = self._get_user_storage(user_id)
+        metadata_filters = self._build_metadata_filters(filter_files)
+
+        index = VectorStoreIndex.from_vector_store(
+            storage.vector_store,
+            storage_context=storage.storage_context,
+        )
+        return index.as_retriever(
+            vector_store_query_mode="hybrid",
+            similarity_top_k=max(config.rerank_candidate_k, config.top_k),
+            sparse_top_k=config.retrieve_k,
+            filters=metadata_filters,
+        )
+
+    def _resolve_parents(
+        self,
+        child_nodes_with_scores: List[Any],
+        user_id: str,
+    ) -> List[Any]:
+        """For each reranked child, swap in its parent node from the
+        docstore. De-dupe parents (multiple top-K children sharing one
+        parent collapse to a single parent, scored by the highest-ranked
+        sibling). This matches the LangChain pipeline's
+        rerank-then-resolve ordering, NOT LlamaIndex's
+        ``AutoMergingRetriever`` which would do it the other way around.
+
+        Falls through to the original child node when:
+          * the node has no parent relationship (e.g. table-only
+            documents that the hierarchical parser kept as a single leaf)
+          * the parent can't be loaded from the docstore for any reason
+        """
+        if not child_nodes_with_scores:
+            return []
+
+        from llama_index.core.schema import NodeRelationship, NodeWithScore
+
+        # Storage is fetched lazily on first node that actually has a
+        # parent relationship — keeps the unit-test path (mocked
+        # retriever returning empty results / table-only nodes) free
+        # of any Qdrant / docstore dependency.
+        docstore = None
+
+        seen_parent_ids: set = set()
+        results: List[Any] = []
+        for nws in child_nodes_with_scores:
+            child = nws.node
+            parent_rel = (getattr(child, "relationships", None) or {}).get(
+                NodeRelationship.PARENT
+            )
+            if parent_rel is None:
+                # Standalone leaf (table, short doc) — use as-is.
+                results.append(nws)
+                continue
+
+            parent_id = parent_rel.node_id
+            if parent_id in seen_parent_ids:
+                # Higher-scored sibling already pulled this parent.
+                continue
+            seen_parent_ids.add(parent_id)
+
+            if docstore is None:
+                try:
+                    docstore = self._get_user_storage(user_id).storage_context.docstore
+                except Exception as exc:
+                    logger.debug(f"Storage unavailable for parent resolution ({exc!r}); using child")
+                    results.append(nws)
+                    continue
+
+            try:
+                parent_node = docstore.get_node(parent_id)
+            except Exception as exc:
+                logger.debug(f"Parent lookup failed for {parent_id} ({exc!r}); using child")
+                results.append(nws)
+                continue
+
+            results.append(NodeWithScore(node=parent_node, score=nws.score))
+        return results
+
+    def _rerank_nodes(self, question: str, nodes_with_scores: List[Any]) -> List[Any]:
+        """Defensive cross-encoder rerank with three-layer empty-input defense.
+
+        Identical semantics to the old ``query`` rerank block: caps at
+        ``rerank_candidate_k``, drops blank/whitespace passages, prepends
+        the zerank-2 instruction, batches at ``rerank_batch_size``,
+        normalizes scores 0–1 via min-max, filters by ``rerank_threshold``,
+        and falls back to retrieval order if everything fails.
+
+        Operates on LlamaIndex ``NodeWithScore`` objects in-place — sets
+        ``node.score`` to the reranker's normalized 0–1 value.
+        """
+        if not self.reranker or not nodes_with_scores:
+            return nodes_with_scores
 
         try:
-            vector_results = vectorstore.similarity_search_with_score(
-                question, **search_kwargs
-            )
-        except Exception:
-            # Fallback to regular search if scores not supported
-            docs = vectorstore.similarity_search(question, **search_kwargs)
-            vector_results = [(doc, 0.5) for doc in docs]
+            import numpy as np
 
-        # --- 2. BM25 keyword search ---
-        bm25_results = []
-        try:
-            from rank_bm25 import BM25Okapi
-
-            # Get all documents from collection (for the selected sources)
-            collection = vectorstore._collection
-            get_kwargs = {"include": ["documents", "metadatas"]}
-            if filter_files:
-                get_kwargs["where"] = {"source": {"$in": filter_files}}
-            all_data = collection.get(**get_kwargs)
-
-            all_docs_text = all_data.get("documents", [])
-            all_metas = all_data.get("metadatas", [])
-
-            if all_docs_text:
-                # Tokenize for BM25
-                tokenized = [doc.lower().split() for doc in all_docs_text]
-                bm25 = BM25Okapi(tokenized)
-                query_tokens = question.lower().split()
-                bm25_scores = bm25.get_scores(query_tokens)
-
-                # Get top-k BM25 results
-                top_indices = sorted(
-                    range(len(bm25_scores)),
-                    key=lambda i: bm25_scores[i],
-                    reverse=True,
-                )[:k]
-
-                for idx in top_indices:
-                    if bm25_scores[idx] > 0:
-                        from langchain_core.documents import Document
-                        doc = Document(
-                            page_content=all_docs_text[idx],
-                            metadata=all_metas[idx] if idx < len(all_metas) else {},
-                        )
-                        bm25_results.append((doc, bm25_scores[idx]))
-        except ImportError:
-            logger.warning(
-                "rank-bm25 not installed, falling back to vector-only search"
-            )
-        except Exception as e:
-            logger.warning(f"BM25 search failed, using vector-only: {e}")
-
-        # --- 3. Reciprocal Rank Fusion ---
-        chunk_scores: Dict[str, Dict[str, Any]] = {}
-
-        for rank, (doc, score) in enumerate(vector_results):
-            chunk_id = doc.metadata.get("chunk_id", doc.page_content[:50])
-            rrf_score = 1.0 / (rrf_k + rank + 1)
-            if chunk_id not in chunk_scores:
-                chunk_scores[chunk_id] = {"doc": doc, "rrf": 0.0, "vector_score": score}
-            chunk_scores[chunk_id]["rrf"] += rrf_score
-
-        for rank, (doc, score) in enumerate(bm25_results):
-            chunk_id = doc.metadata.get("chunk_id", doc.page_content[:50])
-            rrf_score = 1.0 / (rrf_k + rank + 1)
-            if chunk_id not in chunk_scores:
-                chunk_scores[chunk_id] = {"doc": doc, "rrf": 0.0, "vector_score": 0.0}
-            chunk_scores[chunk_id]["rrf"] += rrf_score
-
-        # Sort by fused score and return top-k
-        sorted_results = sorted(
-            chunk_scores.values(), key=lambda x: x["rrf"], reverse=True
-        )[:k]
-
-        # Normalize scores to 0-100 range for display
-        if sorted_results:
-            max_score = sorted_results[0]["rrf"]
-            for r in sorted_results:
-                r["normalized_score"] = (
-                    round((r["rrf"] / max_score) * 100) if max_score > 0 else 0
+            candidate_limit = int(config.rerank_candidate_k)
+            if candidate_limit <= 0:
+                logger.info(
+                    "RAG rerank skipped: non-positive candidate limit=%s",
+                    candidate_limit,
                 )
+                return nodes_with_scores
+            candidates = nodes_with_scores[:candidate_limit]
 
-        return sorted_results
+            blank_count = 0
+            non_blank: List[Any] = []
+            for nws in candidates:
+                text = (getattr(nws.node, "text", "") or "").strip()
+                if not text:
+                    blank_count += 1
+                    continue
+                non_blank.append(nws)
+
+            cand_lengths = [len((nws.node.text or "").strip()) for nws in non_blank]
+            logger.info(
+                "RAG rerank boundary: total_candidates=%s filtered_candidates=%s blank_candidates=%s min_chars=%s max_chars=%s",
+                len(candidates),
+                len(non_blank),
+                blank_count,
+                min(cand_lengths) if cand_lengths else 0,
+                max(cand_lengths) if cand_lengths else 0,
+            )
+
+            if not non_blank:
+                logger.warning("No non-empty rerank candidates available")
+                return nodes_with_scores
+
+            query_text = (question or "").strip()
+            if not query_text:
+                logger.warning("Empty query — skipping rerank")
+                return non_blank
+
+            # zerank-2 supports instruction-aware reranking.
+            if config.reranker_instruction and "zerank" in config.reranker_model.lower():
+                instructed_query = f"{config.reranker_instruction}\n{query_text}"
+            else:
+                instructed_query = query_text
+
+            pairs: List[List[str]] = []
+            valid: List[Any] = []
+            for nws in non_blank:
+                passage = (nws.node.text or "").strip()
+                if not passage:
+                    continue
+                pairs.append([instructed_query, passage])
+                valid.append(nws)
+
+            if not pairs:
+                logger.warning("No tokenizable rerank pairs after filtering")
+                return non_blank
+
+            rerank_batch_size = max(1, int(config.rerank_batch_size))
+            rerank_scores: List[float] = []
+            for batch_start in range(0, len(pairs), rerank_batch_size):
+                batch = pairs[batch_start: batch_start + rerank_batch_size]
+                batch_scores = self.reranker.predict(batch)
+                rerank_scores.extend(list(batch_scores))
+
+            if len(rerank_scores) != len(valid):
+                logger.warning(
+                    f"Reranker score count mismatch: expected {len(valid)} got {len(rerank_scores)}"
+                )
+                return non_blank
+
+            scores = np.array(rerank_scores, dtype=float)
+            if not np.isfinite(scores).all():
+                logger.warning("Reranker returned non-finite scores")
+                return non_blank
+
+            # Normalize to 0-1 via min-max.
+            min_s, max_s = scores.min(), scores.max()
+            if max_s > min_s:
+                normalized = (scores - min_s) / (max_s - min_s)
+            else:
+                normalized = np.ones_like(scores) * 0.5
+
+            for i, nws in enumerate(valid):
+                nws.score = float(normalized[i])
+
+            survivors = [
+                nws for i, nws in enumerate(valid)
+                if normalized[i] >= config.rerank_threshold
+            ]
+            if not survivors:
+                logger.warning(
+                    "RAG rerank produced zero survivors after threshold=%s; falling back to retrieval order.",
+                    config.rerank_threshold,
+                )
+                return valid
+
+            survivors.sort(key=lambda x: x.score or 0.0, reverse=True)
+            return survivors
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}")
+            return nodes_with_scores
 
     async def query(
         self,
@@ -1348,183 +1689,48 @@ class RAGService:
             user_id: User identifier to isolate their documents.
             chat_history: Previous conversation turns for context.
         """
-        vectorstore = self._get_user_collection(user_id)
+        # 1. Hybrid retrieval — returns CHILDREN (small, ~250 chars).
+        # We deliberately do NOT auto-merge yet because the cross-encoder
+        # tokenizer caps at 512 tokens and parent chunks (~2500 chars)
+        # would overflow it.
+        #
+        # We run sync ``retrieve`` in a worker thread rather than calling
+        # ``aretrieve`` because local-mode Qdrant only ships a sync
+        # client (RocksDB lock prevents pairing it with AsyncQdrantClient
+        # on the same path). ``asyncio.to_thread`` keeps the FastAPI
+        # event loop responsive during the retrieval call without
+        # requiring an async Qdrant client.
+        retriever = self._retrieve_candidate_nodes(question, user_id, filter_files)
+        nodes_with_scores = await asyncio.to_thread(retriever.retrieve, question)
 
-        # 1. Retrieve many child chunks from vector store (up to 200)
-        search_results = self._hybrid_search(
-            question, vectorstore, filter_files, k=config.retrieve_k
-        )
+        # 2. Defensive cross-encoder rerank on CHILDREN (fits the 512-token
+        # window). Identical semantics to the old LangChain pipeline.
+        reranked = self._rerank_nodes(question, list(nodes_with_scores))
 
-        # 2. Cross-Encoder Reranking on ALL retrieved children
-        reranked_children = []
-        if self.reranker and search_results:
-            candidate_results = []
-            filtered_candidates = []
-            try:
-                import numpy as np
+        # 3. NOW resolve top reranked children → parents from the
+        # docstore. Same as the old LangChain MD5 parent-store lookup,
+        # implemented natively over LlamaIndex node relationships.
+        resolved = self._resolve_parents(reranked, user_id)
+        nodes = resolved[: config.max_parents]
 
-                candidate_limit = int(config.rerank_candidate_k)
-                if candidate_limit <= 0:
-                    logger.info(
-                        "RAG rerank skipped: non-positive candidate limit=%s",
-                        candidate_limit,
-                    )
-                    reranked_children = search_results
-                    candidate_results = []
-                else:
-                    candidate_results = search_results[:candidate_limit]
-                blank_candidate_count = 0
-                if candidate_results:
-                    for result in candidate_results:
-                        page_content = getattr(result.get("doc"), "page_content", "") or ""
-                        if not page_content.strip():
-                            blank_candidate_count += 1
-                            continue
-                        filtered_candidates.append(result)
+        if not nodes:
+            return {
+                "answer": "I couldn't find enough relevant context in the selected sources to answer that question.",
+                "sources": [],
+            }
 
-                    candidate_lengths = [len(res["doc"].page_content.strip()) for res in filtered_candidates]
-                    logger.info(
-                        "RAG rerank boundary: total_candidates=%s filtered_candidates=%s blank_candidates=%s min_chars=%s max_chars=%s",
-                        len(candidate_results),
-                        len(filtered_candidates),
-                        blank_candidate_count,
-                        min(candidate_lengths) if candidate_lengths else 0,
-                        max(candidate_lengths) if candidate_lengths else 0,
-                    )
+        # 4. Build LLM context from resolved nodes (matches existing format).
+        context_parts: List[str] = []
+        sources: List[Dict[str, Any]] = []
+        for nws in nodes:
+            node = nws.node
+            metadata = node.metadata or {}
+            ctype = metadata.get("content_type", "text")
+            src = metadata.get("source", "")
+            sec = metadata.get("section_title", "")
+            title = metadata.get("doc_title", "")
+            authors = metadata.get("doc_authors", "")
 
-                    if not filtered_candidates:
-                        reranked_children = search_results
-                        raise ValueError("No non-empty rerank candidates available")
-
-                    query_text = question.strip()
-                    # Guard against empty queries — cross-encoder tokenizers
-                    # can produce zero-length sequences for these and the
-                    # attention layer then fails on a reshape into
-                    # [batch, 0, -1, head_dim] (ambiguous -1 with 0 elements).
-                    if not query_text:
-                        reranked_children = filtered_candidates
-                        raise ValueError("Empty query — skipping rerank")
-
-                    # zerank-2 supports instruction-aware reranking:
-                    # prepend the domain instruction to each query in the pair
-                    if config.reranker_instruction and "zerank" in config.reranker_model.lower():
-                        instructed_query = f"{config.reranker_instruction}\n{query_text}"
-                    else:
-                        instructed_query = query_text
-
-                    # Drop pairs where either side is whitespace-only — cross-encoder
-                    # tokenizers can yield zero-length tensors for these.
-                    pairs = []
-                    valid_candidates = []
-                    for res in filtered_candidates:
-                        passage = (res["doc"].page_content or "").strip()
-                        if not passage:
-                            continue
-                        pairs.append([instructed_query, passage])
-                        valid_candidates.append(res)
-                    if not pairs:
-                        reranked_children = filtered_candidates
-                        raise ValueError("No tokenizable rerank pairs after filtering")
-                    filtered_candidates = valid_candidates
-
-                    rerank_batch_size = max(1, int(config.rerank_batch_size))
-                    rerank_scores = []
-                    for batch_start in range(0, len(pairs), rerank_batch_size):
-                        batch_pairs = pairs[batch_start: batch_start + rerank_batch_size]
-                        batch_scores = self.reranker.predict(batch_pairs)
-                        rerank_scores.extend(list(batch_scores))
-
-                    if len(rerank_scores) != len(filtered_candidates):
-                        raise ValueError(
-                            f"Reranker score count mismatch: expected {len(filtered_candidates)} got {len(rerank_scores)}"
-                        )
-
-                    scores = np.array(rerank_scores, dtype=float)
-                    if not np.isfinite(scores).all():
-                        raise ValueError("Reranker returned non-finite scores")
-
-                    for i, score in enumerate(scores):
-                        filtered_candidates[i]["rerank_score"] = float(score)
-
-                    # Normalize scores to 0-1 range using min-max
-                    min_s, max_s = scores.min(), scores.max()
-                    if max_s > min_s:
-                        normalized = (scores - min_s) / (max_s - min_s)
-                    else:
-                        normalized = np.ones_like(scores) * 0.5
-
-                    for i, r in enumerate(filtered_candidates):
-                        r["normalized_score"] = round(float(normalized[i]) * 100)
-
-                    # Filter by relevance threshold (>= configured normalized threshold)
-                    reranked_children = [
-                        r for i, r in enumerate(filtered_candidates)
-                        if normalized[i] >= config.rerank_threshold
-                    ]
-                    if not reranked_children:
-                        logger.warning(
-                            "RAG rerank produced zero survivors after threshold=%s; falling back to retrieval order.",
-                            config.rerank_threshold,
-                        )
-                        reranked_children = filtered_candidates or search_results
-                    else:
-                        # Sort by rerank score descending
-                        reranked_children.sort(key=lambda x: x["rerank_score"], reverse=True)
-            except Exception as e:
-                logger.error(f"Reranking failed: {e}")
-                reranked_children = filtered_candidates or search_results
-        else:
-            reranked_children = search_results
-
-        # 3. Parent-Child Resolution: resolve filtered children to unique parents
-        parent_ids_seen: set[str] = set()
-        parent_results: List[Dict[str, Any]] = []
-
-        for result in reranked_children:
-            d = result["doc"]
-            ctype = d.metadata.get("content_type", "text")
-            if ctype != "text":
-                # Tables pass through directly
-                parent_results.append(result)
-                continue
-
-            parent_id = d.metadata.get("parent_id")
-            if not parent_id or parent_id in parent_ids_seen:
-                continue
-
-            parent_ids_seen.add(parent_id)
-            ptext = self._get_parent_text(parent_id, user_id)
-            if ptext:
-                from langchain_core.documents import Document
-                # Create a synthetic result with parent text
-                parent_results.append({
-                    "doc": Document(
-                        page_content=ptext,
-                        metadata=d.metadata,
-                    ),
-                    "rerank_score": result.get("rerank_score", 0),
-                    "normalized_score": result.get("normalized_score", 0),
-                })
-            else:
-                parent_results.append(result)
-
-            if len(parent_results) >= config.max_parents:
-                break
-
-        # 4. Build LLM context from resolved parents
-        context_parts = []
-        sources = []
-        for result in parent_results:
-            d = result["doc"]
-            score = result.get("normalized_score", 0)
-            ctype = d.metadata.get("content_type", "text")
-            src = d.metadata.get("source", "")
-            sec = d.metadata.get("section_title", "")
-
-            title = d.metadata.get("doc_title", "")
-            authors = d.metadata.get("doc_authors", "")
-
-            # Build a rich header for the LLM context
             header_elements = []
             if title:
                 header_elements.append(f"Title: {title}")
@@ -1533,45 +1739,34 @@ class RAGService:
             header_elements.append(f"File: {src}")
             if sec:
                 header_elements.append(f"Section: {sec}")
-
             header_str = " | ".join(header_elements)
 
             if ctype == "table":
-                context_parts.append(f"[TABLE | {header_str}]:\n{d.page_content}")
+                context_parts.append(f"[TABLE | {header_str}]:\n{node.text}")
             else:
-                context_parts.append(f"[{header_str}]:\n{d.page_content}")
+                context_parts.append(f"[{header_str}]:\n{node.text}")
 
-            parser_type = d.metadata.get("parser_type", "docling")
+            score = nws.score if nws.score is not None else 0.0
             sources.append(
                 {
                     "source": src,
                     "section": sec,
-                    "parser_type": parser_type,
-                    "score": score,
-                    "chunk_text": d.page_content[:500],  # First 500 chars for preview
+                    "parser_type": metadata.get("parser_type", "docling"),
+                    "score": round(float(score) * 100),
+                    "chunk_text": (node.text or "")[:500],
                 }
             )
 
         context = "\n\n".join(context_parts)
 
-        if not context_parts:
-            return {
-                "answer": "I couldn't find enough relevant context in the selected sources to answer that question.",
-                "sources": [],
-            }
-
-        # Build multi-turn messages for conversation memory
+        # 5. Build multi-turn messages with last 5 Q&A pairs (10 messages).
         system_msg = {
             "role": "system",
             "content": "You are a scientific research assistant. Answer questions using ONLY the provided context from research papers. Use markdown formatting. If the context doesn't contain enough information, say so clearly.",
         }
-
         messages = [system_msg]
-
-        # Add conversation history (last 5 turns = 10 messages max)
         if chat_history:
-            history_window = chat_history[-10:]  # Last 5 Q&A pairs
-            for msg in history_window:
+            for msg in chat_history[-10:]:
                 messages.append(
                     {
                         "role": msg.get("role", "user"),
@@ -1579,14 +1774,16 @@ class RAGService:
                     }
                 )
 
-        # Add current question with context
         user_msg = f"""Context from research papers:
 {context}
 
 Question: {question}"""
         messages.append({"role": "user", "content": user_msg})
 
-        response = await self._invoke_llm(messages=messages, timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS)
+        response = await self._invoke_llm(
+            messages=messages,
+            timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS,
+        )
         return {"answer": response.content.strip(), "sources": sources}
 
     async def summarize_document(self, text: str, filename: str) -> str:
@@ -1600,7 +1797,11 @@ Excerpt:
 {excerpt}
 
 Summary:"""
-            response = await self._invoke_llm(prompt=prompt, max_retries=1, timeout_seconds=RAG_SUMMARY_TIMEOUT_SECONDS)
+            response = await self._invoke_llm(
+                prompt=prompt,
+                max_retries=1,
+                timeout_seconds=RAG_SUMMARY_TIMEOUT_SECONDS,
+            )
             return response.content.strip()
         except RAGLLMTimeoutError as e:
             logger.warning(f"Summary generation timed out for {filename}: {e}")
@@ -1609,32 +1810,32 @@ Summary:"""
             logger.warning(f"Summarization failed for {filename}: {e}")
             return ""
 
-    def list_indexed_files(self, user_id: str = "default") -> List[Dict[str, Any]]:
-        """Query ChromaDB for all unique indexed source files for a specific user."""
-        try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(include=["metadatas"])
-            metadatas = result.get("metadatas", [])
+    # ------------------------------------------------------------------
+    # File listing / deletion / reset / cleanup
+    # ------------------------------------------------------------------
 
-            # Aggregate per unique source
+    def list_indexed_files(self, user_id: str = "default") -> List[Dict[str, Any]]:
+        """Aggregate per-source info from the docstore (parents + children)."""
+        try:
+            storage = self._get_user_storage(user_id)
             file_map: Dict[str, Dict[str, Any]] = {}
-            for meta in metadatas:
-                src = meta.get("source", "")
+            for node in storage.storage_context.docstore.docs.values():
+                metadata = getattr(node, "metadata", None) or {}
+                src = metadata.get("source", "")
                 if not src:
                     continue
                 if src not in file_map:
                     file_map[src] = {
                         "name": src,
-                        "file_type": meta.get(
+                        "file_type": metadata.get(
                             "file_type", os.path.splitext(src)[1] or ".pdf"
                         ),
                         "chunk_count": 0,
-                        "indexed_at": meta.get("indexed_at", ""),
-                        "parser_type": meta.get("parser_type", "docling"),
-                        "authors": meta.get("doc_authors", ""),
-                        "doi": meta.get("doc_doi", ""),
-                        "journal": meta.get("doc_journal", ""),
+                        "indexed_at": metadata.get("indexed_at", ""),
+                        "parser_type": metadata.get("parser_type", "docling"),
+                        "authors": metadata.get("doc_authors", ""),
+                        "doi": metadata.get("doc_doi", ""),
+                        "journal": metadata.get("doc_journal", ""),
                     }
                 file_map[src]["chunk_count"] += 1
 
@@ -1645,100 +1846,57 @@ Summary:"""
             return []
 
     def delete_source(self, filename: str, user_id: str = "default") -> bool:
-        """Remove a source completely for a specific user: delete its chunks from ChromaDB."""
+        """Remove a source completely for a specific user.
+
+        Deletes:
+          - All Qdrant points whose ``source`` payload matches ``filename``.
+          - All docstore nodes (parents + children) tagged with that source.
+          - The uploaded PDF file under ``data/uploads/<user>/``.
+        """
         try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(
-                where={"source": filename},
-                include=["metadatas"],
-            )
-            ids_to_delete = result.get("ids", [])
-
-            if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
-                logger.info(
-                    f"Deleted {len(ids_to_delete)} chunks for '{filename}' from user {user_id}'s ChromaDB"
-                )
-
-            # Clean up orphaned parent chunks
-            self._cleanup_parent_store(user_id)
+            self._delete_existing_sources(user_id, [filename])
             delete_user_upload_file(user_id, filename)
-            self._invalidate_user_collection(user_id)
-
+            self._invalidate_user_storage(user_id)
             return True
         except Exception as e:
-            self._invalidate_user_collection(user_id)
+            self._invalidate_user_storage(user_id)
             logger.error(f"Error deleting source '{filename}': {e}")
             return False
 
     def reset_rag(self, user_id: str = "default") -> bool:
-        """Permanently delete all indexed chunks from a specific user's ChromaDB."""
+        """Permanently delete all indexed data for a specific user."""
         try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(include=["metadatas"])
-            all_ids = result.get("ids", [])
+            self._reset_user_qdrant_in_place(user_id)
 
-            if all_ids:
-                collection.delete(ids=all_ids)
-                logger.info(f"Deleted all {len(all_ids)} chunks for user {user_id}")
-
-            # Clear parent store
-            parent_path = self._get_parent_store_path(user_id)
-            if os.path.exists(parent_path):
-                os.remove(parent_path)
-                logger.info(f"Deleted parent store for user {user_id}")
+            persist_dir = self._get_user_persist_dir(user_id)
+            if os.path.isdir(persist_dir):
+                import shutil
+                shutil.rmtree(persist_dir, ignore_errors=True)
+                logger.info(f"Cleared docstore folder for user {user_id}")
 
             delete_user_uploads(user_id)
-
-            self._invalidate_user_collection(user_id)
-
+            self._invalidate_user_storage(user_id)
             return True
         except Exception as e:
-            self._invalidate_user_collection(user_id)
+            self._invalidate_user_storage(user_id)
             logger.error(f"Error resetting RAG data for user {user_id}: {e}")
             return False
 
     def cleanup_user(self, user_id: str) -> bool:
-        """Clean up all data for a user when they close their browser.
-        Deletes: ChromaDB collection folder + uploads folder for this user."""
-        success = True
+        """Delete all data for a user when they close their browser.
 
-        # 0. Empty Chroma collection first (always works even if folder is locked)
+        Drops the Qdrant collection, the docstore folder, and the uploads
+        folder. Idempotent — safe to call repeatedly.
+        """
+        success = True
         try:
             self.reset_rag(user_id)
         except Exception as e:
-            logger.warning(f"Could not empty collection cleanly: {e}")
+            logger.warning(f"Could not empty user storage cleanly: {e}")
+            success = False
 
-        # 1. Remove from cache and force garbage collection to release Windows SQLite file locks
-        self._invalidate_user_collection(user_id)
-        time.sleep(0.4)
+        self._invalidate_user_storage(user_id)
 
-        # 2. Delete user's ChromaDB folder
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
-
-        try:
-            if os.path.exists(user_chroma_dir):
-                import shutil
-
-                shutil.rmtree(user_chroma_dir)
-                logger.info(f"Deleted ChromaDB folder: {user_chroma_dir}")
-        except Exception as e:
-            logger.warning(f"Could not fully delete ChromaDB folder: {e}")
-            # Ensure the SQLite DB is at least emptied via reset_rag
-
-        # 2b. Delete parent store file
-        parent_path = self._get_parent_store_path(user_id)
-        try:
-            if os.path.exists(parent_path):
-                os.remove(parent_path)
-                logger.info(f"Deleted parent store: {parent_path}")
-        except Exception as e:
-            logger.warning(f"Could not delete parent store: {e}")
-
-        # 3. Delete user's uploads folder
         try:
             delete_user_uploads(user_id)
         except Exception as e:
@@ -1749,183 +1907,212 @@ Summary:"""
             logger.info(f"Cleaned up all data for user: {user_id}")
         return success
 
-    # --- Helper Methods (Logic preserved from notebook) ---
+    # ------------------------------------------------------------------
+    # Docling skill (advanced extraction)
+    # ------------------------------------------------------------------
 
-    def _process_with_docling_skill(self, pdf_path: str, source: str, pdf_metadata: Dict, user_id: str = "default"):
-        """Advanced Docling processing using HybridChunker and parent-child chunking.
+    def _get_or_init_docling_converter(self):
+        """Lazy-build the Docling DocumentConverter with memory-friendly
+        defaults. Cached on ``self._docling_converter`` for reuse.
 
-        Creates parent chunks (contextualized by HybridChunker) and child chunks
-        (small chunks with contextual headers for embedding) consistent with PyMuPDF path.
+        Memory-tuning knobs in priority order (per Docling's own
+        ``advanced_options`` guidance):
+
+        1. ``layout_batch_size`` / ``table_batch_size`` / ``ocr_batch_size``
+           — Docling defaults each to 4 (parallel pages per stage).
+           Set to 1 to process pages sequentially. This is the actual
+           fix for ``Stage preprocess failed for run 1, pages [N..N+3]``
+           errors: each "run" processes a batch of 4 pages, so any
+           dense page in a batch can OOM the whole batch.
+        2. ``accelerator_options.num_threads`` — Docling defaults to 4
+           CPU threads. Setting to 1 reduces concurrency-driven peak
+           memory.
+        3. ``images_scale`` — page bitmap render resolution. Docling's
+           default of 1.0 allocates full-DPI bitmaps; 0.5 quarters that.
+        4. ``TableFormerMode.FAST`` instead of ACCURATE — ~5x lighter.
+
+        All env-overridable so a beefier machine can crank performance
+        back up without code changes:
+
+          RAG_DOCLING_TABLEFORMER_MODE=accurate
+          RAG_DOCLING_IMAGES_SCALE=1.0
+          RAG_DOCLING_BATCH_SIZE=4
+          RAG_DOCLING_NUM_THREADS=4
+
+        Used by both ``_extract_with_docling`` (plain) and
+        ``_process_with_docling_skill`` (HybridChunker).
         """
+        if self._docling_converter is not None:
+            return self._docling_converter
+
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+        from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
         from docling.datamodel.base_models import InputFormat
 
-        if self._docling_converter is None:
-            logger.info("Initializing Docling DocumentConverter for Agent Skill...")
-            pipeline_options = PdfPipelineOptions()
-            pipeline_options.do_table_structure = True
-            pipeline_options.table_structure_options.do_cell_matching = False
-            pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-            pipeline_options.do_ocr = False
-            pipeline_options.do_code_enrichment = False
-            pipeline_options.do_formula_enrichment = False
-            
-            self._docling_converter = DocumentConverter(
-                format_options={
-                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-                }
-            )
+        opts = PdfPipelineOptions()
+        opts.do_table_structure = True
+        opts.table_structure_options.do_cell_matching = False
+
+        # 1. TableFormer mode (env-driven; FAST default)
+        tf_mode = os.getenv("RAG_DOCLING_TABLEFORMER_MODE", "fast").strip().lower()
+        opts.table_structure_options.mode = (
+            TableFormerMode.ACCURATE if tf_mode == "accurate" else TableFormerMode.FAST
+        )
+
+        # 2. Per-stage batch sizes. Docling defaults each to 4. Setting
+        # to 1 cuts peak memory ~4x at the cost of slower throughput,
+        # which is the right trade for memory-constrained environments
+        # and is what prevents std::bad_alloc on dense PDFs.
+        try:
+            batch = max(1, int(os.getenv("RAG_DOCLING_BATCH_SIZE", "1")))
+        except ValueError:
+            batch = 1
+        opts.layout_batch_size = batch
+        opts.table_batch_size = batch
+        opts.ocr_batch_size = batch  # ignored since do_ocr=False, but consistent.
+
+        # 3. Accelerator: single-threaded by default to keep concurrent
+        # allocations low. Docling honors DOCLING_NUM_THREADS env too,
+        # but we expose RAG_DOCLING_NUM_THREADS for naming consistency.
+        try:
+            num_threads = max(1, int(os.getenv("RAG_DOCLING_NUM_THREADS", "1")))
+        except ValueError:
+            num_threads = 1
+        opts.accelerator_options = AcceleratorOptions(
+            num_threads=num_threads,
+            device=AcceleratorDevice.AUTO,
+        )
+
+        # 4. Page bitmap render scale. 1.0 = full DPI; 0.5 = quarter-area
+        # = ~4x less memory during page rasterization. Combine with the
+        # batch-size knob above for compounding memory savings.
+        try:
+            opts.images_scale = float(os.getenv("RAG_DOCLING_IMAGES_SCALE", "0.5"))
+        except ValueError:
+            opts.images_scale = 0.5
+
+        # Image generation flags are False by default — set explicitly
+        # so future Docling default changes don't surprise us.
+        opts.generate_page_images = False
+        opts.generate_picture_images = False
+        opts.generate_table_images = False
+        opts.generate_parsed_pages = False
+
+        opts.do_ocr = False
+        opts.do_code_enrichment = False
+        opts.do_formula_enrichment = False
+
+        logger.info(
+            "Initializing Docling DocumentConverter "
+            "(tableformer=%s, images_scale=%.2f, batch_size=%d, num_threads=%d)",
+            opts.table_structure_options.mode.name,
+            opts.images_scale,
+            batch,
+            num_threads,
+        )
+        self._docling_converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=opts)
+            }
+        )
+        return self._docling_converter
+
+    def _process_with_docling_skill(
+        self,
+        pdf_path: str,
+        source: str,
+        pdf_metadata: Dict,
+        user_id: str = "default",
+    ):
+        """Advanced Docling processing using HybridChunker.
+
+        Returns ``(documents, extracted_text)``. Each HybridChunker chunk
+        becomes a single LlamaIndex ``Document`` keyed on its section
+        breadcrumb; HierarchicalNodeParser handles the parent/child split.
+        """
+        converter = self._get_or_init_docling_converter()
 
         abs_path = os.path.abspath(pdf_path)
-        result = self._docling_converter.convert(
+        result = converter.convert(
             abs_path,
             max_num_pages=config.max_num_pages,
             max_file_size=config.max_file_size,
         )
-        
+
         if not result or not result.document:
             raise ValueError("Docling returned empty result")
 
         extracted_text = result.document.export_to_markdown()
 
-        # Initialize HybridChunker (respects headers and structure)
+        # HybridChunker produces structurally-aware chunks.
         try:
             from docling.chunking import HybridChunker
             from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
             _hybrid_available = True
         except ImportError:
             _hybrid_available = False
-        if _hybrid_available:
-            logger.info("Using Docling HybridChunker for semantic splitting...")
-            from transformers import AutoTokenizer
-            tokenizer = HuggingFaceTokenizer(
-                tokenizer=AutoTokenizer.from_pretrained(config.embedding_model),
-                max_tokens=min(config.parent_chunk_size, 512),  # 512 is the sweet spot for standard embedding models
-            )
-            chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
-            doc_chunks = list(chunker.chunk(result.document))
-            
-            file_ext = os.path.splitext(source)[1].lower() or ".pdf"
-            indexed_at = datetime.now(timezone.utc).isoformat()
-            
-            from langchain_text_splitters import RecursiveCharacterTextSplitter
-            safety_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=config.parent_chunk_size,
-                chunk_overlap=config.parent_chunk_overlap,
-                separators=["\n\n", "\n", ". ", " ", ""]
-            )
-            
-            doc_title = pdf_metadata.get("title", "")
-            parent_chunks: List[Dict[str, str]] = []
-            all_child_chunks: List[Dict[str, Any]] = []
-            
-            for i, chunk in enumerate(doc_chunks):
-                # Contextualize adds breadcrumbs (section headers) to the text
-                chunk_text = chunker.contextualize(chunk)
-                
-                # Extract section title from headings
-                headings = chunk.meta.headings or []
-                section_title = headings[0] if headings else ""
-                
-                # Contextualize() already prepends section breadcrumbs.
-                # Only prepend doc_title here to avoid double section headers.
-                doc_header = f"{doc_title}\n\n" if doc_title else ""
-                
-                # Stable parent ID: include source to avoid collisions across docs
-                parent_id = hashlib.md5(
-                    f"docling::{source}::{section_title}::{chunk_text[:200]}".encode()
-                ).hexdigest()
-                
-                # --- PARENT CHUNK ---
-                # Safety: if HybridChunker produced oversized chunk, split it
-                if len(chunk_text) > config.parent_chunk_size * 2:
-                    parent_texts = safety_splitter.split_text(chunk_text)
-                else:
-                    parent_texts = [chunk_text]
-                
-                for p_idx, p_text in enumerate(parent_texts):
-                    pid = f"{parent_id}_p{p_idx}"
-                    parent_with_header = doc_header + p_text
-                    parent_chunks.append({
-                        "parent_id": pid,
-                        "text": parent_with_header,
-                        "section_title": section_title,
-                    })
-                    
-                    # --- CHILD CHUNKS from this parent ---
-                    child_texts = self._split_semantic_children(p_text)
-                    for c_idx, c_text in enumerate(child_texts):
-                        child_with_header = doc_header + c_text
-                        all_child_chunks.append({
-                            "text": child_with_header,
-                            "metadata": {
-                                "source": source,
-                                "chunk_id": f"{source}_{i}_p{p_idx}_c{c_idx}",
-                                "parser_type": "docling_skill",
-                                "file_type": file_ext,
-                                "indexed_at": indexed_at,
-                                "content_type": "text",
-                                "doc_title": doc_title,
-                                "doc_authors": pdf_metadata.get("authors", ""),
-                                "doc_doi": pdf_metadata.get("doi", ""),
-                                "doc_journal": pdf_metadata.get("journal", ""),
-                                "page": getattr(chunk.meta.origin, "page_no", 0),
-                                "section_title": section_title,
-                                "headings": headings,
-                                "parent_id": pid,
-                                "child_index": c_idx,
-                            },
-                        })
-            
-            # Store parents and return children for indexing
-            self._add_parents(user_id, parent_chunks)
-            logger.info(f"Docling skill created {len(parent_chunks)} parents, {len(all_child_chunks)} children for {source}")
-            
-            # Deduplicate children
-            unique_children = self._deduplicate_chunks(all_child_chunks)
-            total = len(unique_children)
-            for c in unique_children:
-                c["metadata"]["total_chunks"] = total
-            from langchain_core.documents import Document
-            return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children], extracted_text
-        else:
+        if not _hybrid_available:
             logger.warning("Docling chunking components missing, falling back to basic extraction")
             raise ImportError("Docling chunking components missing")
+
+        logger.info("Using Docling HybridChunker for semantic splitting...")
+        from transformers import AutoTokenizer
+        tokenizer = HuggingFaceTokenizer(
+            tokenizer=AutoTokenizer.from_pretrained(config.embedding_model),
+            max_tokens=min(config.parent_chunk_size, 512),
+        )
+        chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
+        doc_chunks = list(chunker.chunk(result.document))
+
+        file_ext = os.path.splitext(source)[1].lower() or ".pdf"
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        doc_title = pdf_metadata.get("title", "")
+
+        documents: List[Any] = []
+        for i, chunk in enumerate(doc_chunks):
+            chunk_text = chunker.contextualize(chunk)
+            headings = chunk.meta.headings or []
+            section_title = headings[0] if headings else ""
+            cch_header = self._build_cch_header(doc_title, section_title)
+
+            metadata = _sanitize_metadata_dict({
+                "source": source,
+                "parser_type": "docling_skill",
+                "file_type": file_ext,
+                "indexed_at": indexed_at,
+                "content_type": "text",
+                "doc_title": doc_title,
+                "doc_authors": pdf_metadata.get("authors", ""),
+                "doc_doi": pdf_metadata.get("doi", ""),
+                "doc_journal": pdf_metadata.get("journal", ""),
+                "page": getattr(chunk.meta.origin, "page_no", 0) if getattr(chunk.meta, "origin", None) else 0,
+                "section_title": section_title,
+                "headings": headings,
+                "cch_header": cch_header,
+                "chunk_index": i,
+            })
+            documents.append(self._make_document(chunk_text, metadata))
+
+        logger.info(
+            f"Docling skill produced {len(documents)} documents for {source}; "
+            f"hierarchical parser will split them into parents/children."
+        )
+        return documents, extracted_text
 
     def _extract_with_docling(self, pdf_path):
         logger.info(f"Starting detailed extraction with Docling for: {pdf_path}")
         try:
-            from docling.document_converter import DocumentConverter, PdfFormatOption
-            from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-            from docling.datamodel.base_models import InputFormat
+            converter = self._get_or_init_docling_converter()
 
-            if self._docling_converter is None:
-                logger.info("Initializing Docling DocumentConverter (this may take a moment)...")
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_table_structure = True
-                pipeline_options.table_structure_options.do_cell_matching = False
-                pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-                pipeline_options.do_ocr = False
-                
-                # Disable heavy enrichment features for now to prevent background VLM model downloads
-                pipeline_options.do_code_enrichment = False
-                pipeline_options.do_formula_enrichment = False
-                
-                self._docling_converter = DocumentConverter(
-                    format_options={
-                        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-                    }
-                )
-            
             # Use absolute path to avoid any confusion
             abs_path = os.path.abspath(pdf_path)
-            result = self._docling_converter.convert(
+            result = converter.convert(
                 abs_path,
                 max_num_pages=config.max_num_pages,
                 max_file_size=config.max_file_size,
             )
-            
+
             if not result or not result.document:
                 logger.error(f"Docling returned empty result for {pdf_path}")
                 return None, []
@@ -1946,7 +2133,7 @@ Summary:"""
                     except Exception as te:
                         logger.warning(f"Failed to export table in {pdf_path}: {te}")
                         continue
-            
+
             logger.info(f"Docling extraction successful for {pdf_path} ({len(md_text)} chars, {len(docling_tables)} tables)")
             return md_text, docling_tables
         except Exception as e:
@@ -2036,7 +2223,7 @@ Summary:"""
 
         Returns (full_text, tables) where ``tables`` is always an empty list:
         tables are now embedded inside ``full_text`` as Markdown so the
-        downstream MarkdownTextSplitter handles them naturally without a
+        downstream HierarchicalNodeParser handles them naturally without a
         separate index path. The empty list is kept for API compatibility
         with the docling branch which still returns tables separately.
         """
@@ -2165,153 +2352,6 @@ Summary:"""
 
         return sections
 
-    def _chunk_by_sections(
-        self,
-        sections,
-        tables,
-        doc_metadata: Dict[str, str] = None,
-        source: str = "",
-        use_semantic_children: bool = True,
-    ):
-        """Create parent-child hierarchical chunks with Markdown splitting and contextual headers.
-
-        Flow:
-        1. Convert each section to Markdown with headers
-        2. Split into parent chunks (~2500 chars) using MarkdownTextSplitter
-        3. Split into child chunks using SemanticChunker (meaning-based boundaries)
-        4. Prepend contextual chunk headers (CCH) to each child before embedding:
-           [Document Title] > [Section Title] > [chunk text]
-
-        Tables are indexed directly without parent-child split.
-        Returns: (parent_chunks, all_chunks_for_indexing)
-        """
-        doc_metadata = doc_metadata or {}
-        doc_title = doc_metadata.get("title", "")
-
-        # Build contextual header prefix for this document
-        def build_header(section_title: str) -> str:
-            parts = []
-            if doc_title:
-                parts.append(doc_title)
-            if section_title and section_title != "Start":
-                parts.append(section_title)
-            if parts:
-                return " > ".join(parts) + "\n\n"
-            return ""
-
-        # Markdown splitters
-        from langchain_text_splitters import MarkdownTextSplitter
-        parent_splitter = MarkdownTextSplitter(
-            chunk_size=config.parent_chunk_size,
-            chunk_overlap=config.parent_chunk_overlap,
-        )
-        table_splitter = MarkdownTextSplitter(
-            chunk_size=config.parent_chunk_size,
-            chunk_overlap=config.parent_chunk_overlap,
-        )
-
-        parent_chunks: List[Dict[str, str]] = []
-        all_chunks: List[Dict[str, Any]] = []
-
-        # Tables: index directly, no parent-child
-        for table in tables:
-            content = table.get("content", "")
-            if content.strip():
-                table_md = f"## Table\n\n{content}"
-                table_chunks = table_splitter.split_text(table_md)
-                for i, tc in enumerate(table_chunks):
-                    all_chunks.append(
-                        {
-                            "text": tc,
-                            "metadata": {
-                                "content_type": "table",
-                                "page": table.get("page", 0),
-                                "chunk_part": i + 1,
-                            },
-                        }
-                    )
-
-        # Sections: parent-child hierarchical chunking with Markdown
-        for section in sections:
-            text = section.get("text", "")
-            if not text.strip():
-                continue
-
-            section_title = section.get("title", "")
-            header = build_header(section_title)
-
-            # Convert section to Markdown with header for the splitter
-            # Skip "## Start" as it's not a real section
-            if section_title and section_title != "Start":
-                section_md = f"## {section_title}\n\n{text}"
-                header_prefix = f"## {section_title}\n\n"
-            else:
-                section_md = text
-                header_prefix = ""
-
-            # Stable parent_id: include source to avoid collisions across docs
-            parent_id = hashlib.md5(
-                f"{source}::{section_title}::{text[:200]}".encode()
-            ).hexdigest()
-
-            # --- PARENT CHUNKS ---
-            # Split section into parent-sized markdown chunks
-            parent_texts = parent_splitter.split_text(section_md)
-            for p_idx, p_text in enumerate(parent_texts):
-                # Strip the splitter-injected section header to avoid doubles
-                if header_prefix and p_text.startswith(header_prefix):
-                    p_text = p_text[len(header_prefix):]
-                parent_with_header = header + p_text
-                pid = f"{parent_id}_p{p_idx}"
-                parent_chunks.append(
-                    {
-                        "parent_id": pid,
-                        "text": parent_with_header,
-                        "section_title": section_title,
-                    }
-                )
-
-                # --- CHILD CHUNKS (from this parent) ---
-                # PyMuPDF uses a simpler fast child split; Docling keeps semantic splitting.
-                if use_semantic_children:
-                    child_texts = self._split_semantic_children(p_text)
-                else:
-                    from langchain_text_splitters import MarkdownTextSplitter
-                    child_splitter = MarkdownTextSplitter(
-                        chunk_size=config.child_chunk_size,
-                        chunk_overlap=config.child_chunk_overlap,
-                    )
-                    child_texts = child_splitter.split_text(p_text)
-                for c_idx, c_text in enumerate(child_texts):
-                    # Prepend contextual header to child for embedding
-                    child_with_header = header + c_text
-                    all_chunks.append(
-                        {
-                            "text": child_with_header,
-                            "metadata": {
-                                "section_title": section_title,
-                                "content_type": "text",
-                                "parent_id": pid,
-                                "child_index": c_idx,
-                            },
-                        }
-                    )
-
-        return parent_chunks, all_chunks
-
-    def _deduplicate_chunks(self, chunks):
-        unique = []
-        seen_hashes = set()
-        for chunk in chunks:
-            text = chunk.get("text", "")
-            if not text.strip():
-                continue
-            norm = re.sub(r"\s+", " ", text.lower().strip())
-            h = hashlib.md5(norm.encode()).hexdigest()
-            if h not in seen_hashes:
-                unique.append(chunk)
-                seen_hashes.add(h)
-        return unique
 
 _rag_service: Optional[RAGService] = None
 

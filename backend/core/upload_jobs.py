@@ -13,10 +13,20 @@ class UploadJobStore:
         self.base_dir = Path(base_dir) if base_dir else get_job_store_dir()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
+    def _ensure_base_dir(self) -> None:
+        # Re-create the base directory on every operation. ``__init__``'s
+        # mkdir runs once at module load, but the directory can vanish
+        # later (manual cleanup, fresh checkout, blown-away ``data/``
+        # dir). mkdir on an existing directory is a no-op so this is
+        # essentially free and makes every method below resilient.
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
     def _job_path(self, job_id: str) -> Path:
+        self._ensure_base_dir()
         return self.base_dir / f"{job_id}.json"
 
     def _write_json(self, path: Path, payload: Dict[str, Any]) -> None:
+        self._ensure_base_dir()
         fd, temp_path = tempfile.mkstemp(dir=str(self.base_dir), prefix=path.stem, suffix=".tmp")
         temp_file = Path(temp_path)
         try:
@@ -46,6 +56,7 @@ class UploadJobStore:
         return existing
 
     def list_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        self._ensure_base_dir()
         jobs = []
         for path in self.base_dir.glob("*.json"):
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -67,6 +78,7 @@ class UploadJobStore:
 
         Returns the number of deleted records.
         """
+        self._ensure_base_dir()
         cutoff = datetime.now(timezone.utc).timestamp() - max_age_seconds
         deleted = 0
         for path in self.base_dir.glob("*.json"):
