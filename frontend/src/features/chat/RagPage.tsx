@@ -168,13 +168,23 @@ const RagPage: React.FC = () => {
     };
   }, []);
 
-  // Load indexed files from backend and merge with persisted selection status
+  // Load indexed files from backend and merge with persisted selection
+  // status. The merge is *defensive*: if the backend reports an empty
+  // list while we have files locally (e.g., a brief eventual-consistency
+  // window right after upload, or a stale 404 on the existence probe),
+  // we preserve the local list rather than wiping it. The "Reset all"
+  // flow already clears local state explicitly, so this can't hide a
+  // real reset.
   const loadIndexedFiles = useCallback(async () => {
     try {
       const files = await ragApi.listFiles();
 
       setUploadedFiles((prev) => {
-        // Create a map of existing selection statuses and summaries
+        if (files.length === 0 && prev.length > 0) {
+          // Backend returned no files but we have locals — keep locals.
+          return prev;
+        }
+
         const selectionMap = new Map(prev.map((f) => [f.name, f.selected]));
         const summaryMap = new Map(prev.map((f) => [f.name, f.summary]));
 

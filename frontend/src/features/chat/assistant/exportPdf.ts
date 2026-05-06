@@ -147,3 +147,88 @@ export function exportAnswerAsPdf(payload: AnswerExportPayload): void {
 
   doc.save(`phytoquery-answer-${safeFilenameTimestamp(timestamp)}.pdf`);
 }
+
+// ---------------------------------------------------------------------------
+// Whole-conversation export.
+// ---------------------------------------------------------------------------
+
+export interface ThreadTurn {
+  role: 'user' | 'assistant';
+  text: string;
+  /** Sources only meaningful on assistant turns. */
+  sources?: readonly RagSource[];
+}
+
+export interface ThreadExportPayload {
+  turns: readonly ThreadTurn[];
+  /** ISO timestamp for the file name and document footer. Defaults to now. */
+  timestamp?: string;
+}
+
+export function exportThreadAsPdf(payload: ThreadExportPayload): void {
+  const timestamp = payload.timestamp ?? new Date().toISOString();
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const state: PdfRenderState = {
+    doc,
+    y: PAGE_MARGIN_Y,
+    pageHeight,
+    contentWidth: pageWidth - PAGE_MARGIN_X * 2,
+  };
+
+  // Document title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('PhytoQuery Chat', PAGE_MARGIN_X, state.y);
+  state.y += LINE_HEIGHT + 1;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(new Date(timestamp).toLocaleString(), PAGE_MARGIN_X, state.y);
+  state.y += LINE_HEIGHT;
+  doc.setTextColor(0);
+  doc.setFontSize(10);
+  state.y += SECTION_GAP;
+
+  payload.turns.forEach((turn, idx) => {
+    const heading = turn.role === 'user' ? `You` : `PhytoQuery`;
+    writeHeading(state, heading);
+    writeWrapped(state, stripMarkdown(turn.text || '(empty)'));
+
+    if (turn.role === 'assistant' && turn.sources && turn.sources.length > 0) {
+      // Smaller "Sources" subheading inside this turn.
+      ensureSpace(state, 2);
+      state.y += 2;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('Sources', PAGE_MARGIN_X, state.y);
+      state.y += LINE_HEIGHT;
+      doc.setFont('helvetica', 'normal');
+
+      turn.sources.forEach((source, sIdx) => {
+        const header = source.section
+          ? `${sIdx + 1}. ${source.source} — ${source.section} (${source.score}%)`
+          : `${sIdx + 1}. ${source.source} (${source.score}%)`;
+        doc.setFont('helvetica', 'bold');
+        writeWrapped(state, header);
+        doc.setFont('helvetica', 'normal');
+        const excerpt = source.chunk_text.slice(0, 600);
+        if (excerpt) writeWrapped(state, excerpt);
+      });
+      state.y += 2;
+    }
+
+    // Visual separator between turns (a thin rule).
+    if (idx < payload.turns.length - 1) {
+      ensureSpace(state, 2);
+      state.y += 2;
+      doc.setDrawColor(220);
+      doc.line(PAGE_MARGIN_X, state.y, PAGE_MARGIN_X + state.contentWidth, state.y);
+      state.y += 4;
+    }
+  });
+
+  doc.save(`phytoquery-chat-${safeFilenameTimestamp(timestamp)}.pdf`);
+}
