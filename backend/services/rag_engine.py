@@ -23,13 +23,22 @@ from backend.core.rag_storage import delete_user_upload_file, delete_user_upload
 # method that first needs it.  This keeps startup at ~200 MB and < 2 seconds.
 #
 # Deferred:
-#   from langchain_chroma import Chroma
+#   from langchain_qdrant import QdrantVectorStore
+#   from qdrant_client import QdrantClient
+#   from qdrant_client.http import models as qmodels
 #   from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
 #   from langchain_experimental.text_splitter import SemanticChunker
 #   from sentence_transformers import CrossEncoder
-#   from langchain_core.documents import Document
 #   from docling.chunking import HybridChunker
 #   from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
+# ---------------------------------------------------------------------------
+# Re-exported for tests that monkeypatch / reference these by module-attr.
+from langchain_core.documents import Document  # noqa: F401
+
+try:
+    from sentence_transformers import CrossEncoder  # noqa: F401
+except Exception:  # allow tests / minimal envs to inject a stub later
+    CrossEncoder = None  # type: ignore[assignment]
 # ---------------------------------------------------------------------------
 
 # --- Import from RAG config ---
@@ -186,7 +195,7 @@ def _sanitize_metadata_value(value: Any) -> Any:
     return str(value)
 
 
-def _sanitize_documents_for_chroma(documents):
+def _sanitize_documents_for_qdrant(documents):
     from langchain_core.documents import Document
     sanitized = []
     for doc in documents:
@@ -275,10 +284,14 @@ class RAGConfig:
         "medicinal plants, ethnobotany, and traditional medicine. "
         "Methods, results, and data-driven findings are highly relevant."
     )
-    chroma_dir: str = os.path.join(
+    # Single shared local Qdrant DB. Per-user isolation happens via
+    # collection naming (``user_<safe_user_id>_<8-char-hash>``) inside
+    # this one directory, not via separate folders. Replaces the old
+    # ``chroma_dir`` per-user-folder layout.
+    qdrant_dir: str = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "data",
-        "chroma_db",
+        "qdrant",
     )
 
 
@@ -446,12 +459,21 @@ class OllamaLLM:
         raise last_exception
 
 
-class PhytoQueryEmbeddings:
+from langchain_core.embeddings import Embeddings as _LCEmbeddings
+
+
+class PhytoQueryEmbeddings(_LCEmbeddings):
     """Custom embeddings with Qwen3-Embedding-4B primary and bge-m3 fallback.
 
-    Implements the LangChain Embeddings interface for ChromaDB compatibility.
-    For Qwen3, queries use prompt_name="query" for instruction-aware retrieval;
-    documents are encoded without prompts. Falls back to bge-m3 on load failure.
+    Inherits from ``langchain_core.embeddings.Embeddings`` so strict
+    ``isinstance`` checks (``langchain-qdrant`` does one in
+    QdrantVectorStore.__init__) pass. The interface ``embed_documents``
+    / ``embed_query`` is unchanged from before — the base class only
+    declares those as abstract methods.
+
+    For Qwen3, queries use ``prompt_name="query"`` for instruction-aware
+    retrieval; documents are encoded without prompts. Falls back to
+    bge-m3 on load failure.
     """
 
     def __init__(
@@ -666,6 +688,9 @@ class RAGService:
         )
         # Cache for per-user vectorstores
         self._vectorstore_cache: Dict[str, Any] = {}
+        # Shared Qdrant local client (one DB, many per-user collections).
+        self._qdrant_client = None
+        self._qdrant_lock = threading.Lock()
         # Cache for Docling converter to avoid reloading models
         self._docling_converter = None
         # Lazy-init semantic child splitter
@@ -793,127 +818,129 @@ class RAGService:
     def _get_collection_suffix(self) -> str:
         """Generate a short suffix based on the active embedding model and dimension.
 
-        This ensures ChromaDB collections are versioned by embedding config,
+        This ensures Qdrant collections are versioned by embedding config,
         preventing dimension mismatch when switching models.
         """
         model_key = f"{self.embeddings.model_name}:{self.embeddings.model_dim}"
         short_hash = hashlib.md5(model_key.encode()).hexdigest()[:8]
         return short_hash
 
-    def _get_user_collection(self, user_id: str):
-        """Get or create a ChromaDB collection for a specific user.
+    def _get_qdrant_client(self):
+        """Lazy-init the shared local QdrantClient.
 
-        Uses an explicit ``chromadb.PersistentClient`` rather than letting
-        ``Chroma(persist_directory=…)`` build one implicitly. The explicit
-        client deterministically creates ``default_tenant`` and
-        ``default_database`` on first init, avoiding a chromadb 1.x race that
-        can leave the SQLite schema with empty tenant tables — surfacing as
-        ``Could not connect to tenant default_tenant`` on subsequent reads.
+        One client points at ``data/qdrant/``. Per-user isolation is
+        achieved via collection names (``user_<safe_user_id>_<8-char-hash>``)
+        within that single directory rather than per-user folders. This
+        avoids the SQLite-tenant gymnastics that plagued the old Chroma
+        path and lets ``delete_collection`` be a single atomic call.
         """
-        import chromadb
-        from chromadb.config import Settings
-        from langchain_chroma import Chroma
+        if self._qdrant_client is not None:
+            return self._qdrant_client
+        with self._qdrant_lock:
+            if self._qdrant_client is not None:
+                return self._qdrant_client
+            from qdrant_client import QdrantClient
+
+            os.makedirs(config.qdrant_dir, exist_ok=True)
+            self._qdrant_client = QdrantClient(path=config.qdrant_dir)
+            logger.info(f"Initialized Qdrant local client at {config.qdrant_dir}")
+            return self._qdrant_client
+
+    def _ensure_qdrant_collection(self, client, collection_name: str) -> None:
+        """Create the per-user Qdrant collection if it doesn't exist."""
+        from qdrant_client.http import models as qmodels
+
+        try:
+            client.get_collection(collection_name)
+            return
+        except Exception:
+            pass  # collection doesn't exist; fall through to create
+
+        # Embedder must be loaded so model_dim is known. Cosine distance
+        # matches Chroma's default and the metric the Qdrant LangChain
+        # integration assumes for normalized vectors.
+        self.embeddings._ensure_model_loaded()
+        vec_dim = config.embedding_dim or self.embeddings.model_dim
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=qmodels.VectorParams(
+                size=vec_dim,
+                distance=qmodels.Distance.COSINE,
+            ),
+        )
+        logger.info(
+            f"Created Qdrant collection {collection_name} (size={vec_dim}, distance=COSINE)"
+        )
+
+    def _get_user_collection(self, user_id: str):
+        """Get or create a Qdrant-backed LangChain VectorStore for a user.
+
+        Wraps a per-user Qdrant collection in ``QdrantVectorStore`` so the
+        rest of the pipeline (``add_documents``, ``similarity_search_with_score``)
+        keeps working unchanged. The collection name encodes the
+        embedding-model+dim hash so switching models cannot collide.
+        """
+        from langchain_qdrant import QdrantVectorStore
 
         if user_id in self._vectorstore_cache:
             return self._vectorstore_cache[user_id]
 
-        # Sanitize user_id for collection name (alphanumeric + underscore only)
         safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
         model_suffix = self._get_collection_suffix()
         collection_name = f"user_{safe_user_id}_{model_suffix}"
 
-        # User-specific persist directory
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
+        client = self._get_qdrant_client()
+        self._ensure_qdrant_collection(client, collection_name)
 
-        # Retry logic for handling locked files on Windows
-        max_retries = 3
-        vectorstore = None
-        for attempt in range(max_retries):
-            try:
-                os.makedirs(user_chroma_dir, exist_ok=True)
-                client = chromadb.PersistentClient(
-                    path=user_chroma_dir,
-                    settings=Settings(anonymized_telemetry=False, allow_reset=True),
-                )
-                vectorstore = Chroma(
-                    client=client,
-                    collection_name=collection_name,
-                    embedding_function=self.embeddings,
-                )
-                break
-            except Exception as e:
-                if attempt < max_retries - 1 and "locked" in str(e).lower():
-                    logger.warning(
-                        f"Chroma folder locked for {user_id}, retry {attempt + 1}/{max_retries}"
-                    )
-                    time.sleep(0.3)
-                    continue
-                raise
-
+        vectorstore = QdrantVectorStore(
+            client=client,
+            collection_name=collection_name,
+            embedding=self.embeddings,
+        )
         self._vectorstore_cache[user_id] = vectorstore
-        logger.info(f"Created ChromaDB collection for user: {user_id}")
+        logger.info(f"Created Qdrant vectorstore wrapper for user: {user_id} (collection={collection_name})")
         return vectorstore
 
-    def _invalidate_user_collection(self, user_id: str) -> None:
-        """Drop a cached per-user Chroma client so the next access reopens it.
+    def _get_user_collection_name(self, user_id: str) -> str:
+        """Return the Qdrant collection name for a user (without instantiating the vectorstore)."""
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+        return f"user_{safe_user_id}_{self._get_collection_suffix()}"
 
-        Note: do NOT call ``client._system.stop()`` here — chromadb 1.x uses
-        a process-wide rust bindings singleton, so stopping the system tears
-        down the runtime for every other client and produces phantom
-        "Could not connect to tenant default_tenant" errors on next access.
-        For real corruption recovery, use ``client.reset()`` which clears
-        data in-place via SQLite.
+    def _invalidate_user_collection(self, user_id: str) -> None:
+        """Drop the cached QdrantVectorStore wrapper for a user.
+
+        Qdrant's local client doesn't have Chroma's SQLite-tenant
+        process-singleton pitfalls, so this is just a cache pop — no
+        process-wide teardown needed.
         """
         self._vectorstore_cache.pop(user_id, None)
-        gc.collect()
-        time.sleep(0.1)
 
     def _reset_user_chroma_in_place(self, user_id: str) -> None:
-        """Cross-OS recovery for a corrupt Chroma store.
-
-        Uses ``client.reset()`` to clear all collections via SQLite's own
-        TRUNCATE/DELETE — no filesystem operations. This avoids the
-        SQLITE_READONLY_DBMOVED (code 1032) race on macOS/Linux and the
-        permission-denied lock dance on Windows that ``shutil.rmtree``
-        triggers when a stale connection is still holding the inode open.
-
-        Falls back to ``rmtree`` only if ``reset()`` itself fails — e.g.
-        when the SQLite is so badly corrupted that no client can open it.
+        """Drop a user's Qdrant collection (kept under the old name for
+        call-site compatibility — the operation is now a clean
+        ``delete_collection``, no SQLite gymnastics needed).
         """
-        import chromadb
-        from chromadb.config import Settings
-
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
         try:
-            client = chromadb.PersistentClient(
-                path=user_chroma_dir,
-                settings=Settings(anonymized_telemetry=False, allow_reset=True),
-            )
-            client.reset()
-            logger.info(
-                f"Reset Chroma data in-place for {user_id} (no filesystem ops)."
-            )
-            del client
-            gc.collect()
-            return
-        except Exception as reset_err:
-            logger.warning(
-                f"client.reset() failed for {user_id}: {reset_err!r}; "
-                f"falling back to filesystem wipe."
-            )
-
-        # Last-resort filesystem wipe. We're already in a degraded path —
-        # this can still race with a stale handle, but the next retry will
-        # get a fresh schema either way.
-        import shutil
-        shutil.rmtree(user_chroma_dir, ignore_errors=True)
+            client = self._get_qdrant_client()
+            collection_name = self._get_user_collection_name(user_id)
+            try:
+                client.delete_collection(collection_name=collection_name)
+                logger.info(
+                    f"Deleted Qdrant collection {collection_name} for user {user_id}"
+                )
+            except Exception as exc:
+                # Likely "collection not found" — benign.
+                logger.info(
+                    f"Qdrant collection delete for {user_id} skipped/failed: {exc!r}"
+                )
+        finally:
+            self._invalidate_user_collection(user_id)
 
     # --- Parent-Child Chunking: Parent Store ---
 
     def _get_parent_store_path(self, user_id: str) -> str:
         safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        return os.path.join(config.chroma_dir, f"{safe_user_id}_parents.json")
+        return os.path.join(config.qdrant_dir, f"{safe_user_id}_parents.json")
 
     def _load_parent_store(self, user_id: str) -> Dict[str, str]:
         path = self._get_parent_store_path(user_id)
@@ -946,21 +973,41 @@ class RAGService:
         if not source_names:
             return
 
-        vectorstore = self._get_user_collection(user_id)
-        collection = vectorstore._collection
-        deleted_any = False
-        for source_name in sorted(set(source_names)):
-            result = collection.get(where={"source": source_name}, include=["metadatas"])
-            ids_to_delete = result.get("ids", [])
-            if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
-                deleted_any = True
-                logger.info(
-                    f"Replaced existing indexed chunks for '{source_name}' from user {user_id}'s ChromaDB"
-                )
+        from qdrant_client.http import models as qmodels
 
-        if deleted_any:
+        # Force collection creation if first upload — saves an extra
+        # roundtrip vs catching the "collection not found" exception.
+        self._get_user_collection(user_id)
+
+        client = self._get_qdrant_client()
+        collection_name = self._get_user_collection_name(user_id)
+        unique_sources = sorted(set(source_names))
+
+        try:
+            client.delete(
+                collection_name=collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        should=[
+                            qmodels.FieldCondition(
+                                key="metadata.source",
+                                match=qmodels.MatchValue(value=name),
+                            )
+                            for name in unique_sources
+                        ]
+                    )
+                ),
+            )
+            logger.info(
+                f"Replaced existing indexed chunks for {unique_sources} from user {user_id}'s Qdrant collection"
+            )
             self._cleanup_parent_store(user_id)
+        except Exception as exc:
+            # Common when the collection has zero matching points; treat as
+            # a no-op rather than failing the whole upload.
+            logger.info(
+                f"Qdrant filter-delete for {user_id} sources={unique_sources} returned: {exc!r}"
+            )
 
     def process_and_index_pdfs_with_texts(
         self,
@@ -996,7 +1043,7 @@ class RAGService:
             )
 
         if all_docs:
-            sanitized_docs = _sanitize_documents_for_chroma(all_docs)
+            sanitized_docs = _sanitize_documents_for_qdrant(all_docs)
             self.embeddings.begin_timing_session()
             index_started = time.perf_counter()
             try:
@@ -1004,32 +1051,26 @@ class RAGService:
                 vectorstore = self._get_user_collection(user_id)
                 vectorstore.add_documents(sanitized_docs)
             except Exception as e:
-                # Detect known chromadb corruption signatures. We've seen:
-                #   "Could not connect to tenant default_tenant"
-                #     — empty/missing tenants table after interrupted init.
-                #   "attempt to write a readonly database" / "(code: 1032)"
-                #     — SQLITE_READONLY_DBMOVED, raised when the SQLite file
-                #       is replaced/unlinked while another connection still
-                #       holds it (cross-OS, but most visible on macOS/Linux).
-                #   Generic "Error updating collection: ..." also signals
-                #     stale-handle corruption.
+                # Qdrant corruption / dimension-mismatch signatures.
+                # ``Wrong vector size`` fires when the embedding model dim
+                # changed between indexings on the same collection.
+                # ``not found`` / ``404`` fires when the cached vectorstore
+                # references a collection that has since been dropped.
                 msg = str(e).lower()
                 is_corrupt = (
-                    "tenant" in msg
-                    or "readonly database" in msg
-                    or "code: 1032" in msg
-                    or "1032" in msg
-                    or ("error updating" in msg and "database" in msg)
+                    "wrong vector size" in msg
+                    or "wrong vector dimension" in msg
+                    or ("collection" in msg and "not found" in msg)
+                    or "404" in msg
                 )
                 logger.warning(
                     f"Indexing failed for user {user_id} ({e!r}); "
-                    f"{'resetting Chroma data in-place and ' if is_corrupt else ''}"
+                    f"{'resetting Qdrant collection and ' if is_corrupt else ''}"
                     f"invalidating cached client and retrying once."
                 )
                 self._invalidate_user_collection(user_id)
                 if is_corrupt:
                     self._reset_user_chroma_in_place(user_id)
-                time.sleep(0.3)  # Brief pause for handle settling across OSes
                 self._delete_existing_sources(user_id, source_names)
                 vectorstore = self._get_user_collection(user_id)
                 try:
@@ -1046,7 +1087,7 @@ class RAGService:
             embed_ms = float(embed_stats.get("total_ms", 0.0))
             embed_calls = int(embed_stats.get("calls", 0))
             embed_texts = int(embed_stats.get("texts", 0))
-            chroma_overhead_ms = max(index_total_ms - embed_ms, 0.0)
+            store_overhead_ms = max(index_total_ms - embed_ms, 0.0)
             total_elapsed_ms = (time.perf_counter() - total_started) * 1000
             logger.info(
                 "RAG upload timings: parser=%s user=%s files=%s chunks=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
@@ -1057,7 +1098,7 @@ class RAGService:
                 _format_phase_timings({
                     "parse_and_chunk": parse_and_chunk_ms,
                     "embed": embed_ms,
-                    "chroma_overhead": chroma_overhead_ms,
+                    "store_overhead": store_overhead_ms,
                     "index_total": index_total_ms,
                 }),
                 embed_calls,
@@ -1087,21 +1128,43 @@ class RAGService:
         return store.get(parent_id, "")
 
     def _cleanup_parent_store(self, user_id: str) -> None:
-        """Remove parent store entries that are no longer referenced by any child chunk."""
-        vectorstore = self._get_user_collection(user_id)
-        collection = vectorstore._collection
+        """Remove parent-store entries no longer referenced by any child.
+
+        Iterates the user's Qdrant collection via ``scroll`` (paginated)
+        and collects all referenced ``metadata.parent_id`` values, then
+        prunes the JSON parent store to only entries still in use.
+        """
+        # Force collection creation if needed (idempotent on existing).
+        self._get_user_collection(user_id)
+        client = self._get_qdrant_client()
+        collection_name = self._get_user_collection_name(user_id)
+
         try:
-            result = collection.get(include=["metadatas"])
-            metadatas = result.get("metadatas", [])
-            active_parent_ids = set()
-            for meta in metadatas:
-                pid = meta.get("parent_id")
-                if pid:
-                    active_parent_ids.add(pid)
+            active_parent_ids: set = set()
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection_name,
+                    limit=1000,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    metadata = payload.get("metadata", {}) or {}
+                    pid = metadata.get("parent_id")
+                    if pid:
+                        active_parent_ids.add(pid)
+                if offset is None:
+                    break
+
             store = self._load_parent_store(user_id)
             new_store = {k: v for k, v in store.items() if k in active_parent_ids}
             self._save_parent_store(user_id, new_store)
         except Exception:
+            # Collection might not exist yet or scan can fail mid-way; the
+            # parent store is best-effort cleanup, not a correctness concern.
             pass
 
     def process_and_index_pdfs(
@@ -1230,7 +1293,7 @@ class RAGService:
     def _hybrid_search(
         self,
         question: str,
-        vectorstore,  # Chroma (lazy import)
+        vectorstore,  # langchain_qdrant.QdrantVectorStore (lazy import)
         filter_files: Optional[List[str]] = None,
         k: int = None,
     ) -> List[Dict[str, Any]]:
@@ -1239,14 +1302,27 @@ class RAGService:
         Uses Reciprocal Rank Fusion (RRF) to merge results from both methods.
         Returns list of dicts with 'doc', 'score' keys.
         """
+        from qdrant_client.http import models as qmodels
+
         if k is None:
             k = config.top_k
         rrf_k = 60  # RRF constant
 
         # --- 1. Vector similarity search ---
-        search_kwargs = {"k": k}
+        # langchain-qdrant accepts a qdrant_client Filter directly; no
+        # Chroma-style ``$in`` dict syntax. Build a "should" filter
+        # (any-of) over selected sources.
+        search_kwargs: Dict[str, Any] = {"k": k}
         if filter_files:
-            search_kwargs["filter"] = {"source": {"$in": filter_files}}
+            search_kwargs["filter"] = qmodels.Filter(
+                should=[
+                    qmodels.FieldCondition(
+                        key="metadata.source",
+                        match=qmodels.MatchValue(value=src),
+                    )
+                    for src in filter_files
+                ]
+            )
 
         try:
             vector_results = vectorstore.similarity_search_with_score(
@@ -1258,19 +1334,48 @@ class RAGService:
             vector_results = [(doc, 0.5) for doc in docs]
 
         # --- 2. BM25 keyword search ---
+        # Pull every chunk text (for the selected sources, if any) out of
+        # Qdrant via paginated scroll, then build a BM25Okapi index over
+        # them in-memory. Same algorithm we used over Chroma's
+        # ``collection.get``; just a different way to enumerate points.
         bm25_results = []
         try:
             from rank_bm25 import BM25Okapi
+            from langchain_core.documents import Document
 
-            # Get all documents from collection (for the selected sources)
-            collection = vectorstore._collection
-            get_kwargs = {"include": ["documents", "metadatas"]}
+            client = self._get_qdrant_client()
+            collection_name = vectorstore.collection_name
+
+            scroll_filter = None
             if filter_files:
-                get_kwargs["where"] = {"source": {"$in": filter_files}}
-            all_data = collection.get(**get_kwargs)
+                scroll_filter = qmodels.Filter(
+                    should=[
+                        qmodels.FieldCondition(
+                            key="metadata.source",
+                            match=qmodels.MatchValue(value=src),
+                        )
+                        for src in filter_files
+                    ]
+                )
 
-            all_docs_text = all_data.get("documents", [])
-            all_metas = all_data.get("metadatas", [])
+            all_docs_text: List[str] = []
+            all_metas: List[Dict[str, Any]] = []
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=scroll_filter,
+                    limit=1000,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    all_docs_text.append(payload.get("page_content", "") or "")
+                    all_metas.append(payload.get("metadata", {}) or {})
+                if offset is None:
+                    break
 
             if all_docs_text:
                 # Tokenize for BM25
@@ -1288,7 +1393,6 @@ class RAGService:
 
                 for idx in top_indices:
                     if bm25_scores[idx] > 0:
-                        from langchain_core.documents import Document
                         doc = Document(
                             page_content=all_docs_text[idx],
                             metadata=all_metas[idx] if idx < len(all_metas) else {},
@@ -1610,33 +1714,61 @@ Summary:"""
             return ""
 
     def list_indexed_files(self, user_id: str = "default") -> List[Dict[str, Any]]:
-        """Query ChromaDB for all unique indexed source files for a specific user."""
-        try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(include=["metadatas"])
-            metadatas = result.get("metadatas", [])
+        """Query Qdrant for all unique indexed source files for a specific user.
 
-            # Aggregate per unique source
+        Iterates the user's Qdrant collection via ``scroll`` (paginated)
+        and aggregates per ``metadata.source`` value.
+
+        Short-circuits to ``[]`` if the user's collection doesn't exist
+        yet (i.e. no PDFs have been uploaded). We do NOT call
+        ``_get_user_collection`` here — that would create an empty
+        collection just to scroll it, which is wasteful and was also
+        producing a noisy ``Error: Collection ... not found`` log line
+        on the very first session call before any upload.
+        """
+        try:
+            client = self._get_qdrant_client()
+            collection_name = self._get_user_collection_name(user_id)
+
+            # Existence probe. If missing, the user hasn't indexed
+            # anything — return [] silently rather than creating + scrolling.
+            try:
+                client.get_collection(collection_name)
+            except Exception:
+                return []
+
             file_map: Dict[str, Dict[str, Any]] = {}
-            for meta in metadatas:
-                src = meta.get("source", "")
-                if not src:
-                    continue
-                if src not in file_map:
-                    file_map[src] = {
-                        "name": src,
-                        "file_type": meta.get(
-                            "file_type", os.path.splitext(src)[1] or ".pdf"
-                        ),
-                        "chunk_count": 0,
-                        "indexed_at": meta.get("indexed_at", ""),
-                        "parser_type": meta.get("parser_type", "docling"),
-                        "authors": meta.get("doc_authors", ""),
-                        "doi": meta.get("doc_doi", ""),
-                        "journal": meta.get("doc_journal", ""),
-                    }
-                file_map[src]["chunk_count"] += 1
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection_name,
+                    limit=1000,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    meta = payload.get("metadata", {}) or {}
+                    src = meta.get("source", "")
+                    if not src:
+                        continue
+                    if src not in file_map:
+                        file_map[src] = {
+                            "name": src,
+                            "file_type": meta.get(
+                                "file_type", os.path.splitext(src)[1] or ".pdf"
+                            ),
+                            "chunk_count": 0,
+                            "indexed_at": meta.get("indexed_at", ""),
+                            "parser_type": meta.get("parser_type", "docling"),
+                            "authors": meta.get("doc_authors", ""),
+                            "doi": meta.get("doc_doi", ""),
+                            "journal": meta.get("doc_journal", ""),
+                        }
+                    file_map[src]["chunk_count"] += 1
+                if offset is None:
+                    break
 
             return list(file_map.values())
 
@@ -1645,27 +1777,36 @@ Summary:"""
             return []
 
     def delete_source(self, filename: str, user_id: str = "default") -> bool:
-        """Remove a source completely for a specific user: delete its chunks from ChromaDB."""
+        """Remove a source completely: delete its chunks from Qdrant +
+        prune the parent store + delete the uploaded file.
+        """
+        from qdrant_client.http import models as qmodels
+
         try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(
-                where={"source": filename},
-                include=["metadatas"],
+            self._get_user_collection(user_id)  # ensure collection exists
+            client = self._get_qdrant_client()
+            collection_name = self._get_user_collection_name(user_id)
+
+            client.delete(
+                collection_name=collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="metadata.source",
+                                match=qmodels.MatchValue(value=filename),
+                            )
+                        ]
+                    )
+                ),
             )
-            ids_to_delete = result.get("ids", [])
+            logger.info(
+                f"Deleted chunks for '{filename}' from user {user_id}'s Qdrant collection"
+            )
 
-            if ids_to_delete:
-                collection.delete(ids=ids_to_delete)
-                logger.info(
-                    f"Deleted {len(ids_to_delete)} chunks for '{filename}' from user {user_id}'s ChromaDB"
-                )
-
-            # Clean up orphaned parent chunks
             self._cleanup_parent_store(user_id)
             delete_user_upload_file(user_id, filename)
             self._invalidate_user_collection(user_id)
-
             return True
         except Exception as e:
             self._invalidate_user_collection(user_id)
@@ -1673,27 +1814,30 @@ Summary:"""
             return False
 
     def reset_rag(self, user_id: str = "default") -> bool:
-        """Permanently delete all indexed chunks from a specific user's ChromaDB."""
+        """Permanently delete all indexed data for a user.
+
+        Drops the Qdrant collection (one atomic call — no per-id delete
+        loop needed), clears the parent-store JSON, and removes uploads.
+        """
         try:
-            vectorstore = self._get_user_collection(user_id)
-            collection = vectorstore._collection
-            result = collection.get(include=["metadatas"])
-            all_ids = result.get("ids", [])
+            client = self._get_qdrant_client()
+            collection_name = self._get_user_collection_name(user_id)
+            try:
+                client.delete_collection(collection_name=collection_name)
+                logger.info(f"Deleted Qdrant collection {collection_name} for user {user_id}")
+            except Exception as exc:
+                # Collection might not exist yet — benign.
+                logger.info(
+                    f"Qdrant collection delete for {user_id} skipped: {exc!r}"
+                )
 
-            if all_ids:
-                collection.delete(ids=all_ids)
-                logger.info(f"Deleted all {len(all_ids)} chunks for user {user_id}")
-
-            # Clear parent store
             parent_path = self._get_parent_store_path(user_id)
             if os.path.exists(parent_path):
                 os.remove(parent_path)
                 logger.info(f"Deleted parent store for user {user_id}")
 
             delete_user_uploads(user_id)
-
             self._invalidate_user_collection(user_id)
-
             return True
         except Exception as e:
             self._invalidate_user_collection(user_id)
@@ -1701,35 +1845,23 @@ Summary:"""
             return False
 
     def cleanup_user(self, user_id: str) -> bool:
-        """Clean up all data for a user when they close their browser.
-        Deletes: ChromaDB collection folder + uploads folder for this user."""
+        """Delete all data for a user when they close their browser.
+
+        Drops the Qdrant collection, the parent-store JSON, and the
+        uploads folder. Idempotent and safe to call repeatedly.
+        """
         success = True
 
-        # 0. Empty Chroma collection first (always works even if folder is locked)
         try:
             self.reset_rag(user_id)
         except Exception as e:
-            logger.warning(f"Could not empty collection cleanly: {e}")
+            logger.warning(f"Could not reset user data cleanly: {e}")
+            success = False
 
-        # 1. Remove from cache and force garbage collection to release Windows SQLite file locks
         self._invalidate_user_collection(user_id)
-        time.sleep(0.4)
 
-        # 2. Delete user's ChromaDB folder
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        user_chroma_dir = os.path.join(config.chroma_dir, safe_user_id)
-
-        try:
-            if os.path.exists(user_chroma_dir):
-                import shutil
-
-                shutil.rmtree(user_chroma_dir)
-                logger.info(f"Deleted ChromaDB folder: {user_chroma_dir}")
-        except Exception as e:
-            logger.warning(f"Could not fully delete ChromaDB folder: {e}")
-            # Ensure the SQLite DB is at least emptied via reset_rag
-
-        # 2b. Delete parent store file
+        # Belt-and-suspenders: ensure the parent store is gone even if
+        # reset_rag's path wasn't reached.
         parent_path = self._get_parent_store_path(user_id)
         try:
             if os.path.exists(parent_path):
@@ -1738,7 +1870,6 @@ Summary:"""
         except Exception as e:
             logger.warning(f"Could not delete parent store: {e}")
 
-        # 3. Delete user's uploads folder
         try:
             delete_user_uploads(user_id)
         except Exception as e:

@@ -8,12 +8,12 @@ logger = logging.getLogger(__name__)
 @router.get("/ready")
 async def readiness_check():
     """
-    Check if the service and its dependencies (Ollama, ChromaDB) are ready.
+    Check if the service and its dependencies (Ollama, Qdrant) are ready.
     Used by load balancers and orchestrators.
     """
     health_status = {
         "status": "ready",
-        "dependencies": {"ollama": "unknown", "chromadb": "deferred"},
+        "dependencies": {"ollama": "unknown", "qdrant": "deferred"},
     }
 
     # 1. Check Ollama
@@ -31,18 +31,17 @@ async def readiness_check():
         health_status["dependencies"]["ollama"] = "unreachable"
         health_status["status"] = "partial"
 
-    # 2. Check ChromaDB
+    # 2. Check Qdrant — only if the RAG service has been booted.
     try:
-        # Simple count check
         from backend.services.rag_engine import peek_rag_service
         service = peek_rag_service()
         if service is not None:
-            vectorstore = service._get_user_collection("health_probe")
-            vectorstore._collection.count()
-            health_status["dependencies"]["chromadb"] = "up"
+            qclient = service._get_qdrant_client()
+            qclient.get_collections()
+            health_status["dependencies"]["qdrant"] = "up"
     except Exception as e:
-        logger.error(f"Health check failed for ChromaDB: {e}")
-        health_status["dependencies"]["chromadb"] = "down"
+        logger.error(f"Health check failed for Qdrant: {e}")
+        health_status["dependencies"]["qdrant"] = "down"
         health_status["status"] = "down"
 
     if health_status["status"] == "down":

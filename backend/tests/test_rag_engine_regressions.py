@@ -8,12 +8,67 @@ from types import SimpleNamespace
 def load_rag_engine_module():
     sys.modules.pop("backend.services.rag_engine", None)
 
-    chroma_mod = types.ModuleType("langchain_chroma")
+    # langchain_qdrant stub — only QdrantVectorStore is imported lazily
+    # by rag_engine; tests bypass it via mocked vectorstores.
+    qdrant_lc_mod = types.ModuleType("langchain_qdrant")
 
-    class Chroma:
-        pass
+    class QdrantVectorStore:
+        def __init__(self, client=None, collection_name=None, embedding=None, **kwargs):
+            self.client = client
+            self.collection_name = collection_name
+            self.embedding = embedding
 
-    chroma_mod.Chroma = Chroma
+    qdrant_lc_mod.QdrantVectorStore = QdrantVectorStore
+
+    # qdrant_client stub — needed for QdrantClient + qmodels filter classes.
+    qclient_pkg = types.ModuleType("qdrant_client")
+    qhttp_pkg = types.ModuleType("qdrant_client.http")
+    qmodels_mod = types.ModuleType("qdrant_client.http.models")
+
+    class QdrantClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_collections(self):
+            return SimpleNamespace(collections=[])
+
+        def get_collection(self, *args, **kwargs):
+            raise Exception("not found")
+
+        def create_collection(self, *args, **kwargs):
+            return None
+
+        def delete_collection(self, *args, **kwargs):
+            return None
+
+        def delete(self, *args, **kwargs):
+            return None
+
+        def scroll(self, *args, **kwargs):
+            return ([], None)
+
+    class _QStub:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class Distance:
+        COSINE = "Cosine"
+        DOT = "Dot"
+        EUCLID = "Euclid"
+
+    qmodels_mod.VectorParams = _QStub
+    qmodels_mod.SparseVectorParams = _QStub
+    qmodels_mod.SparseIndexParams = _QStub
+    qmodels_mod.Distance = Distance
+    qmodels_mod.Filter = _QStub
+    qmodels_mod.FieldCondition = _QStub
+    qmodels_mod.MatchValue = _QStub
+    qmodels_mod.FilterSelector = _QStub
+    qmodels_mod.PointIdsList = _QStub
+    qhttp_pkg.models = qmodels_mod
+    qclient_pkg.QdrantClient = QdrantClient
+    qclient_pkg.http = qhttp_pkg
 
     splitters_mod = types.ModuleType("langchain_text_splitters")
 
@@ -76,24 +131,48 @@ def load_rag_engine_module():
     documents_mod.Document = Document
     core_pkg.documents = documents_mod
 
-    sys.modules["langchain_chroma"] = chroma_mod
+    # langchain_core.embeddings stub — PhytoQueryEmbeddings now inherits
+    # from this so langchain-qdrant's isinstance() check passes.
+    embeddings_mod = types.ModuleType("langchain_core.embeddings")
+
+    class Embeddings:
+        def embed_documents(self, texts):
+            raise NotImplementedError
+
+        def embed_query(self, text):
+            raise NotImplementedError
+
+    embeddings_mod.Embeddings = Embeddings
+    core_pkg.embeddings = embeddings_mod
+
+    sys.modules["langchain_qdrant"] = qdrant_lc_mod
+    sys.modules["qdrant_client"] = qclient_pkg
+    sys.modules["qdrant_client.http"] = qhttp_pkg
+    sys.modules["qdrant_client.http.models"] = qmodels_mod
     sys.modules["langchain_text_splitters"] = splitters_mod
     sys.modules["langchain_experimental"] = experimental_pkg
     sys.modules["langchain_experimental.text_splitter"] = experimental_splitter_mod
     sys.modules["sentence_transformers"] = sentence_transformers_mod
     sys.modules["langchain_core"] = core_pkg
     sys.modules["langchain_core.documents"] = documents_mod
+    sys.modules["langchain_core.embeddings"] = embeddings_mod
 
     return importlib.import_module("backend.services.rag_engine")
 
 
 def make_service(rag_engine):
+    import threading
     service = object.__new__(rag_engine.RAGService)
-    service._get_user_collection = lambda user_id: SimpleNamespace()
+    service._get_user_collection = lambda user_id: SimpleNamespace(collection_name="user_test_xx")
     service.embeddings = SimpleNamespace(
         begin_timing_session=lambda: None,
         consume_timing_session=lambda: {"calls": 0, "total_ms": 0.0, "texts": 0},
+        model_name="stub-model",
+        model_dim=8,
     )
+    service._vectorstore_cache = {}
+    service._qdrant_client = None
+    service._qdrant_lock = threading.Lock()
     return service
 
 
@@ -259,6 +338,9 @@ def test_ragservice_does_not_retry_zerank_on_cpu_when_versions_are_incompatible(
             calls["count"] += 1
 
     monkeypatch.setattr(rag_engine, "CrossEncoder", FailingCrossEncoder)
+    # Force a zerank model so the version check fires (the assertion is
+    # specifically that incompatible zerank versions skip CPU retry).
+    monkeypatch.setattr(rag_engine.config, "reranker_model", "zeroentropy/zerank-2")
 
     service = rag_engine.RAGService()
 
@@ -271,21 +353,9 @@ def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch
     service = make_service(rag_engine)
     doc_cls = rag_engine.Document
 
-    class FakeCollection:
-        def __init__(self):
-            self.deleted_ids = []
-
-        def get(self, where=None, include=None):
-            if where == {"source": "paper.pdf"}:
-                return {"ids": ["old-chunk-1"], "metadatas": [{"parent_id": "old-parent"}]}
-            return {"ids": [], "metadatas": []}
-
-        def delete(self, ids=None):
-            self.deleted_ids.append(list(ids or []))
-
     class FakeVectorstore:
         def __init__(self):
-            self._collection = FakeCollection()
+            self.collection_name = "user_test_xx"
             self.added_documents = None
 
         def add_documents(self, docs):
@@ -293,6 +363,33 @@ def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch
 
     vectorstore = FakeVectorstore()
     cleanup_calls = []
+    delete_calls = []
+
+    class FakeQdrantClient:
+        def get_collections(self):
+            return SimpleNamespace(collections=[])
+
+        def get_collection(self, *a, **kw):
+            return SimpleNamespace()
+
+        def delete(self, collection_name=None, points_selector=None, **kw):
+            # Qdrant-style filter delete — record the collection + selector
+            # for assertion. The points_selector is a FilterSelector wrapping
+            # a Filter with `should` clauses on metadata.source.
+            delete_calls.append({
+                "collection_name": collection_name,
+                "selector": points_selector,
+            })
+
+        def delete_collection(self, *a, **kw):
+            return None
+
+        def scroll(self, *a, **kw):
+            return ([], None)
+
+    fake_client = FakeQdrantClient()
+    service._get_qdrant_client = lambda: fake_client
+    service._get_user_collection_name = lambda user_id: "user_test_xx"
     service._get_user_collection = lambda user_id: vectorstore
     service._invalidate_user_collection = lambda user_id: None
     service._cleanup_parent_store = lambda user_id: cleanup_calls.append(user_id)
@@ -317,7 +414,10 @@ def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch
 
     assert indexed_files == ["paper.pdf"]
     assert extracted_texts == {"paper.pdf": "extracted body text"}
-    assert vectorstore._collection.deleted_ids == [["old-chunk-1"]]
+    # Qdrant filter-delete fired with the right collection name.
+    assert any(
+        call["collection_name"] == "user_test_xx" for call in delete_calls
+    )
     assert vectorstore.added_documents is not None
     assert cleanup_calls == ["sess_1"]
 
