@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { MagnifyingGlass, Chats, Folder, FlowerTulip } from '@phosphor-icons/react';
+import { useTheme } from '../lib/theme';
 
 interface HeaderProps {
   isLoading?: boolean;
@@ -11,19 +12,29 @@ const Header: React.FC<HeaderProps> = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const isSearch = location.pathname === '/';
   const isMyPapers = location.pathname === '/mypapers';
   const isChat = location.pathname === '/chat';
 
   return (
     <header className="h-16 flex items-center px-8 bg-white border-b border-slate-100 sticky top-0 z-30 justify-between">
-      <button
-        onClick={() => navigate('/')}
-        className="flex items-center space-x-3 hover:opacity-80 transition-opacity"
-      >
-        <FlowerTulip size={32} color="#db1f83" />
-        <span className="text-xl font-bold text-slate-900 title-font">PhytoQuery</span>
-      </button>
+      <div className="flex items-center space-x-3">
+        <button
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="theme-toggle grid place-items-center rounded-lg p-1 hover:bg-slate-100 transition-colors"
+        >
+          <FlowerTulip size={32} color="#db1f83" weight={theme === 'dark' ? 'fill' : 'regular'} />
+        </button>
+        <button
+          onClick={() => navigate('/')}
+          className="hover:opacity-80 transition-opacity"
+        >
+          <span className="text-xl font-bold text-slate-900 title-font">PhytoQuery</span>
+        </button>
+      </div>
 
       <div className="flex items-center space-x-4">
         {isLoading && (

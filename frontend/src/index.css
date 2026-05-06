@@ -4,6 +4,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Tailwind v4 dark variant — class-based, opt-in via <html class="dark">.
+   Driven by the useTheme() hook in src/lib/theme.ts (flower-icon click). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* CSS Variables - SaaS Dashboard Palette */
 :root {
     --font-inter: 'Inter', sans-serif;
@@ -714,3 +718,102 @@ mark.ner-default {
 }
 
 /* Removed dark mode overrides */
+
+/* ============================================
+   DARK MODE
+   ============================================ */
+
+/* True-black palette (OLED-friendly). Pure #000 body, near-black surfaces
+   for subtle elevation, neutral grays for borders/secondary text — no
+   slate/blue tint anywhere. Overrides the CSS variables declared in :root
+   so all chrome (header, sidebar, cards, body, article reader) flips. */
+:root.dark {
+    --bg-neutral: #000000;        /* pure black body */
+    --card-bg: #0a0a0a;           /* near-black surfaces, just off body */
+    --border-soft: #1a1a1a;       /* very subtle dividers */
+    --text-primary: #fafafa;      /* near-white */
+    --text-secondary: #a1a1aa;    /* zinc-400 */
+    --header-bg: #000000;         /* header sits flush with body */
+    --sidebar-bg: #000000;
+    --tab-inactive: #71717a;      /* zinc-500 */
+    --accent-blue: #60a5fa;       /* slightly lighter blue for legibility on black */
+    --accent-blue-soft: #1e40af33;/* translucent blue for hovers/highlights */
+    /* Entity-highlight alpha bumped so colored marks stay readable on black. */
+    --entity-highlight-alpha: 0.32;
+    --entity-highlight-border-alpha: 0.42;
+    --entity-default: #d4d4d8;
+    --entity-default-rgb: 212 212 216;
+}
+
+/* Smooth animation for the toggle. Kept narrow (color/background/border)
+   so we don't accidentally animate layout properties. */
+html, body, header, aside, main, nav, button, input, textarea,
+.saas-card, .article-prose, .article-table-wrap, .article-figure {
+    transition: background-color 220ms ease,
+                color 220ms ease,
+                border-color 220ms ease,
+                box-shadow 220ms ease;
+}
+
+/* Flower-icon rotation feedback when toggling. Lives on the .theme-toggle
+   button in Header.tsx; the SVG flips a half-turn so it visually "blooms". */
+.theme-toggle svg {
+    transition: transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+:root.dark .theme-toggle svg {
+    transform: rotate(180deg);
+}
+
+/* ----- Tailwind utility overrides under .dark -----
+   Components across the app use raw Tailwind classes like `bg-white`,
+   `text-slate-900`, `border-slate-100`. We map the most common ones to
+   dark equivalents using `:where()` so the specificity is 0 — components
+   that explicitly opt out (e.g. by adding their own `dark:bg-...`) keep
+   winning. */
+
+/* Backgrounds — pure black body, near-black for elevated surfaces. */
+:root.dark :where(.bg-white)        { background-color: #0a0a0a !important; }
+:root.dark :where(.bg-slate-50)     { background-color: #000000 !important; }
+:root.dark :where(.bg-slate-100)    { background-color: #141414 !important; }
+:root.dark :where(.bg-slate-200)    { background-color: #1f1f1f !important; }
+:root.dark :where(.bg-gray-50)      { background-color: #000000 !important; }
+:root.dark :where(.bg-gray-100)     { background-color: #141414 !important; }
+:root.dark :where(.bg-gray-200)     { background-color: #1f1f1f !important; }
+:root.dark :where(.bg-notebook-blue){ background-color: #0a0a0a !important; }
+
+/* Text colors — near-white down through neutral grays. */
+:root.dark :where(.text-slate-900)  { color: #fafafa !important; }
+:root.dark :where(.text-slate-800)  { color: #f4f4f5 !important; }
+:root.dark :where(.text-slate-700)  { color: #e4e4e7 !important; }
+:root.dark :where(.text-slate-600)  { color: #a1a1aa !important; }
+:root.dark :where(.text-slate-500)  { color: #a1a1aa !important; }
+:root.dark :where(.text-slate-400)  { color: #a1a1aa !important; }
+:root.dark :where(.text-gray-900)   { color: #fafafa !important; }
+:root.dark :where(.text-gray-800)   { color: #f4f4f5 !important; }
+:root.dark :where(.text-gray-700)   { color: #e4e4e7 !important; }
+:root.dark :where(.text-gray-600)   { color: #a1a1aa !important; }
+:root.dark :where(.text-gray-500)   { color: #a1a1aa !important; }
+:root.dark :where(.text-black)      { color: #fafafa !important; }
+
+/* Borders — subtle, neutral. */
+:root.dark :where(.border-slate-100){ border-color: #1a1a1a !important; }
+:root.dark :where(.border-slate-200){ border-color: #262626 !important; }
+:root.dark :where(.border-slate-300){ border-color: #404040 !important; }
+:root.dark :where(.border-gray-100) { border-color: #1a1a1a !important; }
+:root.dark :where(.border-gray-200) { border-color: #262626 !important; }
+
+/* Hovers — perceptible elevation without going gray. */
+:root.dark :where(.hover\:bg-slate-50:hover)  { background-color: #141414 !important; }
+:root.dark :where(.hover\:bg-slate-100:hover) { background-color: #1a1a1a !important; }
+:root.dark :where(.hover\:bg-white:hover)     { background-color: #1a1a1a !important; }
+:root.dark :where(.hover\:bg-gray-50:hover)   { background-color: #141414 !important; }
+:root.dark :where(.hover\:bg-gray-100:hover)  { background-color: #1a1a1a !important; }
+
+/* Shadows on pure black — pure black drop shadows are invisible, so use
+   a faint white inner edge instead via box-shadow inset. */
+:root.dark :where(.shadow-sm) { box-shadow: 0 0 0 1px rgba(255,255,255,0.04) !important; }
+:root.dark :where(.shadow)    { box-shadow: 0 0 0 1px rgba(255,255,255,0.06) !important; }
+:root.dark :where(.shadow-md) { box-shadow: 0 0 0 1px rgba(255,255,255,0.08) !important; }
+
+/* Native form controls + scrollbars follow color-scheme set by useTheme(). */
+:root.dark { color-scheme: dark; }
