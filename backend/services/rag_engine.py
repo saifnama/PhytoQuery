@@ -1730,12 +1730,23 @@ Summary:"""
             client = self._get_qdrant_client()
             collection_name = self._get_user_collection_name(user_id)
 
-            # Existence probe. If missing, the user hasn't indexed
-            # anything — return [] silently rather than creating + scrolling.
+            # Existence probe. ONLY treat 404/"not found" as "no
+            # uploads yet" → []. Any other exception (auth, transport,
+            # local-mode quirks) falls through to the outer try/except
+            # which logs visibly — masking those was hiding the PDF
+            # the user just uploaded.
             try:
                 client.get_collection(collection_name)
-            except Exception:
-                return []
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "not found" in msg or "404" in msg or "doesn't exist" in msg or "does not exist" in msg:
+                    return []
+                # Real error — let it surface, but try to scroll anyway
+                # since the collection might actually exist; some local
+                # Qdrant versions raise on get_collection but scroll fine.
+                logger.warning(
+                    f"get_collection probe raised non-404 for {collection_name}: {exc!r}; attempting scroll anyway"
+                )
 
             file_map: Dict[str, Dict[str, Any]] = {}
             offset = None
