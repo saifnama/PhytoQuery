@@ -1,31 +1,54 @@
 /**
  * assistant-ui chat thread for the PhytoQuery RAG page — daisyUI build.
  *
- * Composes ThreadPrimitive + MessagePrimitive + ComposerPrimitive into
- * a single <Thread /> component, with all surface styling expressed
- * through daisyUI component classes (`chat chat-end chat-bubble`,
- * `btn btn-primary btn-circle`, `loading loading-dots`, `textarea`,
- * etc.) so the component picks up your daisyUI theme tokens
- * automatically.
+ * Composes ThreadPrimitive + MessagePrimitive + ComposerPrimitive +
+ * ActionBarPrimitive + BranchPickerPrimitive into a single <Thread />
+ * component, with all surface styling expressed through daisyUI
+ * classes so the component picks up the theme automatically.
  *
  * Custom slots:
- *   - AssistantMessage renders text via react-markdown and follows it
- *     with a source-pills row, fed from message.metadata.custom.sources.
+ *   - AssistantMessage renders text via MarkdownTextPrimitive (smooth
+ *     streaming + memoized markdown components) and follows it with a
+ *     source-pills row from message.metadata.custom.sources, plus an
+ *     ActionBar (Copy / Reload / Speak) and a BranchPicker.
  *   - UserMessage uses the chat-bubble pattern with the pink brand
- *     color preserved via inline style (so daisyUI theme primary
- *     doesn't shadow the existing branding).
+ *     color preserved as inline style. It renders an inline Composer
+ *     when in edit mode so users can revise prior questions.
+ *   - The Composer swaps between Send and Cancel via ThreadPrimitive.If
+ *     so users can stop slow LLM calls.
+ *   - DefaultEmpty includes ThreadPrimitive.Suggestion starter prompts
+ *     so first-time users have one-click ways to begin.
  */
 
-import { type FC, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { type FC } from 'react';
 import {
+  ActionBarPrimitive,
+  BranchPickerPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   useMessage,
   useThread,
 } from '@assistant-ui/react';
-import { ArrowUp, ArrowDown, CopySimple, Check } from '@phosphor-icons/react';
+import {
+  MarkdownTextPrimitive,
+  unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
+} from '@assistant-ui/react-markdown';
+import {
+  ArrowUp,
+  ArrowDown,
+  CopySimple,
+  Check,
+  Stop,
+  ArrowClockwise,
+  PencilSimple,
+  SpeakerHigh,
+  SpeakerSlash,
+  CaretLeft,
+  CaretRight,
+  X,
+  FilePdf,
+} from '@phosphor-icons/react';
 import type { RagMessageCustomData, RagSource } from './runtime';
 import { exportThreadAsPdf, type ThreadTurn } from './exportPdf';
 
@@ -43,8 +66,7 @@ interface ThreadProps {
 export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col bg-base-100">
-      <ThreadHeader />
-      <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto px-4 py-6">
+      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-6">
         <ThreadPrimitive.Empty>
           <div className="flex h-full items-center justify-center text-base-content/60">
             {emptyContent ?? <DefaultEmpty />}
@@ -59,6 +81,7 @@ export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
         />
 
         <TypingIndicator />
+        <ScrollToBottomButton />
       </ThreadPrimitive.Viewport>
 
       <Composer />
@@ -66,11 +89,12 @@ export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
   );
 };
 
-/** Top bar with the whole-chat Export PDF button. Hidden when there
- * are no messages so it doesn't clutter the empty state. */
-const ThreadHeader: FC = () => {
+/** Whole-chat PDF export button — sits inside the assistant
+ * ActionBar so users can export the conversation without scrolling
+ * to a header. Each assistant turn renders one of these; clicking
+ * any of them produces the same full-chat PDF. */
+const ExportChatPdfButton: FC = () => {
   const thread = useThread();
-  if (thread.messages.length === 0) return null;
 
   const handleExportChat = () => {
     const turns: ThreadTurn[] = thread.messages
@@ -90,23 +114,20 @@ const ThreadHeader: FC = () => {
   };
 
   return (
-    <div className="flex items-center justify-end border-b border-base-200 bg-base-100/80 px-6 py-2 backdrop-blur-sm">
-      <button
-        type="button"
-        onClick={handleExportChat}
-        className="btn btn-ghost btn-sm gap-1.5"
-        title="Download the entire chat as a PDF"
-      >
-        <ArrowDown size={14} weight="bold" />
-        <span>Export Chat (PDF)</span>
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={handleExportChat}
+      className="btn btn-ghost btn-xs btn-square"
+      title="Export entire chat as PDF"
+      aria-label="Export entire chat as PDF"
+    >
+      <FilePdf size={14} weight="regular" />
+    </button>
   );
 };
 
 /** daisyUI loading-dots indicator shown while the assistant is still
- * streaming/computing a response. Wrapped in a chat-bubble so it sits
- * in the message column at the start side. */
+ * streaming/computing a response. */
 const TypingIndicator: FC = () => {
   const thread = useThread();
   if (!thread.isRunning) return null;
@@ -119,6 +140,23 @@ const TypingIndicator: FC = () => {
   );
 };
 
+/** Floating "scroll to latest" button. Auto-disabled when already at
+ * the bottom — clicking it smooth-scrolls the viewport. */
+const ScrollToBottomButton: FC = () => (
+  <ThreadPrimitive.ScrollToBottom asChild>
+    <button
+      type="button"
+      className="btn btn-circle btn-sm absolute bottom-4 right-4 shadow-md disabled:hidden"
+      aria-label="Scroll to latest message"
+      title="Scroll to latest"
+    >
+      <ArrowDown size={16} weight="bold" />
+    </button>
+  </ThreadPrimitive.ScrollToBottom>
+);
+
+/** Empty state — a quiet welcome card. No starter prompts; users
+ * type their own question in the composer. */
 const DefaultEmpty: FC = () => (
   <div className="card max-w-md bg-base-100 shadow-none">
     <div className="card-body items-center text-center">
@@ -131,19 +169,98 @@ const DefaultEmpty: FC = () => (
   </div>
 );
 
+/** Memoized markdown components — react-markdown re-renders every node
+ * on each text update; memoizing each tag means only changed nodes
+ * re-render. Big win once streaming lands. */
+const markdownComponents = memoizeMarkdownComponents({});
+
+/** Markdown renderer — uses MarkdownTextPrimitive with smooth
+ * character-by-character render so streamed answers paint
+ * progressively. Lives in a `prose` container for daisyUI typography. */
+const MarkdownText: FC = () => (
+  <MarkdownTextPrimitive
+    smooth
+    components={markdownComponents}
+    className="prose prose-sm max-w-none"
+  />
+);
+
 const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="chat chat-end">
-    <div
-      className="chat-bubble shadow-sm"
-      style={{ backgroundColor: PINK_USER_BG, color: '#1f2937' }}
-    >
-      <MessagePrimitive.Content
-        components={{
-          Text: ({ text }) => <span className="whitespace-pre-wrap">{text}</span>,
-        }}
-      />
-    </div>
+  <MessagePrimitive.Root className="chat chat-end group">
+    {/* Edit-mode inline composer. When the user clicks ActionBar.Edit
+     * on a previous question, the message swaps to a textarea so they
+     * can revise — submitting forks a new branch from this point. */}
+    <ComposerPrimitive.If editing>
+      <UserEditComposer />
+    </ComposerPrimitive.If>
+
+    <ComposerPrimitive.If editing={false}>
+      <div
+        className="chat-bubble shadow-sm"
+        style={{ backgroundColor: PINK_USER_BG, color: '#1f2937' }}
+      >
+        <MessagePrimitive.Content
+          components={{
+            Text: ({ text }) => <span className="whitespace-pre-wrap">{text}</span>,
+          }}
+        />
+      </div>
+
+      <UserActionBar />
+
+      <BranchPicker />
+    </ComposerPrimitive.If>
   </MessagePrimitive.Root>
+);
+
+/** Inline composer rendered inside a user message when it's in edit
+ * mode. Submitting forks a new branch + re-runs the assistant. */
+const UserEditComposer: FC = () => (
+  <ComposerPrimitive.Root className="w-full max-w-2xl">
+    <div className="flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-100 p-2 shadow-sm">
+      <ComposerPrimitive.Input
+        className="textarea textarea-ghost min-h-[60px] resize-none bg-transparent text-sm focus:outline-none"
+        autoFocus
+      />
+      <div className="flex justify-end gap-2">
+        <ComposerPrimitive.Cancel asChild>
+          <button type="button" className="btn btn-ghost btn-sm gap-1">
+            <X size={14} weight="bold" />
+            Cancel
+          </button>
+        </ComposerPrimitive.Cancel>
+        <ComposerPrimitive.Send asChild>
+          <button
+            type="submit"
+            className="btn btn-sm gap-1 border-none text-white"
+            style={{ backgroundColor: PINK_ACCENT }}
+          >
+            <Check size={14} weight="bold" />
+            Update
+          </button>
+        </ComposerPrimitive.Send>
+      </div>
+    </div>
+  </ComposerPrimitive.Root>
+);
+
+/** Action bar for user messages — just Edit, hover-only. */
+const UserActionBar: FC = () => (
+  <ActionBarPrimitive.Root
+    autohide="not-last"
+    className="chat-footer mt-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100"
+  >
+    <ActionBarPrimitive.Edit asChild>
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs btn-square"
+        title="Edit this question"
+        aria-label="Edit question"
+      >
+        <PencilSimple size={12} weight="regular" />
+      </button>
+    </ActionBarPrimitive.Edit>
+  </ActionBarPrimitive.Root>
 );
 
 interface AssistantMessageProps {
@@ -165,17 +282,9 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
   const sources = customData.sources ?? [];
 
   return (
-    <MessagePrimitive.Root className="chat chat-start">
+    <MessagePrimitive.Root className="chat chat-start group">
       <div className="chat-bubble bg-base-100 border border-base-200 text-base-content shadow-sm">
-        <MessagePrimitive.Content
-          components={{
-            Text: ({ text }) => (
-              <div className="prose prose-sm max-w-none">
-                <ReactMarkdown>{text}</ReactMarkdown>
-              </div>
-            ),
-          }}
-        />
+        <MessagePrimitive.Content components={{ Text: MarkdownText }} />
       </div>
 
       {sources.length > 0 && (
@@ -184,48 +293,116 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
         </div>
       )}
 
-      <div className="chat-footer mt-2">
-        <CopyMessageButton text={readMessageText(message)} />
-      </div>
+      <AssistantActionBar />
+
+      <BranchPicker />
     </MessagePrimitive.Root>
   );
 };
 
-/** Per-message Copy button using daisyUI btn classes. */
-const CopyMessageButton: FC<{ text: string }> = ({ text }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = async () => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (err) {
-      console.error('Copy failed:', err);
-    }
-  };
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className="btn btn-ghost btn-xs gap-1"
-      title={copied ? 'Copied!' : 'Copy answer'}
-      aria-label={copied ? 'Copied!' : 'Copy answer'}
-    >
-      {copied ? (
-        <>
+/** Action bar for assistant messages — Copy, Reload (regenerate),
+ * Speak (TTS via WebSpeechSynthesisAdapter wired in runtime.ts).
+ * Hidden while the thread is running so it doesn't flicker. Visible
+ * always on the last message; hover-only on older messages. */
+const AssistantActionBar: FC = () => (
+  <ActionBarPrimitive.Root
+    hideWhenRunning
+    autohide="not-last"
+    autohideFloat="single-branch"
+    className="chat-footer mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
+  >
+    <ActionBarPrimitive.Copy asChild>
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs btn-square"
+        title="Copy answer"
+        aria-label="Copy answer"
+      >
+        <MessagePrimitive.If copied>
           <Check size={14} weight="bold" className="text-success" />
-          <span>Copied</span>
-        </>
-      ) : (
-        <>
+        </MessagePrimitive.If>
+        <MessagePrimitive.If copied={false}>
           <CopySimple size={14} weight="regular" />
-          <span>Copy</span>
-        </>
-      )}
-    </button>
-  );
-};
+        </MessagePrimitive.If>
+      </button>
+    </ActionBarPrimitive.Copy>
+
+    <ActionBarPrimitive.Reload asChild>
+      <button
+        type="button"
+        className="btn btn-ghost btn-xs btn-square"
+        title="Regenerate this answer"
+        aria-label="Regenerate"
+      >
+        <ArrowClockwise size={14} weight="regular" />
+      </button>
+    </ActionBarPrimitive.Reload>
+
+    <ExportChatPdfButton />
+
+    {/* Speak / StopSpeaking flip based on speaking state. */}
+    <MessagePrimitive.If speaking={false}>
+      <ActionBarPrimitive.Speak asChild>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs btn-square"
+          title="Read this answer aloud"
+          aria-label="Read aloud"
+        >
+          <SpeakerHigh size={14} weight="regular" />
+        </button>
+      </ActionBarPrimitive.Speak>
+    </MessagePrimitive.If>
+    <MessagePrimitive.If speaking>
+      <ActionBarPrimitive.StopSpeaking asChild>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs btn-square"
+          title="Stop reading"
+          aria-label="Stop reading"
+        >
+          <SpeakerSlash size={14} weight="regular" />
+        </button>
+      </ActionBarPrimitive.StopSpeaking>
+    </MessagePrimitive.If>
+  </ActionBarPrimitive.Root>
+);
+
+/** Branch navigator — appears below a message that has alternative
+ * branches (created when user edits or regenerates). Shows
+ * "‹ N / Total ›" with arrow buttons for switching. */
+const BranchPicker: FC = () => (
+  <MessagePrimitive.If hasBranches>
+    <BranchPickerPrimitive.Root
+      hideWhenSingleBranch
+      className="chat-footer mt-1 inline-flex items-center gap-0.5 text-xs text-base-content/60"
+    >
+      <BranchPickerPrimitive.Previous asChild>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs px-1"
+          aria-label="Previous branch"
+          title="Previous branch"
+        >
+          <CaretLeft size={12} weight="bold" />
+        </button>
+      </BranchPickerPrimitive.Previous>
+      <span className="tabular-nums px-1">
+        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
+      </span>
+      <BranchPickerPrimitive.Next asChild>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs px-1"
+          aria-label="Next branch"
+          title="Next branch"
+        >
+          <CaretRight size={12} weight="bold" />
+        </button>
+      </BranchPickerPrimitive.Next>
+    </BranchPickerPrimitive.Root>
+  </MessagePrimitive.If>
+);
 
 interface SourcePillsProps {
   sources: RagSource[];
@@ -238,7 +415,6 @@ const SourcePills: FC<SourcePillsProps> = ({ sources, onSourceClick }) => (
       const label = source.section
         ? `${source.source} · ${source.section}`
         : source.source;
-      // Map score to a daisyUI semantic badge color.
       const badgeClass =
         source.score >= 80
           ? 'badge-success'
@@ -271,16 +447,34 @@ const Composer: FC = () => (
         className="textarea textarea-ghost min-h-[44px] flex-1 resize-none bg-transparent text-base focus:outline-none focus:bg-transparent"
       />
       <div className="pb-1">
-        <ComposerPrimitive.Send asChild>
-          <button
-            type="submit"
-            className="btn btn-circle btn-md border-none text-white shadow-md transition-all hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
-            style={{ backgroundColor: PINK_ACCENT }}
-            aria-label="Send message"
-          >
-            <ArrowUp size={18} weight="bold" />
-          </button>
-        </ComposerPrimitive.Send>
+        {/* While the assistant is running, swap Send for a Cancel
+         * button. ComposerPrimitive.Cancel calls the AbortSignal that
+         * runtime.ts forwards to fetch — cancelling an in-flight LLM
+         * call is immediate, no backend change needed. */}
+        <ThreadPrimitive.If running>
+          <ComposerPrimitive.Cancel asChild>
+            <button
+              type="button"
+              className="btn btn-circle btn-md border-none bg-base-300 text-base-content shadow-md transition-all hover:bg-base-content/20 active:scale-95"
+              aria-label="Stop generating"
+              title="Stop"
+            >
+              <Stop size={18} weight="fill" />
+            </button>
+          </ComposerPrimitive.Cancel>
+        </ThreadPrimitive.If>
+        <ThreadPrimitive.If running={false}>
+          <ComposerPrimitive.Send asChild>
+            <button
+              type="submit"
+              className="btn btn-circle btn-md border-none text-white shadow-md transition-all hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
+              style={{ backgroundColor: PINK_ACCENT }}
+              aria-label="Send message"
+            >
+              <ArrowUp size={18} weight="bold" />
+            </button>
+          </ComposerPrimitive.Send>
+        </ThreadPrimitive.If>
       </div>
     </div>
   </ComposerPrimitive.Root>

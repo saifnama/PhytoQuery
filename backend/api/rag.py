@@ -1,17 +1,20 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, Request, Response, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from typing import Any, List, Optional
 import os
 import shutil
 import uuid
+import json
 import asyncio
 from datetime import datetime, timezone
+from pydantic import BaseModel
 from backend.schemas.schemas import (
     QueryRequest,
     QueryResponse,
     UploadResponse,
     UploadJobStatus,
     IndexedFileInfo,
+    ChatMessage,
 )
 from backend.core.session import attach_session_cookie, get_or_set_session_id
 from backend.core.rag_storage import get_user_upload_file_path
@@ -261,3 +264,86 @@ async def query_rag_json(
         if isinstance(e, rag_engine_module.RAGLLMTimeoutError):
             raise HTTPException(status_code=504, detail=str(e))
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
+
+@router.post("/query/stream")
+async def query_rag_stream(
+    http_request: Request,
+    response: Response,
+    payload: QueryRequest,
+    service: Any = Depends(get_rag_service),
+):
+    """Streaming RAG query — returns NDJSON frames as the LLM produces
+    them. The frontend's runtime adapter consumes this via fetch's
+    streaming body and yields text deltas to assistant-ui.
+
+    One JSON object per line. Frame types:
+      * ``{"type":"text_delta","text":"..."}`` — additive token
+      * ``{"type":"sources","sources":[...]}``  — citation list
+      * ``{"type":"error","error":"..."}``      — fatal mid-stream
+      * ``{"type":"done"}``                     — clean end of stream
+    """
+    user_id = get_or_set_session_id(http_request, response)
+    history = None
+    if payload.chat_history:
+        history = [{"role": m.role, "content": m.content} for m in payload.chat_history]
+
+    async def frame_generator():
+        try:
+            async for frame in service.query_stream(
+                payload.query,
+                filter_files=payload.selected_files,
+                user_id=user_id,
+                chat_history=history,
+            ):
+                yield json.dumps(frame) + "\n"
+        except Exception as e:
+            logger.exception("query_stream endpoint failed")
+            yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+
+    # ``application/x-ndjson`` is the conventional MIME for newline-
+    # delimited JSON streams. ``X-Accel-Buffering: no`` disables
+    # nginx/proxy buffering so chunks reach the browser immediately.
+    return StreamingResponse(
+        frame_generator(),
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+class SuggestRequest(BaseModel):
+    """Body for /api/chat/suggest. Mirrors the recent slice of the
+    conversation that the assistant-ui SuggestionAdapter sends."""
+
+    messages: List[ChatMessage]
+
+
+class SuggestionItem(BaseModel):
+    prompt: str
+
+
+class SuggestResponse(BaseModel):
+    suggestions: List[SuggestionItem]
+
+
+@router.post("/suggest", response_model=SuggestResponse)
+async def suggest_followups(
+    http_request: Request,
+    response: Response,
+    payload: SuggestRequest,
+    service: Any = Depends(get_rag_service),
+):
+    """Return short follow-up question suggestions based on the recent
+    conversation. Used by assistant-ui's SuggestionAdapter to populate
+    "you might also ask…" chips. Always returns 200 with a (possibly
+    empty) list — suggestions are best-effort and never fatal."""
+    get_or_set_session_id(http_request, response)
+    history = [{"role": m.role, "content": m.content} for m in payload.messages]
+    try:
+        prompts = await service.suggest_followups(history)
+    except Exception as e:
+        logger.warning(f"suggest_followups failed: {e}")
+        prompts = []
+    return SuggestResponse(
+        suggestions=[SuggestionItem(prompt=p) for p in prompts]
+    )

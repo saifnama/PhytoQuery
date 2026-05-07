@@ -458,6 +458,129 @@ class OllamaLLM:
         logger.error(f"All retries failed for RAG LLM: {last_exception}")
         raise last_exception
 
+    async def astream(
+        self,
+        prompt: str = None,
+        messages: list = None,
+    ):
+        """Async-iterate streamed text chunks from the LLM.
+
+        Yields plain string deltas as they arrive. Caller accumulates.
+
+        Format handling:
+          - Ollama streams newline-delimited JSON; each line carries
+            ``message.content`` and a final ``done: true`` marker.
+          - OpenAI-compatible (OpenRouter / Groq) streams SSE; each
+            ``data: {...}`` line has ``choices[0].delta.content`` and
+            ends with ``data: [DONE]``.
+        """
+        if messages is not None:
+            msg_list = messages
+        elif prompt is not None:
+            msg_list = [{"role": "user", "content": prompt}]
+        else:
+            raise ValueError("Either prompt or messages must be provided")
+
+        if self.provider == "unconfigured":
+            raise RAGProviderAuthError(
+                "RAG is not configured. Set RAG_GROQ_API_KEY, RAG_OPENROUTER_API_KEY, "
+                "or configure RAG_OLLAMA_URL."
+            )
+
+        headers = {}
+        if self.provider == "ollama":
+            payload = {
+                "model": self.model,
+                "messages": msg_list,
+                "stream": True,
+                "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
+            }
+        else:  # OpenAI-compatible: openrouter, groq
+            payload = {
+                "model": self.model,
+                "messages": msg_list,
+                "temperature": self.temperature,
+                "stream": True,
+            }
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        client = await HttpClientManager.get_client()
+        kwargs = {"json": payload, "timeout": None}
+        if self.provider != "ollama":
+            kwargs["headers"] = headers
+
+        async with client.stream("POST", self.url, **kwargs) as response:
+            if self.provider != "ollama" and response.status_code == 401:
+                env_var = {
+                    "groq": "RAG_GROQ_API_KEY",
+                    "openrouter": "RAG_OPENROUTER_API_KEY",
+                }.get(self.provider, "the provider's API key")
+                raise RAGProviderAuthError(
+                    f"{self.provider.title()} authentication failed. "
+                    f"Check {env_var} or configure RAG_OLLAMA_URL as a fallback."
+                )
+
+            # Surface upstream error bodies. Without aread() the body
+            # is still a streaming iterator, so the default
+            # raise_for_status() message hides the actual provider
+            # error JSON (e.g. Groq's "messages must alternate roles"
+            # or context-window overflow), making 400s impossible to
+            # diagnose from logs alone.
+            if response.status_code >= 400:
+                await response.aread()
+                body_text = response.text or "<empty body>"
+                logger.error(
+                    "LLM stream %s from %s: %s",
+                    response.status_code,
+                    self.url,
+                    body_text[:2000],
+                )
+                raise RuntimeError(
+                    f"{self.provider} streaming failed "
+                    f"({response.status_code}): {body_text[:500]}"
+                )
+
+            async for raw_line in response.aiter_lines():
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                if self.provider == "ollama":
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    msg = data.get("message") or {}
+                    chunk = msg.get("content", "")
+                    if chunk:
+                        yield chunk
+                    if data.get("done"):
+                        break
+                else:
+                    if not line.startswith("data:"):
+                        continue
+                    payload_str = line[len("data:"):].strip()
+                    if not payload_str:
+                        continue
+                    if payload_str == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(payload_str)
+                    except json.JSONDecodeError:
+                        continue
+                    try:
+                        choices = data.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        chunk = delta.get("content") or ""
+                        if chunk:
+                            yield chunk
+                    except (KeyError, IndexError, TypeError):
+                        continue
+
 
 from langchain_core.embeddings import Embeddings as _LCEmbeddings
 
@@ -1437,20 +1560,26 @@ class RAGService:
 
         return sorted_results
 
-    async def query(
+    async def _prepare_query(
         self,
         question: str,
         filter_files: Optional[List[str]] = None,
         user_id: str = "default",
         chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Query the RAG pipeline with conversation memory and hybrid search.
+        """Run retrieval, rerank, parent-resolution and build the LLM
+        prompt. Returns one of two shapes:
 
-        Args:
-            question: The user's natural language question.
-            filter_files: If provided, only search chunks from these source filenames.
-            user_id: User identifier to isolate their documents.
-            chat_history: Previous conversation turns for context.
+          * ``{"answer": str, "sources": []}`` when no context was
+            found — caller can short-circuit and return this directly.
+          * ``{"messages": list, "sources": list}`` when the LLM
+            should be invoked. ``messages`` is ready for either
+            ``OllamaLLM.invoke`` (full answer) or ``OllamaLLM.astream``
+            (token streaming); ``sources`` is the citation list that
+            should accompany the answer.
+
+        Both ``query()`` (non-streaming) and ``query_stream()`` use
+        this so retrieval logic stays in one place.
         """
         vectorstore = self._get_user_collection(user_id)
 
@@ -1690,8 +1819,152 @@ class RAGService:
 Question: {question}"""
         messages.append({"role": "user", "content": user_msg})
 
-        response = await self._invoke_llm(messages=messages, timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS)
-        return {"answer": response.content.strip(), "sources": sources}
+        return {"messages": messages, "sources": sources}
+
+    async def query(
+        self,
+        question: str,
+        filter_files: Optional[List[str]] = None,
+        user_id: str = "default",
+        chat_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """Non-streaming RAG query — returns the full answer in one
+        shot. Frontend uses this as a fallback when the streaming
+        endpoint is unavailable."""
+        prepared = await self._prepare_query(
+            question, filter_files, user_id, chat_history
+        )
+        if "answer" in prepared:
+            return prepared
+
+        response = await self._invoke_llm(
+            messages=prepared["messages"], timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS
+        )
+        return {"answer": response.content.strip(), "sources": prepared["sources"]}
+
+    async def query_stream(
+        self,
+        question: str,
+        filter_files: Optional[List[str]] = None,
+        user_id: str = "default",
+        chat_history: Optional[List[Dict[str, str]]] = None,
+    ):
+        """Streaming RAG query — yields NDJSON-shaped frames suitable
+        for the ``/api/chat/query/stream`` endpoint to forward to the
+        client. Frame types match the frontend's ``StreamFrame`` union:
+
+          * ``{"type": "text_delta", "text": "..."}`` — additive token
+          * ``{"type": "sources",   "sources": [...]}`` — citation list
+          * ``{"type": "error",     "error": "..."}``  — fatal mid-stream
+          * ``{"type": "done"}``                       — clean end
+        """
+        try:
+            prepared = await self._prepare_query(
+                question, filter_files, user_id, chat_history
+            )
+        except Exception as e:
+            yield {"type": "error", "error": str(e)}
+            return
+
+        # No-context short-circuit — emit the canned answer as a single
+        # text_delta so the UI behaves identically to the streaming
+        # path with empty sources.
+        if "answer" in prepared:
+            yield {"type": "text_delta", "text": prepared["answer"]}
+            yield {"type": "sources", "sources": prepared["sources"]}
+            yield {"type": "done"}
+            return
+
+        # Stream LLM tokens. We yield the sources frame *after* the
+        # text completes so the frontend can attach it to the final
+        # message metadata.
+        try:
+            async for chunk in self.llm.astream(messages=prepared["messages"]):
+                if chunk:
+                    yield {"type": "text_delta", "text": chunk}
+        except RAGProviderAuthError as e:
+            yield {"type": "error", "error": f"Auth failed: {e}"}
+            return
+        except Exception as e:
+            logger.exception("query_stream LLM call failed")
+            yield {"type": "error", "error": f"LLM stream failed: {e}"}
+            return
+
+        yield {"type": "sources", "sources": prepared["sources"]}
+        yield {"type": "done"}
+
+    async def suggest_followups(
+        self,
+        chat_history: List[Dict[str, str]],
+        max_suggestions: int = 3,
+    ) -> List[str]:
+        """Return short follow-up question prompts based on the recent
+        conversation. Used by the assistant-ui SuggestionAdapter to
+        populate "you might also ask…" clickable chips. Returns an
+        empty list on any failure — the UI treats suggestions as
+        nice-to-have."""
+        if not chat_history:
+            return []
+
+        # Take the last 3 turns (6 messages max) to keep latency low.
+        window = chat_history[-6:]
+        transcript_lines = []
+        for m in window:
+            role = m.get("role", "user")
+            content = (m.get("content") or "").strip()
+            if not content:
+                continue
+            label = "User" if role == "user" else "Assistant"
+            transcript_lines.append(f"{label}: {content[:600]}")
+        transcript = "\n".join(transcript_lines)
+        if not transcript:
+            return []
+
+        prompt = (
+            "Given the conversation below between a researcher and an "
+            "assistant about scientific papers, propose "
+            f"{max_suggestions} short follow-up questions the user "
+            "might ask next. Each question must:\n"
+            "- be self-contained and clearly worded\n"
+            "- be 12 words or fewer\n"
+            "- not repeat anything already asked\n\n"
+            f"Conversation:\n{transcript}\n\n"
+            "Return ONLY the questions, one per line, with no "
+            "numbering, bullets, or extra prose."
+        )
+
+        try:
+            response = await self._invoke_llm(
+                prompt=prompt,
+                max_retries=1,
+                timeout_seconds=15.0,
+            )
+        except Exception as e:
+            logger.warning(f"suggest_followups LLM call failed: {e}")
+            return []
+
+        raw = (response.content or "").strip()
+        if not raw:
+            return []
+
+        # Split on newlines, strip leading list markers / numbering.
+        lines = []
+        for line in raw.splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            cleaned = re.sub(r"^[\-\*•]\s*", "", cleaned)
+            cleaned = re.sub(r"^\d+[\.\)]\s*", "", cleaned)
+            if not cleaned:
+                continue
+            # Drop any line that is suspiciously not a question
+            # (model occasionally adds preamble like "Here are…").
+            if len(cleaned) < 6:
+                continue
+            lines.append(cleaned)
+            if len(lines) >= max_suggestions:
+                break
+        return lines
 
     async def summarize_document(self, text: str, filename: str) -> str:
         """Generate a brief summary of a document using the LLM."""
