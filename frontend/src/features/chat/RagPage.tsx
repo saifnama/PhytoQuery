@@ -21,12 +21,10 @@ import { Thread } from './assistant/Thread';
 import {
   clearPersistedChatHistory,
   usePhytoQueryRuntime,
+  type Citation,
   type RagSource,
 } from './assistant/runtime';
-
-// Source alias kept for callsite stability — same shape as the
-// assistant-ui runtime's RagSource (source/section/parser_type/score/chunk_text).
-type Source = RagSource;
+import { MarkdownPreviewPanel } from './MarkdownPreviewPanel';
 
 interface UploadedFile {
   name: string;
@@ -135,7 +133,15 @@ const RagPage: React.FC = () => {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [previewSource, setPreviewSource] = useState<Source | null>(null);
+  // ``triggerKey`` is bumped on every citation click so the markdown
+  // preview can restart its flash animation even when the user clicks
+  // the same [N] twice in a row (otherwise React would reconcile the
+  // existing element and the CSS animation wouldn't replay).
+  const [activeCitation, setActiveCitation] = useState<{
+    source: RagSource;
+    citation?: Citation;
+    triggerKey: number;
+  } | null>(null);
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
@@ -664,7 +670,23 @@ const RagPage: React.FC = () => {
       {/* ─── Chat Area (assistant-ui Thread) ─── */}
       <div className="flex-1 flex flex-col relative">
         <AssistantRuntimeProvider runtime={runtime}>
-          <Thread onSourceClick={setPreviewSource} />
+          <Thread
+            onCitationClick={(payload) => {
+              // Ignore clicks where the chunk_id no longer resolves
+              // to a known source (rare; can happen if a stored
+              // assistant message references a chunk we've since
+              // wiped via "Reset all").
+              if (!payload.source) return;
+              setActiveCitation({
+                source: payload.source,
+                citation: payload.citation,
+                // Date.now() is monotonic enough for animation
+                // restart purposes; using a counter would also work
+                // but adds a useRef for no extra value.
+                triggerKey: Date.now(),
+              });
+            }}
+          />
         </AssistantRuntimeProvider>
       </div>
 
@@ -711,64 +733,14 @@ const RagPage: React.FC = () => {
         </aside>
       )}
 
-      {/* ─── Source Preview Panel ─── */}
-      {previewSource && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setPreviewSource(null)}
-          />
-          {/* Panel */}
-          <div className="relative w-full max-w-lg bg-white shadow-2xl border-l border-slate-200 flex flex-col animate-slide-up">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <div className="flex items-center space-x-3">
-                <Eye size={18} className="text-blue-500" />
-                <h3 className="text-sm font-bold text-slate-800">Source Preview</h3>
-              </div>
-              <button
-                onClick={() => setPreviewSource(null)}
-                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {/* Metadata row */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={`text-xs font-bold px-2 py-1 rounded-full ${
-                  previewSource.score >= 80 ? 'bg-green-100 text-green-700'
-                  : previewSource.score >= 60 ? 'bg-yellow-100 text-yellow-700'
-                  : 'bg-red-100 text-red-700'
-                }`}>
-                  {previewSource.score}% Match
-                </span>
-                <span className="text-xs text-slate-400 font-medium">
-                  {previewSource.parser_type === 'pymupdf' ? 'Fast' : 'Detailed'} Parser
-                </span>
-              </div>
-              {/* Source file */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Source</p>
-                <p className="text-sm text-slate-800 font-medium">{previewSource.source}</p>
-                {previewSource.section && (
-                  <p className="text-xs text-slate-500 mt-0.5">{previewSource.section}</p>
-                )}
-              </div>
-              {/* Chunk text */}
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Retrieved Passage</p>
-                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-                  <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-                    {previewSource.chunk_text}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* ─── Citation markdown preview panel ─── */}
+      {activeCitation && (
+        <MarkdownPreviewPanel
+          source={activeCitation.source}
+          citation={activeCitation.citation}
+          triggerKey={activeCitation.triggerKey}
+          onClose={() => setActiveCitation(null)}
+        />
       )}
     </div>
   );

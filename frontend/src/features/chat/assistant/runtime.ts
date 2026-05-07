@@ -34,8 +34,11 @@ import { useMemo, useRef } from 'react';
 
 const HISTORY_STORAGE_KEY = 'pq_chat_history';
 
-/** Source attribution as our backend returns it. */
+/** Source attribution as our backend returns it. ``chunk_id`` is the
+ * stable 8-char hex identifier the LLM emits inline (e.g. ``[a3f2c1]``)
+ * and the frontend maps to a 1-based superscript number on render. */
 export interface RagSource {
+  chunk_id?: string;
   source: string;
   section: string;
   parser_type: string;
@@ -43,9 +46,19 @@ export interface RagSource {
   chunk_text: string;
 }
 
-/** Custom metadata key our messages carry so the UI can render sources. */
+/** One verbatim quote backing one claim, returned by Pass 2 of the
+ * citation pipeline. The frontend uses ``quote`` to highlight the
+ * exact span inside the chunk in the markdown preview panel. */
+export interface Citation {
+  chunk_id: string;
+  quote: string;
+}
+
+/** Custom metadata key our messages carry so the UI can render
+ * sources, citations, and link superscripts to chunks. */
 export interface RagMessageCustomData {
   sources?: RagSource[];
+  citations?: Citation[];
 }
 
 function extractMessageText(message: ThreadMessage): string {
@@ -106,14 +119,16 @@ async function postQuery(
 }
 
 /** NDJSON streaming frame. Backend yields one JSON object per line:
- *   - {type:"text_delta", text:"..."} — additive text token
- *   - {type:"sources", sources:[...]}  — final source list
- *   - {type:"error",   error:"..."}    — fatal error mid-stream
- *   - {type:"done"}                    — clean end of stream
+ *   - {type:"text_delta", text:"..."}        — additive text token
+ *   - {type:"sources", sources:[...]}        — retrieved chunks
+ *   - {type:"citations", citations:[...]}    — pass-2 verbatim quotes
+ *   - {type:"error",   error:"..."}          — fatal error mid-stream
+ *   - {type:"done"}                          — clean end of stream
  */
 type StreamFrame =
   | { type: 'text_delta'; text: string }
   | { type: 'sources'; sources: RagSource[] }
+  | { type: 'citations'; citations: Citation[] }
   | { type: 'error'; error: string }
   | { type: 'done' };
 
@@ -314,6 +329,7 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
         if (streamResponse && streamResponse.ok) {
           let accumulated = '';
           let sources: RagSource[] = [];
+          let citations: Citation[] = [];
           let receivedAnyToken = false;
           let streamErrored = false;
 
@@ -321,9 +337,32 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
             if (frame.type === 'text_delta') {
               accumulated += frame.text;
               receivedAnyToken = true;
-              yield { content: [{ type: 'text', text: accumulated }] };
+              // Re-yield with current sources/citations so the
+              // MarkdownText preprocess can validate [chunk_id]
+              // markers as text streams in (the backend now emits
+              // the sources frame BEFORE text deltas).
+              yield {
+                content: [{ type: 'text', text: accumulated }],
+                metadata: {
+                  custom: { sources, citations } satisfies RagMessageCustomData,
+                },
+              };
             } else if (frame.type === 'sources') {
               sources = frame.sources;
+              // Push the sources update into the message metadata
+              // immediately — without this the frontend wouldn't see
+              // the valid chunk_id set until the final yield, and
+              // markers would render as literal text mid-stream.
+              if (receivedAnyToken) {
+                yield {
+                  content: [{ type: 'text', text: accumulated }],
+                  metadata: {
+                    custom: { sources, citations } satisfies RagMessageCustomData,
+                  },
+                };
+              }
+            } else if (frame.type === 'citations') {
+              citations = frame.citations;
             } else if (frame.type === 'error') {
               streamErrored = true;
               throw new Error(frame.error || 'Stream error');
@@ -333,11 +372,11 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
           }
 
           if (!streamErrored && receivedAnyToken) {
-            // Final yield carries sources on the metadata.
+            // Final yield carries sources + citations on the metadata.
             yield {
               content: [{ type: 'text', text: accumulated }],
               metadata: {
-                custom: { sources } satisfies RagMessageCustomData,
+                custom: { sources, citations } satisfies RagMessageCustomData,
               },
             };
             return;

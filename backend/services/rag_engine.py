@@ -15,7 +15,11 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from backend.core.http_client import HttpClientManager
-from backend.core.rag_storage import delete_user_upload_file, delete_user_uploads
+from backend.core.rag_storage import (
+    delete_user_upload_file,
+    delete_user_uploads,
+    get_user_markdown_file_path,
+)
 
 # ---------------------------------------------------------------------------
 # HEAVY IMPORTS ARE DEFERRED (lazy) to avoid loading PyTorch / transformers
@@ -335,12 +339,20 @@ class OllamaLLM:
         max_retries: int = 3,
         base_delay: float = 2.0,
         timeout_seconds: Optional[float] = None,
+        response_format: Optional[Dict[str, Any]] = None,
     ):
         """Invoke the LLM with either a simple prompt or a full messages list.
 
         Args:
             prompt: Simple string prompt (converted to single user message).
             messages: Full messages list for multi-turn conversations.
+            response_format: When set to ``{"type": "json_object"}`` the
+                LLM is forced into JSON mode. Used by the citation
+                extraction pass (Pydantic-validated downstream).
+                Translated transparently per provider:
+                  - Ollama: payload.format = "json"
+                  - OpenAI-compatible (Groq/OpenRouter): payload.response_format
+                Default ``None`` preserves the prior free-text behavior.
         """
         # Build messages list from either argument
         if messages is not None:
@@ -364,12 +376,18 @@ class OllamaLLM:
                 "stream": False,
                 "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
             }
+            if response_format is not None:
+                # Ollama uses a top-level ``format`` field; "json" enables
+                # grammar-constrained JSON output.
+                payload["format"] = "json"
         else:  # OpenAI-compatible: openrouter, groq
             payload = {
                 "model": self.model,
                 "messages": msg_list,
                 "temperature": self.temperature,
             }
+            if response_format is not None:
+                payload["response_format"] = response_format
             headers = {"Authorization": f"Bearer {self.api_key}"}
 
         last_exception = None
@@ -453,7 +471,13 @@ class OllamaLLM:
         import traceback
 
         err_msg = f"RAG LLM Request URL: {self.url}\nPayload: {payload}\nError: {last_exception}\n{traceback.format_exc()}"
-        with open("rag_error.log", "w") as f:
+        # Explicit utf-8 — payloads carry scientific Unicode (U+2212
+        # minus sign, U+00B1 ±, Greek letters, em-dashes) that the
+        # Windows-default cp1252 codec cannot encode. Without this,
+        # the file write itself raises UnicodeEncodeError which then
+        # propagates back up to the caller and looks like an LLM
+        # failure instead of a logging-side issue.
+        with open("rag_error.log", "w", encoding="utf-8") as f:
             f.write(err_msg)
         logger.error(f"All retries failed for RAG LLM: {last_exception}")
         raise last_exception
@@ -580,6 +604,30 @@ class OllamaLLM:
                             yield chunk
                     except (KeyError, IndexError, TypeError):
                         continue
+
+
+def _quote_matches_chunk(quote: str, chunk_text: str) -> bool:
+    """Loose verbatim check used in citation validation.
+
+    Returns True iff ``quote`` appears in ``chunk_text`` after
+    whitespace + case normalization, OR the longest common substring
+    covers ≥80% of the quote length. The looser fallback handles
+    LLMs that paraphrase one or two words while quoting.
+    Pure stdlib (``difflib``) — no extra dependency.
+    """
+    if not quote or not chunk_text:
+        return False
+    norm_quote = re.sub(r"\s+", " ", quote.lower()).strip()
+    norm_chunk = re.sub(r"\s+", " ", chunk_text.lower())
+    if not norm_quote or len(norm_quote) > len(norm_chunk):
+        return False
+    if norm_quote in norm_chunk:
+        return True
+    from difflib import SequenceMatcher
+
+    matcher = SequenceMatcher(None, norm_quote, norm_chunk, autojunk=False)
+    longest = matcher.find_longest_match(0, len(norm_quote), 0, len(norm_chunk))
+    return longest.size >= len(norm_quote) * 0.8
 
 
 from langchain_core.embeddings import Embeddings as _LCEmbeddings
@@ -819,18 +867,52 @@ class RAGService:
         # Lazy-init semantic child splitter
         self._semantic_splitter = None
 
-    async def _invoke_llm(self, *, prompt: str = None, messages: list = None, timeout_seconds: Optional[float] = None, max_retries: int = 3):
-        try:
-            return await self.llm.invoke(
+    async def _invoke_llm(
+        self,
+        *,
+        prompt: str = None,
+        messages: list = None,
+        timeout_seconds: Optional[float] = None,
+        max_retries: int = 3,
+        response_format: Optional[Dict[str, Any]] = None,
+    ):
+        # Progressive-drop fallback for invokers (notably test fakes
+        # and older shims) that don't accept every kwarg. We try the
+        # richest call first and on each ``TypeError: got an
+        # unexpected keyword argument`` retry without that kwarg.
+        attempts = [
+            dict(
                 prompt=prompt,
                 messages=messages,
                 timeout_seconds=timeout_seconds,
                 max_retries=max_retries,
-            )
-        except TypeError as exc:
-            if "timeout_seconds" not in str(exc):
-                raise
-            return await self.llm.invoke(prompt=prompt, messages=messages)
+                response_format=response_format,
+            ),
+            dict(
+                prompt=prompt,
+                messages=messages,
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+            ),
+            dict(
+                prompt=prompt,
+                messages=messages,
+                max_retries=max_retries,
+            ),
+            dict(prompt=prompt, messages=messages),
+        ]
+        last_type_error: Optional[TypeError] = None
+        for kwargs in attempts:
+            try:
+                return await self.llm.invoke(**kwargs)
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                last_type_error = exc
+                continue
+        # All progressive drops still raised TypeError — surface the
+        # last one so the failure is visible.
+        raise last_type_error  # type: ignore[misc]
 
     @property
     def reranker(self):
@@ -1375,6 +1457,11 @@ class RAGService:
         if not full_text:
             return [], ""
 
+        # Persist the extracted markdown so the citation preview
+        # panel can serve it via /api/chat/files/{name}/markdown.
+        # Best-effort: failures are logged inside the helper.
+        self._save_paper_markdown(user_id, source, full_text)
+
         # 2. Section detection & Chunking (Regex-based fallback)
         sections = self._detect_sections(full_text)
         use_semantic_children = parser_type != "pymupdf"
@@ -1560,6 +1647,132 @@ class RAGService:
 
         return sorted_results
 
+    @staticmethod
+    def _strip_to_body(text: str, title: str = "") -> str:
+        """Strip context-header lines added at chunking time so what
+        remains is the verbatim body that appears in the saved paper
+        markdown.
+
+        Handles every prefix shape the chunking code currently
+        produces:
+          - PyMuPDF:  ``"<doc_title> > <section>\\n\\n<body>"``
+          - PyMuPDF:  ``"<section>\\n\\n<body>"`` (no doc_title)
+          - PyMuPDF:  ``"## <section>\\n\\n<body>"``
+          - Docling:  ``"<doc_title>\\n\\n<contextualized chunk>\\n\\n<body>"``
+          - Docling:  ``"<doc_title>\\n\\n## <section>\\n\\n<body>"``
+
+        Walks lines from the top peeling off anything that looks
+        like a header (markdown heading, doc title, breadcrumb,
+        short non-prose line). Stops at the first line that looks
+        like body prose. The returned text is what
+        ``MarkdownPreviewPanel.findFlexibleSpan`` will look for in
+        the paper markdown — keeping it as a verbatim substring
+        means the exact-match strategy succeeds and the highlight
+        lands precisely.
+        """
+        if not text:
+            return ""
+        lines = text.splitlines()
+        body_start = 0
+        title_norm = title.strip() if title else ""
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                # Blank line — keep walking; final lstrip cleans up.
+                body_start = i + 1
+                continue
+            # Markdown heading line (#, ##, …)
+            if re.match(r"^#{1,6}\s+\S", stripped):
+                body_start = i + 1
+                continue
+            # Exact doc title alone
+            if title_norm and stripped == title_norm:
+                body_start = i + 1
+                continue
+            # Doc title plus breadcrumb continuation
+            if title_norm and stripped.startswith(title_norm + " >"):
+                body_start = i + 1
+                continue
+            # Generic breadcrumb-style header: contains " > ", short,
+            # no terminal sentence punctuation. Body prose wouldn't
+            # match this shape.
+            if (
+                " > " in stripped
+                and len(stripped) < 200
+                and not re.search(r"[.!?:]\s*$", stripped)
+            ):
+                body_start = i + 1
+                continue
+            # Otherwise — looks like body. Stop peeling.
+            break
+
+        body = "\n".join(lines[body_start:]).lstrip("\n").strip()
+        # Defensive: if our walker stripped EVERYTHING (over-eager
+        # heuristic on a short chunk), fall back to the original
+        # text minus leading whitespace. Better fuzz than nothing.
+        return body if body else text.lstrip()
+
+    @staticmethod
+    def _diversify_chunks(
+        chunks: List[Dict[str, Any]],
+        max_keep: int,
+        similarity_threshold: float = 0.60,
+    ) -> List[Dict[str, Any]]:
+        """MMR-lite greedy diversity filter.
+
+        Walks the rerank-ordered candidate list and keeps a chunk
+        only if its lexical bigram Jaccard with EVERY already-kept
+        chunk is below ``similarity_threshold``. Bigrams (rather
+        than unigrams) catch paragraph-level near-duplicates that
+        share most function words but differ in phrasing.
+
+        ``similarity_threshold=0.60`` is empirically the right knob
+        for scientific paper chunks: same-section parents typically
+        score 0.70+, distinct-section chunks score <0.40. Adjust if
+        you have unusually short or unusually similar chunks.
+
+        Pure stdlib — no new dependency.
+        """
+        if not chunks:
+            return []
+
+        def bigrams(text: str) -> set:
+            words = re.findall(r"\w+", text.lower())
+            if len(words) < 2:
+                return set(words)
+            return set(zip(words, words[1:]))
+
+        selected: List[Dict[str, Any]] = []
+        selected_grams: List[set] = []
+
+        for cand in chunks:
+            if len(selected) >= max_keep:
+                break
+            cand_text = (cand.get("doc").page_content if cand.get("doc") else "") or ""
+            cand_grams = bigrams(cand_text)
+            if not cand_grams:
+                # Tiny / empty chunk — keep it (likely a table or
+                # heading) since it can't dominate the LLM context.
+                selected.append(cand)
+                selected_grams.append(cand_grams)
+                continue
+
+            too_similar = False
+            for sel_grams in selected_grams:
+                if not sel_grams:
+                    continue
+                inter = len(cand_grams & sel_grams)
+                denom = min(len(cand_grams), len(sel_grams))
+                if denom and inter / denom >= similarity_threshold:
+                    too_similar = True
+                    break
+            if not too_similar:
+                selected.append(cand)
+                selected_grams.append(cand_grams)
+
+        return selected
+
     async def _prepare_query(
         self,
         question: str,
@@ -1709,16 +1922,23 @@ class RAGService:
         else:
             reranked_children = search_results
 
-        # 3. Parent-Child Resolution: resolve filtered children to unique parents
+        # 3. Parent-Child Resolution: resolve filtered children to
+        # unique parents. We oversample up to 2x ``max_parents`` first
+        # so the diversity filter in step 3.5 has a richer candidate
+        # pool to pick from. Without oversampling, a homogeneous top
+        # of the rerank list would force all our chunks to come from
+        # the same paragraph, which is exactly what produces the
+        # "many citations on one line, all the same content" UX issue.
+        candidate_pool_size = max(config.max_parents * 2, 4)
         parent_ids_seen: set[str] = set()
-        parent_results: List[Dict[str, Any]] = []
+        candidate_parents: List[Dict[str, Any]] = []
 
         for result in reranked_children:
             d = result["doc"]
             ctype = d.metadata.get("content_type", "text")
             if ctype != "text":
                 # Tables pass through directly
-                parent_results.append(result)
+                candidate_parents.append(result)
                 continue
 
             parent_id = d.metadata.get("parent_id")
@@ -1730,7 +1950,7 @@ class RAGService:
             if ptext:
                 from langchain_core.documents import Document
                 # Create a synthetic result with parent text
-                parent_results.append({
+                candidate_parents.append({
                     "doc": Document(
                         page_content=ptext,
                         metadata=d.metadata,
@@ -1739,15 +1959,41 @@ class RAGService:
                     "normalized_score": result.get("normalized_score", 0),
                 })
             else:
-                parent_results.append(result)
+                candidate_parents.append(result)
 
-            if len(parent_results) >= config.max_parents:
+            if len(candidate_parents) >= candidate_pool_size:
                 break
 
-        # 4. Build LLM context from resolved parents
+        # 3.5. Diversity filter — MMR-style greedy selection that
+        # drops candidates whose lexical bigram overlap with already-
+        # selected chunks exceeds the configured threshold. Same-
+        # paragraph parents from one paper section often share 60-80%
+        # of their bigrams; without this filter the LLM gets shown
+        # the same content under different chunk_ids and ends up
+        # citing all of them.
+        parent_results = self._diversify_chunks(
+            candidate_parents, max_keep=config.max_parents
+        )
+
+        # 4. Build LLM context from resolved parents.
+        #
+        # Citation markers are assigned **positionally per turn**
+        # (``c1``, ``c2``, ``c3``, …) — the LlamaIndex
+        # CitationQueryEngine pattern. Critical property: numbering
+        # is scoped to THIS query, not persistent across the
+        # conversation. Earlier we used a deterministic md5-hash id
+        # (same chunk → same id across every turn), which caused a
+        # bug where the LLM would emit a chunk_id from a prior turn
+        # and the frontend would happily resolve it to the same
+        # physical chunk because the hash matched. Positional ids
+        # cannot carry across turns by construction: ``c1`` only
+        # means anything inside the prompt that defined it.
+        # The ``c`` prefix avoids collisions with literal reference
+        # numbers like ``[1]`` that appear naturally in scientific
+        # papers.
         context_parts = []
         sources = []
-        for result in parent_results:
+        for chunk_index, result in enumerate(parent_results):
             d = result["doc"]
             score = result.get("normalized_score", 0)
             ctype = d.metadata.get("content_type", "text")
@@ -1757,8 +2003,10 @@ class RAGService:
             title = d.metadata.get("doc_title", "")
             authors = d.metadata.get("doc_authors", "")
 
+            chunk_id = f"c{chunk_index + 1}"
+
             # Build a rich header for the LLM context
-            header_elements = []
+            header_elements = [f"chunk_id={chunk_id}"]
             if title:
                 header_elements.append(f"Title: {title}")
             if authors:
@@ -1769,19 +2017,39 @@ class RAGService:
 
             header_str = " | ".join(header_elements)
 
+            # Each chunk's body is preceded by a literal ``[chunk_id]``
+            # marker on its own line so the LLM can reference it back
+            # using the same syntax. The header on the next line is
+            # informational only.
             if ctype == "table":
-                context_parts.append(f"[TABLE | {header_str}]:\n{d.page_content}")
+                context_parts.append(
+                    f"[{chunk_id}] [TABLE | {header_str}]:\n{d.page_content}"
+                )
             else:
-                context_parts.append(f"[{header_str}]:\n{d.page_content}")
+                context_parts.append(
+                    f"[{chunk_id}] [{header_str}]:\n{d.page_content}"
+                )
 
             parser_type = d.metadata.get("parser_type", "docling")
+            # Strip every flavor of ingest-time context header
+            # (markdown headings, doc title, breadcrumbs like
+            # "Title > Section") so what we expose as chunk_text is
+            # the verbatim body that lives in the saved paper
+            # markdown. The frontend's exact-substring search then
+            # finds it precisely; without this strip, partial
+            # prefixes prevent exact matching and the highlight
+            # falls back to fuzzy approximation.
+            citable_text = self._strip_to_body(d.page_content, title=title)
             sources.append(
                 {
+                    "chunk_id": chunk_id,
                     "source": src,
                     "section": sec,
                     "parser_type": parser_type,
                     "score": score,
-                    "chunk_text": d.page_content[:500],  # First 500 chars for preview
+                    # Full chunk body — citation matching needs the
+                    # complete text to fuzzy-locate the verbatim quote.
+                    "chunk_text": citable_text,
                 }
             )
 
@@ -1793,24 +2061,80 @@ class RAGService:
                 "sources": [],
             }
 
-        # Build multi-turn messages for conversation memory
+        # Build multi-turn messages for conversation memory.
+        #
+        # The system message is updated to require [chunk_id] markers
+        # after every factual claim. The model has been shown the same
+        # marker format in the chunk headers above, so it has clear
+        # examples to follow. Smaller models (≤7B) sometimes drop
+        # markers — the frontend renders gracefully without them
+        # (just shows the answer text, no superscripts).
         system_msg = {
             "role": "system",
-            "content": "You are a scientific research assistant. Answer questions using ONLY the provided context from research papers. Use markdown formatting. If the context doesn't contain enough information, say so clearly.",
+            "content": (
+                "You are a scientific research assistant. Answer questions "
+                "using ONLY the provided context from research papers. Use "
+                "markdown formatting.\n\n"
+                "CITATION RULES — read carefully:\n"
+                "1. EVERY factual claim in your answer MUST be followed by "
+                "at least one [cN] marker where N is the number of the "
+                "chunk that supports it. The chunks above are labelled "
+                "[c1], [c2], [c3], etc. — copy that exact label. A claim "
+                "without a citation is not allowed.\n"
+                "2. Prefer ONE citation per claim. You may use TWO if and "
+                "only if two chunks contribute genuinely distinct evidence "
+                "to the same claim (e.g., one provides the fact, the "
+                "other the supporting number). NEVER stack 3 or more "
+                "markers on a single claim — if you feel the need to, "
+                "pick the single best one.\n"
+                "3. Distribute citations across the answer: different "
+                "claims should cite different chunks where the chunks "
+                "actually support different facts. Do not anchor every "
+                "claim to the same chunk just because it ranked first in "
+                "the context.\n"
+                "4. Place markers immediately after the claim, before any "
+                "punctuation.\n"
+                "5. Use ONLY [cN] labels that appear verbatim in the "
+                "context above. Never invent labels.\n"
+                "6. If the context does not contain enough information to "
+                "answer, say so clearly without using any markers.\n\n"
+                "FORMAT EXAMPLE (illustrative; placeholders <a> <b> <c> "
+                "stand in for real cN labels — substitute the actual "
+                "labels from YOUR context above):\n"
+                "  \"The first finding is supported by direct evidence[<a>]. "
+                "A separate observation, drawn from a different chunk, "
+                "extends this[<b>]. The third claim combines a fact and "
+                "a measurement reported across two chunks[<a>][<c>].\"\n"
+                "Notice: every claim has a citation; markers are placed "
+                "before punctuation; different claims cite different "
+                "chunks; at most two markers appear together, and only "
+                "when both genuinely contribute distinct evidence."
+            ),
         }
 
         messages = [system_msg]
 
-        # Add conversation history (last 5 turns = 10 messages max)
+        # Add conversation history (last 5 turns = 10 messages max).
+        #
+        # Strip ``[cN]`` citation markers from prior assistant turns.
+        # Per-turn positional ids mean the same label can refer to
+        # different chunks in different turns — so leaving them in
+        # history would actively mislead the LLM. We strip them out;
+        # the prose that remains gives the LLM enough context about
+        # what was previously discussed.
+        marker_pattern = re.compile(r"\[c\d+\]")
         if chat_history:
             history_window = chat_history[-10:]  # Last 5 Q&A pairs
             for msg in history_window:
-                messages.append(
-                    {
-                        "role": msg.get("role", "user"),
-                        "content": msg.get("content", ""),
-                    }
-                )
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "assistant" and content:
+                    # Replace markers with a single space, then collapse
+                    # any double spaces left behind so the prose reads
+                    # cleanly.
+                    content = marker_pattern.sub(" ", content)
+                    content = re.sub(r"  +", " ", content).strip()
+                messages.append({"role": role, "content": content})
 
         # Add current question with context
         user_msg = f"""Context from research papers:
@@ -1875,12 +2199,21 @@ Question: {question}"""
             yield {"type": "done"}
             return
 
-        # Stream LLM tokens. We yield the sources frame *after* the
-        # text completes so the frontend can attach it to the final
-        # message metadata.
+        # Yield the sources frame BEFORE streaming text so the frontend
+        # can populate its valid chunk_id set before any [chunk_id]
+        # markers arrive in the stream. Without this, markers render as
+        # literal "[xxxxxxxx]" text mid-stream and only snap into
+        # superscript badges after the stream completes.
+        yield {"type": "sources", "sources": prepared["sources"]}
+
+        # Stream LLM tokens. We accumulate the full answer text so we
+        # can run a follow-up citation-extraction pass (Pass 2) once
+        # streaming is done.
+        accumulated = ""
         try:
             async for chunk in self.llm.astream(messages=prepared["messages"]):
                 if chunk:
+                    accumulated += chunk
                     yield {"type": "text_delta", "text": chunk}
         except RAGProviderAuthError as e:
             yield {"type": "error", "error": f"Auth failed: {e}"}
@@ -1890,8 +2223,215 @@ Question: {question}"""
             yield {"type": "error", "error": f"LLM stream failed: {e}"}
             return
 
-        yield {"type": "sources", "sources": prepared["sources"]}
+        # Diagnostic: log what the LLM actually cited vs what was
+        # retrieved. Lets us spot at-a-glance whether bad citations
+        # are coming from (a) LLM lazily citing only c1 — narrow set
+        # vs many retrieved, (b) retrieval returning few/homogeneous
+        # chunks — small retrieved set, (c) prompt drift — markers
+        # not following the [cN] format.
+        if accumulated.strip():
+            found_markers = re.findall(r"\[(c\d+)\]", accumulated)
+            unique_cited = sorted(set(found_markers))
+            retrieved_ids = sorted(
+                s["chunk_id"] for s in prepared.get("sources", [])
+            )
+            # Promoted to WARNING so it surfaces at the default
+            # logger threshold most Python apps run at. Semantically
+            # this is diagnostic, not a true warning — but visibility
+            # matters more than label purity here.
+            logger.warning(
+                "[CITATION DIAG] total_markers=%d unique_cited=%d/%d "
+                "retrieved=%s cited=%s",
+                len(found_markers),
+                len(unique_cited),
+                len(retrieved_ids),
+                retrieved_ids,
+                unique_cited,
+            )
+
+        # Pass 2 — extract verbatim quotes per cited chunk_id via
+        # JSON-mode LLM call. Best-effort: any failure (timeout,
+        # malformed JSON from a small model, no markers in the answer)
+        # results in an empty citations list — the answer text and
+        # source list still render correctly.
+        citations: List[Dict[str, Any]] = []
+        if accumulated.strip():
+            try:
+                citations = await self._extract_citations(
+                    accumulated, prepared["sources"]
+                )
+            except Exception as e:
+                logger.warning(f"Citation extraction (pass 2) failed: {e}")
+                citations = []
+        yield {"type": "citations", "citations": citations}
+
         yield {"type": "done"}
+
+    async def _extract_citations(
+        self,
+        answer: str,
+        chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Pass 2 of the citation pipeline — extract verbatim quotes
+        per cited chunk_id from the streamed answer.
+
+        Pipeline:
+          1. Regex-find all ``[hex_id]`` markers actually present in
+             the answer (the LLM may have skipped some chunks).
+          2. Filter ``chunks`` down to just the cited ones.
+          3. Ask the LLM (JSON mode) to map each cited chunk_id to
+             a verbatim quote from that chunk's text.
+          4. Validate the response with the ``Citations`` Pydantic
+             schema, then drop any citation whose ``chunk_id`` isn't
+             in the cited set OR whose ``quote`` doesn't fuzzy-match
+             the chunk text (>=80% via difflib SequenceMatcher).
+          5. Return validated citations as plain dicts.
+
+        Returns ``[]`` on any failure — citations are nice-to-have,
+        the streamed answer is the primary deliverable.
+        """
+        from backend.schemas.schemas import Citations as _CitationsSchema
+
+        # 1. Find chunk_ids actually mentioned in the answer.
+        # Marker format is ``[cN]`` (per-turn positional id).
+        marker_pattern = re.compile(r"\[(c\d+)\]")
+        cited_ids = set(marker_pattern.findall(answer))
+        if not cited_ids:
+            return []
+
+        # 2. Filter chunks down to cited ones.
+        cited_chunks = [c for c in chunks if c.get("chunk_id") in cited_ids]
+        if not cited_chunks:
+            return []
+
+        # 3. Build the JSON-mode prompt. We hand the LLM only the
+        # chunks it actually cited so the prompt stays small and
+        # fits even Ollama's modest 4-8K default context windows.
+        chunks_block = "\n\n".join(
+            f"[{c['chunk_id']}]\n{c.get('chunk_text', '')[:2000]}"
+            for c in cited_chunks
+        )
+
+        prompt = (
+            "You are a citation extractor. Given an ANSWER and the source "
+            "CHUNKS it cites, return a JSON object listing the verbatim "
+            "quote from each chunk that supports the answer's claim about "
+            "that chunk.\n\n"
+            "Rules:\n"
+            "- Output ONLY a JSON object matching: "
+            "{\"citations\": [{\"chunk_id\": \"...\", \"quote\": \"...\"}]}\n"
+            "- Each `quote` MUST be a verbatim substring (or near-verbatim "
+            "phrase) from the matching chunk's text.\n"
+            "- Maximum 300 characters per quote.\n"
+            "- One citation entry per cited chunk_id.\n"
+            "- Do NOT include chunk_ids that do not appear in CHUNKS.\n"
+            "- Do NOT include any prose or explanation outside the JSON.\n\n"
+            f"ANSWER:\n{answer}\n\n"
+            f"CHUNKS:\n{chunks_block}\n\n"
+            "JSON:"
+        )
+
+        try:
+            response = await self._invoke_llm(
+                prompt=prompt,
+                max_retries=1,
+                timeout_seconds=30.0,
+                response_format={"type": "json_object"},
+            )
+        except Exception as e:
+            logger.warning(f"Citation pass-2 LLM call failed: {e}")
+            return []
+
+        raw = (response.content or "").strip()
+        if not raw:
+            return []
+
+        # 4. Pydantic-validate. Strip code fences a few small models
+        # add even in JSON mode.
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE)
+        try:
+            parsed = _CitationsSchema.model_validate_json(raw)
+        except Exception as e:
+            logger.warning(f"Citation JSON failed Pydantic validation: {e}")
+            return []
+
+        # 5. Validate each citation: chunk_id must be cited, quote
+        # must fuzzy-match the chunk text.
+        chunk_text_by_id = {
+            c["chunk_id"]: (c.get("chunk_text") or "") for c in cited_chunks
+        }
+        validated: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+        for cit in parsed.citations:
+            cid = cit.chunk_id.strip()
+            quote = cit.quote.strip()
+            if not cid or not quote:
+                continue
+            if cid not in cited_ids:
+                continue
+            if cid in seen_ids:
+                continue
+            chunk_text = chunk_text_by_id.get(cid, "")
+            if not _quote_matches_chunk(quote, chunk_text):
+                logger.debug(
+                    f"Dropping hallucinated citation for {cid}: "
+                    f"quote not in chunk text"
+                )
+                continue
+            seen_ids.add(cid)
+            # ``verified=True`` is redundant given the chunk_id +
+            # fuzzy-match checks above already passed; we set it
+            # explicitly so the frontend (or future analytics) can
+            # filter on it without relying on list membership alone.
+            validated.append(
+                {"chunk_id": cid, "quote": quote, "verified": True}
+            )
+
+        # Marker completeness check (industry-standard verification step).
+        # Track which [chunk_id] markers in the answer didn't get a
+        # validated quote back — these are markers the LLM emitted but
+        # Pass 2 couldn't substantiate. They surface as a log warning
+        # so operators can spot prompt drift or weak Pass-2 models.
+        unverified_ids = cited_ids - seen_ids
+        total_markers = len(cited_ids)
+        if unverified_ids:
+            logger.warning(
+                "[CITATION DIAG] completeness=%s/%s markers verified; "
+                "unverified=%s",
+                total_markers - len(unverified_ids),
+                total_markers,
+                sorted(unverified_ids),
+            )
+        else:
+            logger.warning(
+                "[CITATION DIAG] completeness=%s/%s markers verified",
+                total_markers,
+                total_markers,
+            )
+
+        return validated
+
+    def _save_paper_markdown(
+        self,
+        user_id: str,
+        source: str,
+        markdown: str,
+    ) -> None:
+        """Persist the extracted markdown view of a paper alongside
+        its PDF so the citation preview panel can serve it later.
+        Best-effort: a write failure is logged but never breaks
+        ingest. Content is utf-8."""
+        if not markdown or not source:
+            return
+        try:
+            md_path = get_user_markdown_file_path(user_id, source)
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(markdown, encoding="utf-8")
+        except Exception as e:
+            logger.warning(
+                f"Failed to save extracted markdown for {source} "
+                f"(user {user_id}): {e}"
+            )
 
     async def suggest_followups(
         self,
@@ -2203,6 +2743,10 @@ Summary:"""
             raise ValueError("Docling returned empty result")
 
         extracted_text = result.document.export_to_markdown()
+
+        # Persist the extracted markdown so the citation preview
+        # panel can serve it via /api/chat/files/{name}/markdown.
+        self._save_paper_markdown(user_id, source, extracted_text)
 
         # Initialize HybridChunker (respects headers and structure)
         try:

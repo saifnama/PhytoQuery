@@ -20,6 +20,15 @@ def get_user_upload_file_path(user_id: str, filename: str) -> Path:
     return get_user_upload_dir(user_id) / filename
 
 
+def get_user_markdown_file_path(user_id: str, filename: str) -> Path:
+    """Return the path where the extracted markdown view of an
+    uploaded file lives. Convention: ``<filename>.md`` next to the
+    original PDF in the per-user upload directory. Used by citation
+    rendering — clicking a [N] superscript opens the paper's
+    extracted markdown with the cited chunk highlighted."""
+    return get_user_upload_dir(user_id) / f"{filename}.md"
+
+
 def get_job_store_dir() -> Path:
     return ensure_dir(RAG_JOBS_DIR)
 

@@ -1,26 +1,31 @@
 /**
  * assistant-ui chat thread for the PhytoQuery RAG page — daisyUI build.
  *
- * Composes ThreadPrimitive + MessagePrimitive + ComposerPrimitive +
- * ActionBarPrimitive + BranchPickerPrimitive into a single <Thread />
- * component, with all surface styling expressed through daisyUI
- * classes so the component picks up the theme automatically.
+ * Citation rendering pipeline (industry-standard two-pass design):
+ *   - Backend streams the answer with inline ``[<chunk_id>]`` markers
+ *     (8-char hex IDs computed server-side per retrieved chunk).
+ *   - ``MarkdownText`` runs a per-render ``preprocess`` that replaces
+ *     each marker with ``[<sup>N</sup>](#cite-<chunk_id>)`` where N is
+ *     a 1-based number assigned in order of first appearance — so the
+ *     reader sees clean ``[1] [2]`` superscripts, while the chunk_id
+ *     stays internal to the data layer.
+ *   - The custom markdown ``a`` component (CitationLink) renders any
+ *     ``#cite-…`` link as a clickable pink badge that calls back into
+ *     RagPage to open the markdown-preview panel.
  *
- * Custom slots:
- *   - AssistantMessage renders text via MarkdownTextPrimitive (smooth
- *     streaming + memoized markdown components) and follows it with a
- *     source-pills row from message.metadata.custom.sources, plus an
- *     ActionBar (Copy / Reload / Speak) and a BranchPicker.
- *   - UserMessage uses the chat-bubble pattern with the pink brand
- *     color preserved as inline style. It renders an inline Composer
- *     when in edit mode so users can revise prior questions.
- *   - The Composer swaps between Send and Cancel via ThreadPrimitive.If
- *     so users can stop slow LLM calls.
- *   - DefaultEmpty includes ThreadPrimitive.Suggestion starter prompts
- *     so first-time users have one-click ways to begin.
+ * No source-pill row anymore — superscripts are the only citation
+ * affordance. Click a badge to view the cited chunk in the paper's
+ * extracted markdown.
  */
 
-import { type FC } from 'react';
+import {
+  type FC,
+  type ReactNode,
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+} from 'react';
 import {
   ActionBarPrimitive,
   BranchPickerPrimitive,
@@ -49,21 +54,40 @@ import {
   X,
   FilePdf,
 } from '@phosphor-icons/react';
-import type { RagMessageCustomData, RagSource } from './runtime';
+import type { Citation, RagMessageCustomData, RagSource } from './runtime';
 import { exportThreadAsPdf, type ThreadTurn } from './exportPdf';
 
 const PINK_ACCENT = '#ff6dba';
 const PINK_USER_BG = '#ffecf6';
 
-interface ThreadProps {
-  /** Optional: invoked when the user clicks a source pill. The parent
-   * (RagPage) handles opening the PDF preview modal. */
-  onSourceClick?: (source: RagSource) => void;
-  /** Welcome card content shown when the thread is empty. */
-  emptyContent?: React.ReactNode;
+/** Payload delivered to RagPage when the user clicks a citation
+ * superscript. ``source`` is set when the chunk_id resolves to a
+ * known retrieved chunk; ``citation`` is set when Pass 2 produced a
+ * verbatim quote for that chunk. Either may be undefined if the LLM
+ * cited an id we no longer have (rare; we ignore those visually). */
+export interface CitationClickPayload {
+  chunkId: string;
+  source?: RagSource;
+  citation?: Citation;
 }
 
-export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
+interface ThreadProps {
+  /** Invoked when the user clicks a citation superscript in an
+   * assistant answer. Parent (RagPage) opens the markdown preview
+   * panel and highlights the cited chunk + verbatim quote. */
+  onCitationClick?: (payload: CitationClickPayload) => void;
+  /** Welcome card content shown when the thread is empty. */
+  emptyContent?: ReactNode;
+}
+
+/** Context that exposes the citation click handler to the static,
+ * memoized markdown ``a`` override without re-creating the component
+ * map per render. */
+const CitationClickContext = createContext<
+  ((chunkId: string) => void) | undefined
+>(undefined);
+
+export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col bg-base-100">
       <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-6">
@@ -76,7 +100,9 @@ export const Thread: FC<ThreadProps> = ({ onSourceClick, emptyContent }) => {
         <ThreadPrimitive.Messages
           components={{
             UserMessage: UserMessage,
-            AssistantMessage: () => <AssistantMessage onSourceClick={onSourceClick} />,
+            AssistantMessage: () => (
+              <AssistantMessage onCitationClick={onCitationClick} />
+            ),
           }}
         />
 
@@ -162,34 +188,110 @@ const DefaultEmpty: FC = () => (
     <div className="card-body items-center text-center">
       <h2 className="card-title text-base-content">Ask about your papers</h2>
       <p className="text-sm text-base-content/70">
-        Upload PDFs in the sidebar, then ask questions. Answers cite the
-        source paper and section.
+        Upload PDFs in the sidebar, then ask questions. Click a citation
+        superscript to see the exact passage in the paper.
       </p>
     </div>
   </div>
 );
 
-/** Memoized markdown components — react-markdown re-renders every node
- * on each text update; memoizing each tag means only changed nodes
- * re-render. Big win once streaming lands. */
-const markdownComponents = memoizeMarkdownComponents({});
+/** Custom ``a`` component that intercepts ``#cite-<chunkId>`` links
+ * (produced by ``MarkdownText``'s preprocess) and renders them as a
+ * clickable pink badge. Click handler is read from
+ * ``CitationClickContext`` so the memoized component map doesn't
+ * need to be rebuilt per message. */
+const CitationLink: FC<{
+  href?: string;
+  children?: ReactNode;
+  className?: string;
+}> = ({ href, children, ...rest }) => {
+  const onCitationClick = useContext(CitationClickContext);
+  if (typeof href === 'string' && href.startsWith('#cite-')) {
+    const chunkId = href.slice('#cite-'.length);
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          onCitationClick?.(chunkId);
+        }}
+        className="citation-badge"
+        title="View source passage"
+        aria-label="View source for citation"
+      >
+        {children}
+      </button>
+    );
+  }
+  return (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  );
+};
 
-/** Markdown renderer — uses MarkdownTextPrimitive with smooth
- * character-by-character render so streamed answers paint
- * progressively. Lives in a `prose` container for daisyUI typography. */
-const MarkdownText: FC = () => (
-  <MarkdownTextPrimitive
-    smooth
-    components={markdownComponents}
-    className="prose prose-sm max-w-none"
-  />
-);
+/** Memoized markdown components — react-markdown re-renders every
+ * node on each text update; memoizing each tag means only changed
+ * nodes re-render. Citation links are routed through CitationLink. */
+const markdownComponents = memoizeMarkdownComponents({
+  a: CitationLink,
+});
+
+/** Markdown renderer with citation preprocessing.
+ *
+ * The preprocess hook runs on every text update (smooth streaming)
+ * and replaces ``[<chunk_id>]`` markers with markdown links of the
+ * form ``[<sup>N</sup>](#cite-<chunk_id>)``. The numbering is built
+ * deterministically from the order chunk_ids first appear in the
+ * answer, so the same id always gets the same number for a given
+ * answer text. Unknown ids (not in the message's ``sources``) are
+ * left as-is so they don't crash — they just render as plain text. */
+const MarkdownText: FC = () => {
+  const message = useMessage();
+  const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
+  const validChunkIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const s of customData.sources ?? []) {
+      if (s.chunk_id) ids.add(s.chunk_id);
+    }
+    return ids;
+  }, [customData.sources]);
+
+  const preprocess = useCallback(
+    (text: string) => {
+      // Marker format is ``[cN]`` per-turn positional id (the
+      // LlamaIndex CitationQueryEngine pattern). Frontend assigns
+      // 1-based display numbers in order of first appearance,
+      // deduped per chunk_id, so re-citing the same chunk shows
+      // the same [N] throughout the answer. The chunk_id stays
+      // ``cN`` internally — only the visible number is renumbered.
+      const numbering = new Map<string, number>();
+      let next = 1;
+      return text.replace(/\[(c\d+)\]/g, (match, id: string) => {
+        if (!validChunkIds.has(id)) return match;
+        if (!numbering.has(id)) {
+          numbering.set(id, next);
+          next += 1;
+        }
+        const n = numbering.get(id);
+        return `[${n}](#cite-${id})`;
+      });
+    },
+    [validChunkIds],
+  );
+
+  return (
+    <MarkdownTextPrimitive
+      smooth
+      components={markdownComponents}
+      preprocess={preprocess}
+      className="prose prose-sm max-w-none"
+    />
+  );
+};
 
 const UserMessage: FC = () => (
   <MessagePrimitive.Root className="chat chat-end group">
-    {/* Edit-mode inline composer. When the user clicks ActionBar.Edit
-     * on a previous question, the message swaps to a textarea so they
-     * can revise — submitting forks a new branch from this point. */}
     <ComposerPrimitive.If editing>
       <UserEditComposer />
     </ComposerPrimitive.If>
@@ -264,7 +366,7 @@ const UserActionBar: FC = () => (
 );
 
 interface AssistantMessageProps {
-  onSourceClick?: (source: RagSource) => void;
+  onCitationClick?: (payload: CitationClickPayload) => void;
 }
 
 /** Extract the plain-text body of a ThreadMessage. */
@@ -276,34 +378,43 @@ function readMessageText(message: { content: readonly { type: string; text?: str
     .trim();
 }
 
-const AssistantMessage: FC<AssistantMessageProps> = ({ onSourceClick }) => {
+const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   const message = useMessage();
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
   const sources = customData.sources ?? [];
+  const citations = customData.citations ?? [];
+
+  // Resolve the chunk_id → {source, citation} payload at click time
+  // so the lookup is fresh even after the message is re-loaded from
+  // sessionStorage on reload.
+  const handleCitationClick = useCallback(
+    (chunkId: string) => {
+      const source = sources.find((s) => s.chunk_id === chunkId);
+      const citation = citations.find((c) => c.chunk_id === chunkId);
+      onCitationClick?.({ chunkId, source, citation });
+    },
+    [sources, citations, onCitationClick],
+  );
 
   return (
-    <MessagePrimitive.Root className="chat chat-start group">
-      <div className="chat-bubble bg-base-100 border border-base-200 text-base-content shadow-sm">
-        <MessagePrimitive.Content components={{ Text: MarkdownText }} />
-      </div>
-
-      {sources.length > 0 && (
-        <div className="chat-footer mt-2">
-          <SourcePills sources={sources} onSourceClick={onSourceClick} />
+    <CitationClickContext.Provider value={handleCitationClick}>
+      <MessagePrimitive.Root className="chat chat-start group">
+        <div className="chat-bubble bg-base-100 border border-base-200 text-base-content shadow-sm">
+          <MessagePrimitive.Content components={{ Text: MarkdownText }} />
         </div>
-      )}
 
-      <AssistantActionBar />
+        <AssistantActionBar />
 
-      <BranchPicker />
-    </MessagePrimitive.Root>
+        <BranchPicker />
+      </MessagePrimitive.Root>
+    </CitationClickContext.Provider>
   );
 };
 
 /** Action bar for assistant messages — Copy, Reload (regenerate),
- * Speak (TTS via WebSpeechSynthesisAdapter wired in runtime.ts).
- * Hidden while the thread is running so it doesn't flicker. Visible
- * always on the last message; hover-only on older messages. */
+ * PDF export, Speak (TTS via WebSpeechSynthesisAdapter wired in
+ * runtime.ts). Hidden while the thread is running so it doesn't
+ * flicker. */
 const AssistantActionBar: FC = () => (
   <ActionBarPrimitive.Root
     hideWhenRunning
@@ -340,7 +451,6 @@ const AssistantActionBar: FC = () => (
 
     <ExportChatPdfButton />
 
-    {/* Speak / StopSpeaking flip based on speaking state. */}
     <MessagePrimitive.If speaking={false}>
       <ActionBarPrimitive.Speak asChild>
         <button
@@ -369,8 +479,7 @@ const AssistantActionBar: FC = () => (
 );
 
 /** Branch navigator — appears below a message that has alternative
- * branches (created when user edits or regenerates). Shows
- * "‹ N / Total ›" with arrow buttons for switching. */
+ * branches (created when user edits or regenerates). */
 const BranchPicker: FC = () => (
   <MessagePrimitive.If hasBranches>
     <BranchPickerPrimitive.Root
@@ -404,39 +513,6 @@ const BranchPicker: FC = () => (
   </MessagePrimitive.If>
 );
 
-interface SourcePillsProps {
-  sources: RagSource[];
-  onSourceClick?: (source: RagSource) => void;
-}
-
-const SourcePills: FC<SourcePillsProps> = ({ sources, onSourceClick }) => (
-  <div className="flex flex-wrap gap-1.5">
-    {sources.map((source, idx) => {
-      const label = source.section
-        ? `${source.source} · ${source.section}`
-        : source.source;
-      const badgeClass =
-        source.score >= 80
-          ? 'badge-success'
-          : source.score >= 60
-            ? 'badge-warning'
-            : 'badge-ghost';
-      return (
-        <button
-          key={`${source.source}-${idx}`}
-          type="button"
-          onClick={() => onSourceClick?.(source)}
-          className={`badge badge-sm ${badgeClass} gap-1 cursor-pointer hover:badge-outline`}
-          title={source.chunk_text.slice(0, 240)}
-        >
-          <span className="truncate max-w-[200px]">{label}</span>
-          <span className="opacity-70">{source.score}%</span>
-        </button>
-      );
-    })}
-  </div>
-);
-
 const Composer: FC = () => (
   <ComposerPrimitive.Root className="border-t border-base-200 bg-base-100 p-4">
     <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-base-200 bg-base-100 px-2 py-1.5 shadow-2xl shadow-base-300/40 focus-within:border-base-300">
@@ -447,10 +523,6 @@ const Composer: FC = () => (
         className="textarea textarea-ghost min-h-[44px] flex-1 resize-none bg-transparent text-base focus:outline-none focus:bg-transparent"
       />
       <div className="pb-1">
-        {/* While the assistant is running, swap Send for a Cancel
-         * button. ComposerPrimitive.Cancel calls the AbortSignal that
-         * runtime.ts forwards to fetch — cancelling an in-flight LLM
-         * call is immediate, no backend change needed. */}
         <ThreadPrimitive.If running>
           <ComposerPrimitive.Cancel asChild>
             <button

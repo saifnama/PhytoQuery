@@ -821,3 +821,122 @@ html, body, header, aside, main, nav, button, input, textarea,
 
 /* Native form controls + scrollbars follow color-scheme set by useTheme(). */
 :root.dark { color-scheme: dark; }
+
+/* Citation superscript badges — produced by Thread.tsx's
+   MarkdownText preprocess that converts inline ``[<chunk_id>]``
+   markers into clickable ``[<sup>N</sup>](#cite-<chunk_id>)`` links.
+   Sized to sit inline with prose without disrupting line height. */
+.citation-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  margin: 0 0.1rem;
+  border-radius: 9999px;
+  background-color: #ffecf6;
+  color: #c2185b;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: super;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.12s ease, color 0.12s ease,
+              border-color 0.12s ease, transform 0.12s ease;
+  text-decoration: none;
+}
+.citation-badge:hover {
+  background-color: #ff6dba;
+  color: #ffffff;
+  border-color: #ff4fa3;
+  transform: translateY(-1px);
+}
+.citation-badge:focus-visible {
+  outline: 2px solid #ff6dba;
+  outline-offset: 2px;
+}
+.citation-badge sup {
+  vertical-align: baseline;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Markdown-preview panel highlights — applied by
+   MarkdownPreviewPanel.tsx when rendering an extracted paper with a
+   cited chunk + verbatim quote. The highlight is a *transient flash*:
+   strong yellow on activation, fading to transparent over the
+   configured duration. The panel re-mounts the markdown container
+   (via React key on a click counter) every time the user clicks a
+   citation, restarting the animation — so re-clicking the same [N]
+   re-fires the flash.
+
+   All values are exposed as CSS custom properties on :root so the
+   timing, easing, breakpoints, and colors can be retuned in one
+   place without touching the keyframes. Dark mode overrides only
+   the *-active-rgb variables; the keyframes themselves are shared. */
+:root {
+  --citation-flash-duration: 2.5s;
+  --citation-flash-easing: ease-out;
+  --citation-flash-chunk-rgb: 255, 230, 0;
+  --citation-flash-quote-rgb: 255, 200, 0;
+  --citation-flash-chunk-opacity-start: 0.45;
+  --citation-flash-chunk-opacity-mid: 0.30;
+  --citation-flash-quote-opacity-start: 0.95;
+  --citation-flash-quote-opacity-mid: 0.70;
+}
+:root.dark {
+  --citation-flash-chunk-opacity-start: 0.30;
+  --citation-flash-chunk-opacity-mid: 0.18;
+  --citation-flash-quote-opacity-start: 0.80;
+  --citation-flash-quote-opacity-mid: 0.55;
+}
+@keyframes citation-chunk-flash {
+  0% {
+    background-color: rgba(
+      var(--citation-flash-chunk-rgb),
+      var(--citation-flash-chunk-opacity-start)
+    );
+  }
+  60% {
+    background-color: rgba(
+      var(--citation-flash-chunk-rgb),
+      var(--citation-flash-chunk-opacity-mid)
+    );
+  }
+  100% {
+    background-color: rgba(var(--citation-flash-chunk-rgb), 0);
+  }
+}
+@keyframes citation-quote-flash {
+  0% {
+    background-color: rgba(
+      var(--citation-flash-quote-rgb),
+      var(--citation-flash-quote-opacity-start)
+    );
+  }
+  60% {
+    background-color: rgba(
+      var(--citation-flash-quote-rgb),
+      var(--citation-flash-quote-opacity-mid)
+    );
+  }
+  100% {
+    background-color: rgba(var(--citation-flash-quote-rgb), 0);
+  }
+}
+.chunk-highlight {
+  padding: 0.05rem 0.1rem;
+  border-radius: 0.25rem;
+  scroll-margin-top: 4rem;
+  animation: citation-chunk-flash var(--citation-flash-duration)
+    var(--citation-flash-easing) forwards;
+}
+.quote-highlight {
+  padding: 0.05rem 0.15rem;
+  border-radius: 0.2rem;
+  font-weight: 600;
+  animation: citation-quote-flash var(--citation-flash-duration)
+    var(--citation-flash-easing) forwards;
+}

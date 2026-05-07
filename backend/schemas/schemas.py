@@ -55,6 +55,43 @@ class QueryResponse(BaseModel):
     sources: List[Dict[str, Any]]
 
 
+# --- Citation schemas (industry-standard structured-output pattern) ---
+#
+# The two-pass pipeline:
+#   Pass 1 (streaming): the LLM emits the answer with [chunk_id] markers
+#                        inline. Frontend renders them as [1] [2] etc.
+#   Pass 2 (one-shot JSON): a fast follow-up call extracts verbatim
+#                            quotes per cited chunk_id. The LLM is
+#                            forced into JSON mode and its output is
+#                            validated against the Citations schema
+#                            below, then fuzzy-matched against the
+#                            actual chunk text to drop hallucinations.
+
+
+class Citation(BaseModel):
+    """One verbatim quote backing one claim in the answer."""
+
+    chunk_id: str = Field(
+        ...,
+        description="The chunk_id of the source chunk that supports this claim.",
+    )
+    quote: str = Field(
+        ...,
+        description="Exact verbatim sentence or phrase from the chunk used.",
+    )
+
+
+class Citations(BaseModel):
+    """Wrapper schema the JSON-mode LLM call must conform to.
+
+    A wrapper rather than a bare list because providers' JSON mode
+    require an object at the top level — bare arrays are rejected
+    by Groq, OpenRouter, and Ollama format='json'.
+    """
+
+    citations: List[Citation] = Field(default_factory=list)
+
+
 class IndexedFileInfo(BaseModel):
     name: str
     file_type: str

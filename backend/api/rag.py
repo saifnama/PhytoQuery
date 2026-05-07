@@ -17,7 +17,10 @@ from backend.schemas.schemas import (
     ChatMessage,
 )
 from backend.core.session import attach_session_cookie, get_or_set_session_id
-from backend.core.rag_storage import get_user_upload_file_path
+from backend.core.rag_storage import (
+    get_user_upload_file_path,
+    get_user_markdown_file_path,
+)
 from backend.core.upload_jobs import UploadJobStore
 from backend.core.user_locks import user_lock_manager
 import logging
@@ -177,6 +180,83 @@ async def get_uploaded_file_content(
     )
     attach_session_cookie(file_response, request, user_id)
     return file_response
+
+
+@router.get("/files/{filename}/markdown")
+async def get_uploaded_file_markdown(
+    request: Request,
+    response: Response,
+    filename: str,
+):
+    """Return the extracted markdown view of an uploaded paper.
+
+    The citation preview panel calls this to render the paper with the
+    cited chunk highlighted. The markdown is normally written to disk
+    at ingest time. For papers ingested before this feature shipped,
+    we lazy-regenerate via ``pymupdf4llm`` on first request — pure
+    side-effect; the next request hits the cached file.
+
+    Response shape: ``{"markdown": "<utf-8 text>"}``.
+    """
+    user_id = get_or_set_session_id(request, response)
+    safe_filename = os.path.basename(filename)
+    if safe_filename != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    md_path = get_user_markdown_file_path(user_id, safe_filename)
+    pdf_path = get_user_upload_file_path(user_id, safe_filename)
+
+    # Lazy regen for legacy uploads. Done in a thread so the event loop
+    # stays responsive on large papers — pymupdf4llm is CPU-bound.
+    if not md_path.is_file():
+        if not pdf_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        def _regen() -> str:
+            import pymupdf4llm
+
+            chunks = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True)
+            text_parts = []
+            for idx, chunk in enumerate(chunks):
+                meta = chunk.get("metadata", {}) or {}
+                if "page" in meta and meta["page"] is not None:
+                    page_num = meta["page"]
+                elif "page_number" in meta and meta["page_number"] is not None:
+                    page_num = meta["page_number"] + 1
+                else:
+                    page_num = idx + 1
+                text = (chunk.get("text") or "").strip()
+                if text:
+                    text_parts.append(f"<!-- Page {page_num} -->\n\n{text}")
+            return "\n\n".join(text_parts)
+
+        try:
+            full_text = await asyncio.to_thread(_regen)
+        except Exception as e:
+            logger.warning(f"Lazy markdown regen failed for {safe_filename}: {e}")
+            raise HTTPException(
+                status_code=500, detail="Failed to extract markdown."
+            )
+
+        try:
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(full_text, encoding="utf-8")
+        except Exception as e:
+            # Cache write failure isn't fatal — we can still return
+            # the regenerated text for this request.
+            logger.warning(f"Failed to cache markdown for {safe_filename}: {e}")
+
+        attach_session_cookie(response, request, user_id)
+        return {"markdown": full_text}
+
+    try:
+        markdown_text = md_path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.error(f"Failed to read cached markdown for {safe_filename}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read markdown.")
+
+    attach_session_cookie(response, request, user_id)
+    return {"markdown": markdown_text}
 
 
 @router.delete("/files/{filename}")
