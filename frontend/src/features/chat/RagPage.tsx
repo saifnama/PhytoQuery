@@ -18,19 +18,11 @@ import {
 } from '@phosphor-icons/react';
 import { buildChatFileContentUrl, paperApi, ragApi } from '../../lib/api';
 import { Thread } from './assistant/Thread';
-import { ThreadList } from './assistant/ThreadList';
 import {
   clearPersistedChatHistory,
   usePhytoQueryRuntime,
   type RagSource,
 } from './assistant/runtime';
-import {
-  clearAllThreads,
-  createThread,
-  deleteThread as deleteThreadFromStore,
-  loadThreads,
-  type StoredThread,
-} from './assistant/threadStore';
 
 // Source alias kept for callsite stability — same shape as the
 // assistant-ui runtime's RagSource (source/section/parser_type/score/chunk_text).
@@ -114,16 +106,13 @@ function SimplePdfViewer({
   );
 }
 
-// Chat history is now persisted per-thread by the assistant-ui runtime
-// under `pq_thread_<id>_history` (see ./assistant/runtime.ts and
-// ./assistant/threadStore.ts). The keys below are only for state
-// outside the chat thread itself.
+// Chat history is persisted by the assistant-ui runtime under
+// `pq_chat_history` (see ./assistant/runtime.ts). The keys below are
+// only for state outside the chat thread itself.
 const SESSION_KEYS = {
   FILES: 'pq_chat_files',
   PARSER: 'pq_chat_parser',
   SIDEBAR: 'pq_chat_sidebar',
-  THREAD_LIST_COLLAPSED: 'pq_thread_list_collapsed',
-  ACTIVE_THREAD: 'pq_active_thread',
 };
 
 const RagPage: React.FC = () => {
@@ -144,47 +133,6 @@ const RagPage: React.FC = () => {
     const saved = sessionStorage.getItem(SESSION_KEYS.SIDEBAR);
     return saved === 'true';
   });
-
-  // ─── Multi-thread state ────────────────────────────────────────────
-  // Threads live in sessionStorage; activeThreadId selects which one
-  // the runtime persists into. Switching threads remounts the runtime
-  // via React's `key` prop on AssistantRuntimeProvider so each thread
-  // gets its own clean ChatModelAdapter + history adapter pair.
-  const [threads, setThreads] = useState<StoredThread[]>(() => loadThreads());
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.ACTIVE_THREAD);
-    if (saved) return saved;
-    // Bootstrap: if there are persisted threads, pick the first.
-    // Otherwise we'll create one in the effect below.
-    const existing = loadThreads();
-    return existing[0]?.id ?? null;
-  });
-  const [threadListCollapsed, setThreadListCollapsed] = useState(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.THREAD_LIST_COLLAPSED);
-    return saved === 'true';
-  });
-
-  // First-load bootstrap: ensure at least one thread exists.
-  useEffect(() => {
-    if (threads.length === 0) {
-      const first = createThread();
-      setThreads([first]);
-      setActiveThreadId(first.id);
-    }
-  }, [threads.length]);
-
-  // Persist sidebar + active-thread state.
-  useEffect(() => {
-    sessionStorage.setItem(
-      SESSION_KEYS.THREAD_LIST_COLLAPSED,
-      String(threadListCollapsed),
-    );
-  }, [threadListCollapsed]);
-  useEffect(() => {
-    if (activeThreadId) {
-      sessionStorage.setItem(SESSION_KEYS.ACTIVE_THREAD, activeThreadId);
-    }
-  }, [activeThreadId]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
@@ -207,46 +155,9 @@ const RagPage: React.FC = () => {
   );
   const runtime = usePhytoQueryRuntime(
     useMemo(
-      () => ({
-        getSelectedFiles,
-        enableSessionPersistence: true,
-        threadId: activeThreadId ?? undefined,
-      }),
-      [getSelectedFiles, activeThreadId],
+      () => ({ getSelectedFiles, enableSessionPersistence: true }),
+      [getSelectedFiles],
     ),
-  );
-
-  // Thread management handlers
-  const handleNewThread = useCallback(() => {
-    const fresh = createThread();
-    setThreads((prev) => [fresh, ...prev]);
-    setActiveThreadId(fresh.id);
-  }, []);
-
-  const handleSelectThread = useCallback((id: string) => {
-    setActiveThreadId(id);
-  }, []);
-
-  const handleDeleteThread = useCallback(
-    (id: string) => {
-      deleteThreadFromStore(id);
-      setThreads((prev) => {
-        const next = prev.filter((t) => t.id !== id);
-        // If we just deleted the active thread, switch to another one
-        // (or auto-create a fresh thread when the list is now empty).
-        if (id === activeThreadId) {
-          if (next.length > 0) {
-            setActiveThreadId(next[0].id);
-          } else {
-            const fresh = createThread();
-            setActiveThreadId(fresh.id);
-            return [fresh];
-          }
-        }
-        return next;
-      });
-    },
-    [activeThreadId],
   );
 
   // Cleanup polling on unmount
@@ -516,13 +427,11 @@ const RagPage: React.FC = () => {
         await ragApi.resetChat();
         closePdfViewer();
         setUploadedFiles([]);
-        // Wipe ALL thread state (multi-thread store + legacy single
-        // key + file list). Hard reload after the purge so the runtime
-        // reinitializes with a fresh empty thread.
-        clearAllThreads();
+        // Clear chat history (runtime-owned) + file list. Hard reload
+        // afterwards so the runtime reinitializes with a fresh empty
+        // thread.
         clearPersistedChatHistory();
         sessionStorage.removeItem(SESSION_KEYS.FILES);
-        sessionStorage.removeItem(SESSION_KEYS.ACTIVE_THREAD);
         window.location.reload();
       } catch (error) {
         console.error('Reset failed:', error);
@@ -539,17 +448,6 @@ const RagPage: React.FC = () => {
 
   return (
     <div className="h-full flex px-0">
-      {/* ─── Chat Thread List Sidebar ─── */}
-      <ThreadList
-        threads={threads}
-        activeThreadId={activeThreadId}
-        collapsed={threadListCollapsed}
-        onToggleCollapsed={() => setThreadListCollapsed((c) => !c)}
-        onSelectThread={handleSelectThread}
-        onNewThread={handleNewThread}
-        onDeleteThread={handleDeleteThread}
-      />
-
       {/* ─── Sources Sidebar ─── */}
       <aside
         className={`border-r border-slate-100 bg-white flex flex-col flex-shrink-0 transition-all duration-200 ${
@@ -765,7 +663,7 @@ const RagPage: React.FC = () => {
 
       {/* ─── Chat Area (assistant-ui Thread) ─── */}
       <div className="flex-1 flex flex-col relative">
-        <AssistantRuntimeProvider key={activeThreadId ?? 'bootstrap'} runtime={runtime}>
+        <AssistantRuntimeProvider runtime={runtime}>
           <Thread onSourceClick={setPreviewSource} />
         </AssistantRuntimeProvider>
       </div>

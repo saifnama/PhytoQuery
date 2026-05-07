@@ -27,12 +27,8 @@ import type {
 } from '@assistant-ui/react';
 import { useLocalRuntime } from '@assistant-ui/react';
 import { useMemo, useRef } from 'react';
-import { historyKeyFor } from './threadStore';
 
-/** Legacy single-thread key. Kept so a user mid-session who hasn't
- * gotten their thread list bootstrapped yet still sees their existing
- * conversation. New code paths use historyKeyFor(threadId) instead. */
-const LEGACY_HISTORY_STORAGE_KEY = 'pq_chat_history';
+const HISTORY_STORAGE_KEY = 'pq_chat_history';
 
 /** Source attribution as our backend returns it. */
 export interface RagSource {
@@ -105,21 +101,14 @@ async function postQuery(
   return response.json();
 }
 
-/** sessionStorage-backed history adapter for a SPECIFIC thread.
- *
- * - When ``threadId`` is provided, history is stored at
- *   ``pq_thread_<threadId>_history`` and is per-thread.
- * - When ``threadId`` is undefined (no thread list initialized yet),
- *   falls back to the legacy single-thread key ``pq_chat_history`` so
- *   pre-existing conversations don't disappear on first load after
- *   the multi-thread upgrade.
- */
-function createSessionHistoryAdapter(threadId: string | undefined): ThreadHistoryAdapter {
-  const key = threadId ? historyKeyFor(threadId) : LEGACY_HISTORY_STORAGE_KEY;
+/** sessionStorage-backed history adapter. Single key — chat history
+ * survives a page reload during the same browser session. Cleared via
+ * the existing "Reset all" flow (clearPersistedChatHistory). */
+function createSessionHistoryAdapter(): ThreadHistoryAdapter {
   return {
     async load() {
       try {
-        const raw = sessionStorage.getItem(key);
+        const raw = sessionStorage.getItem(HISTORY_STORAGE_KEY);
         if (!raw) return { messages: [] };
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.messages)) {
@@ -132,13 +121,13 @@ function createSessionHistoryAdapter(threadId: string | undefined): ThreadHistor
     },
     async append(item) {
       try {
-        const raw = sessionStorage.getItem(key);
+        const raw = sessionStorage.getItem(HISTORY_STORAGE_KEY);
         const repo =
           raw && JSON.parse(raw).messages
             ? JSON.parse(raw)
             : { messages: [] as Array<unknown> };
         repo.messages.push(item);
-        sessionStorage.setItem(key, JSON.stringify(repo));
+        sessionStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(repo));
       } catch (e) {
         console.warn('Failed to persist chat history:', e);
       }
@@ -158,10 +147,6 @@ export interface PhytoQueryRuntimeOptions {
   /** When true, persists thread state to sessionStorage so it survives
    * a page reload within the same browser session. Default true. */
   enableSessionPersistence?: boolean;
-  /** Active thread id. When provided, history is keyed per-thread so
-   * users can maintain multiple parallel chats. Falls back to a single
-   * legacy key when undefined. */
-  threadId?: string;
 }
 
 export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
@@ -209,8 +194,8 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
     () =>
       opts.enableSessionPersistence === false
         ? undefined
-        : createSessionHistoryAdapter(opts.threadId),
-    [opts.enableSessionPersistence, opts.threadId],
+        : createSessionHistoryAdapter(),
+    [opts.enableSessionPersistence],
   );
 
   return useLocalRuntime(adapter, {
@@ -220,11 +205,10 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
 }
 
 /** Public so the parent (RagPage's "Reset all" handler) can clear the
- * legacy single-thread history. Multi-thread state is wiped via
- * ``clearAllThreads`` from ./threadStore. */
+ * persisted chat history alongside the per-user RAG index. */
 export function clearPersistedChatHistory(): void {
   try {
-    sessionStorage.removeItem(LEGACY_HISTORY_STORAGE_KEY);
+    sessionStorage.removeItem(HISTORY_STORAGE_KEY);
   } catch {
     /* noop */
   }
