@@ -264,6 +264,18 @@ export const dashboardApi = {
   },
 };
 
+// Database API
+export const dbApi = {
+  async getPapers(limit: number = 50, offset: number = 0) {
+    const response = await api.get('/paper/db/list', { params: { limit, offset } });
+    return response.data;
+  },
+  async getPaperEntities(doi: string) {
+    const response = await api.get(`/paper/db/${encodeURIComponent(doi)}/entities`);
+    return response.data;
+  },
+};
+
 // Health API
 export const healthApi = {
   async check(): Promise<{ status: string }> {

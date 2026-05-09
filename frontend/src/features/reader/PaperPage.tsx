@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
-import { doiApi, nerApi, paperApi } from '../../lib/api';
+import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api';
 import type { PaperData, Entity } from '../../types';
 
 const PaperPage: React.FC = () => {
@@ -123,7 +123,10 @@ const PaperPage: React.FC = () => {
       setError(null);
 
       try {
-        const data = await nerApi.analyzePaper(doi, false, searchSource);
+        const dataPromise = nerApi.analyzePaper(doi, false, searchSource);
+        const dbEntitiesPromise = dbApi.getPaperEntities(doi).catch(() => ({ entities: [] }));
+
+        const [data, dbData] = await Promise.all([dataPromise, dbEntitiesPromise]);
         
         if (!data || 'error' in data) {
           setError(data.error || 'Paper not found');
@@ -131,9 +134,16 @@ const PaperPage: React.FC = () => {
         }
         
         setPaperData(data);
-        if (data.entities) {
+        
+        // Use DB entities if they exist, otherwise fallback to NER output if any
+        if (dbData && dbData.entities && dbData.entities.length > 0) {
+          setEntities(dbData.entities);
+          setIsExtracted(true);
+        } else if (data.entities && data.entities.length > 0) {
           setEntities(data.entities);
+          setIsExtracted(true);
         }
+        
         // Track if this came from a fallback source
         if (data.fallback_source) {
           setFallbackSource({

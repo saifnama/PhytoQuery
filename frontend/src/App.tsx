@@ -4,6 +4,7 @@ import Header from './layout/Header';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import NerPage from './features/search/NerPage';
 import MyPapersPage from './features/papers/MyPapersPage';
+import DatabasePapersPage from './features/papers/DatabasePapersPage';
 import RagPage from './features/chat/RagPage';
 import PaperPage from './features/reader/PaperPage';
 import { ragApi } from './lib/api';
@@ -36,6 +37,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<NerPage />} />
                 <Route path="/mypapers" element={<MyPapersPage />} />
+                <Route path="/library" element={<DatabasePapersPage />} />
                 <Route path="/chat" element={<RagPage />} />
                 <Route path="/paper/:doi" element={<PaperPage />} />
                 <Route path="/dashboard/3d"

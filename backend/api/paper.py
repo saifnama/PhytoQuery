@@ -15,6 +15,10 @@ from backend.core.caching import ner_cache
 from backend.core.http_client import HttpClientManager
 from bs4 import BeautifulSoup
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from backend.db.database import get_db
+from backend.db.models import Paper, PaperEntity
 
 router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger(__name__)
@@ -461,3 +465,72 @@ async def proxy_pdf(url: str = Query(...)):
         logger.error(f"PDF proxy error for url={url[:100]}: {e}")
         raise HTTPException(status_code=502, detail=f"Failed to fetch PDF: {str(e)}")
 
+
+@router.get("/db/list")
+async def list_papers(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), db: AsyncSession = Depends(get_db)):
+    """Fetch a paginated list of papers from the local SQLite database."""
+    try:
+        # Order by newest first (highest ID)
+        result = await db.execute(select(Paper).order_by(desc(Paper.id)).limit(limit).offset(offset))
+        papers = result.scalars().all()
+        
+        # Get total count for pagination
+        from sqlalchemy import func
+        count_result = await db.execute(select(func.count(Paper.id)))
+        total_count = count_result.scalar() or 0
+        
+        paper_list = [
+            {
+                "id": p.id, 
+                "doi": p.doi, 
+                "title": p.title, 
+                "journal": p.journal, 
+                "year": p.year,
+                "is_open_access": p.is_open_access,
+                "entity_count": p.entity_count
+            } 
+            for p in papers
+        ]
+        
+        return {"total": total_count, "papers": paper_list}
+    except Exception as e:
+        logger.error(f"Error fetching paper list: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/db/{doi:path}/entities")
+async def get_paper_entities(doi: str, db: AsyncSession = Depends(get_db)):
+    """Fetch pre-extracted entities for a paper from the SQLite database using its DOI."""
+    try:
+        clean_id = _normalize_identifier(doi)
+        
+        # 1. Find paper ID by DOI
+        result = await db.execute(select(Paper.id).where(Paper.doi == clean_id))
+        paper_id = result.scalar_one_or_none()
+        
+        if not paper_id:
+            # If not found by exact DOI, try exact match without normalization just in case
+            result = await db.execute(select(Paper.id).where(Paper.doi == doi))
+            paper_id = result.scalar_one_or_none()
+            
+        if not paper_id:
+            return {"entities": []}
+            
+        # 2. Get entities for this paper
+        ent_result = await db.execute(select(PaperEntity).where(PaperEntity.paper_id == paper_id))
+        entities = ent_result.scalars().all()
+        
+        formatted_entities = []
+        for e in entities:
+            # Convert to dictionary format expected by frontend
+            formatted_entities.append({
+                "label": e.label,
+                "text": e.canonical_text,
+                "count": e.mention_count,
+                "metadata": e.metadata_json if e.metadata_json else {}
+            })
+            
+        return {"paper_id": paper_id, "doi": clean_id, "entities": formatted_entities}
+    except Exception as e:
+        logger.error(f"Error fetching entities for {doi}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
