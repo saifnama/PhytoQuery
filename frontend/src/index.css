@@ -877,14 +877,14 @@ html, body, header, aside, main, nav, button, input, textarea,
    place without touching the keyframes. Dark mode overrides only
    the *-active-rgb variables; the keyframes themselves are shared. */
 :root {
-  --citation-flash-duration: 2.5s;
+  --citation-flash-duration: 1.6s;
   --citation-flash-easing: ease-out;
   --citation-flash-chunk-rgb: 255, 230, 0;
   --citation-flash-quote-rgb: 255, 200, 0;
   --citation-flash-chunk-opacity-start: 0.45;
-  --citation-flash-chunk-opacity-mid: 0.30;
+  --citation-flash-chunk-opacity-mid: 0.18;
   --citation-flash-quote-opacity-start: 0.95;
-  --citation-flash-quote-opacity-mid: 0.70;
+  --citation-flash-quote-opacity-mid: 0.55;
 }
 :root.dark {
   --citation-flash-chunk-opacity-start: 0.30;
@@ -936,7 +936,6 @@ html, body, header, aside, main, nav, button, input, textarea,
 .quote-highlight {
   padding: 0.05rem 0.15rem;
   border-radius: 0.2rem;
-  font-weight: 600;
   animation: citation-quote-flash var(--citation-flash-duration)
     var(--citation-flash-easing) forwards;
 }

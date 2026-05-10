@@ -1877,160 +1877,385 @@ class RAGService:
             logger.warning(f"Sentence reranker scoring failed: {e}")
             return sentences[0]
 
+    async def _select_used_chunks(
+        self,
+        question: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        timeout_seconds: float = 25.0,
+    ) -> List[str]:
+        """Structured-output pass: ask the LLM which chunk_ids it
+        used to write the answer.
+
+        Replaces the inline ``[cN]`` marker scheme that depended on
+        the LLM voluntarily following a citation rule (which broke
+        on list-style answers, smaller models, and multi-turn
+        drift). Schema-mode JSON forces the model to commit to a
+        list of chunk_ids — the validator rejects empty/malformed
+        responses, and we additionally constrain the result to ids
+        that were actually retrieved.
+
+        Returns a list of validated chunk_ids in priority order
+        (LLM's stated order). Empty list on any failure — caller
+        should fall back to "use top-N reranked chunks for the
+        whole answer."
+        """
+        if not answer.strip() or not sources:
+            return []
+
+        retrieved_ids = [
+            s["chunk_id"] for s in sources
+            if s.get("chunk_id") and s.get("chunk_text", "").strip()
+        ]
+        if not retrieved_ids:
+            return []
+
+        # Compact chunk catalog — id + first ~400 chars per chunk so
+        # the LLM can identify each one without re-streaming the full
+        # body it already saw during the answering pass.
+        chunks_block = "\n\n".join(
+            f"[{s['chunk_id']}] {(s.get('chunk_text') or '')[:400]}"
+            for s in sources
+            if s.get("chunk_id")
+        )
+
+        prompt = (
+            "You just wrote the ANSWER below using the source CHUNKS. "
+            "List the chunk_ids you actually drew on to write that "
+            "answer.\n\n"
+            "Output ONLY a JSON object of the form:\n"
+            "  {\"chunk_ids\": [\"c1\", \"c3\", ...]}\n\n"
+            "Rules:\n"
+            f"- Use ONLY ids from this list: {retrieved_ids}.\n"
+            "- Order ids by how central they are to the answer (most "
+            "central first).\n"
+            "- Include every chunk that contributed a fact, number, or "
+            "definition you used. Skip chunks you did not use.\n"
+            "- The list MUST contain at least one chunk_id.\n"
+            "- Do NOT include any prose, explanation, or extra fields.\n\n"
+            f"QUESTION:\n{question}\n\n"
+            f"ANSWER:\n{answer}\n\n"
+            f"CHUNKS:\n{chunks_block}\n\n"
+            "JSON:"
+        )
+
+        try:
+            response = await self._invoke_llm(
+                prompt=prompt,
+                max_retries=1,
+                timeout_seconds=timeout_seconds,
+                response_format={"type": "json_object"},
+            )
+        except Exception as e:
+            logger.warning(f"chunk-id selection LLM call failed: {e}")
+            return []
+
+        raw = (response.content or "").strip()
+        if not raw:
+            return []
+        # Some small models still wrap JSON in code fences even in
+        # JSON mode.
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE)
+        try:
+            import json as _json
+            parsed = _json.loads(raw)
+        except Exception as e:
+            logger.warning(f"chunk-id selection JSON parse failed: {e}")
+            return []
+
+        ids_raw = parsed.get("chunk_ids") if isinstance(parsed, dict) else None
+        if not isinstance(ids_raw, list):
+            return []
+
+        valid_set = set(retrieved_ids)
+        out: List[str] = []
+        seen: set = set()
+        for cid in ids_raw:
+            if not isinstance(cid, str):
+                continue
+            cid = cid.strip()
+            if cid in valid_set and cid not in seen:
+                out.append(cid)
+                seen.add(cid)
+        return out
+
     def _reattribute_and_extract(
         self,
         answer: str,
         sources: List[Dict[str, Any]],
+        used_chunk_ids: Optional[List[str]] = None,
     ) -> tuple:
-        """Universal citation correction step. Per the langroid
-        pattern: trust the LLM for chunk numbering, then let
-        deterministic scoring validate that each citation actually
-        matches its claim.
+        """Inject ``[cN]`` markers into the answer based on the set
+        of chunk_ids the LLM (via JSON-mode follow-up) said it
+        used, then build the citations list.
 
-        For each ``[cN]`` marker in the answer:
-          1. Extract the claim sentence (preceding text up to the
-             marker, bounded at the previous sentence delimiter).
-          2. Score every retrieved chunk against the claim with the
-             cross-encoder reranker — the same model used at
-             retrieval rerank time, so it's already loaded and
-             warm.
-          3. The chunk with the highest score is the actually-best
-             support for that claim. If the LLM picked a different
-             chunk, override the marker.
-          4. Within the chosen chunk, find the most relevant
-             sentence via the same reranker — that becomes the
-             ``quote`` shown to the frontend (no LLM extraction).
+        Algorithm:
+          1. Split the answer into sentences.
+          2. For each chunk_id in ``used_chunk_ids``, run the
+             cross-encoder reranker over (chunk_text, sentence)
+             pairs and pick the sentence with the highest score —
+             that's the sentence this chunk best supports.
+          3. Insert ``[cN]`` immediately after the chosen sentence.
+             If two chunks land on the same sentence, both markers
+             stack at that boundary.
+          4. Build the citations list with the best sentence FROM
+             the chunk (used by the highlight panel as ``quote``).
 
-        Returns ``(corrected_answer, citations)`` where citations
-        is a list of ``{chunk_id, quote}`` dicts, one per cited
-        marker. Marker corrections are applied to the answer text
-        in reverse order to preserve byte offsets during the splice.
+        Falls back gracefully:
+          * No reranker → attach all used_chunk_ids as a final
+            citation block at the end of the answer.
+          * No used_chunk_ids → uses top-2 reranker-scored chunks
+            against the whole answer (so we never return uncited).
+          * Empty answer or sources → return as-is.
 
-        If the reranker is unavailable, returns the answer unchanged
-        plus an empty citations list — the system gracefully
-        degrades to chunk-level highlighting from the source dict.
+        Returns ``(answer_with_markers, citations)`` — citations is
+        a list of ``{chunk_id, quote}`` dicts.
         """
-        if not answer or not sources or self.reranker is None:
+        if not answer or not sources:
             return answer, []
 
-        marker_pattern = re.compile(r"\[\s*[Cc]?\s*(\d+)\s*\]")
+        # Belt-and-braces: the system prompt tells the LLM not to
+        # emit ``[cN]``/``[N]`` markers itself, but small models
+        # occasionally still do. Strip them BEFORE we inject — the
+        # reranker chooses placement, so any pre-existing markers
+        # would just produce double-citations on a single sentence.
+        marker_pattern = re.compile(r"\[\s*[Cc]?\s*\d+\s*\]")
+        answer = marker_pattern.sub("", answer)
+        # Collapse any double-spaces left behind so the prose reads
+        # cleanly when the corrected frame replaces the streamed text.
+        answer = re.sub(r"  +", " ", answer)
 
-        # Build the candidate pool: chunks with non-trivial text.
-        chunks_with_text = [
-            (s["chunk_id"], s.get("chunk_text", ""))
+        # Build candidate pool of (id, text).
+        chunk_text_by_id = {
+            s["chunk_id"]: s.get("chunk_text", "")
             for s in sources
             if s.get("chunk_id") and s.get("chunk_text", "").strip()
-        ]
-        if not chunks_with_text:
-            return answer, []
-        chunk_ids = [cid for cid, _ in chunks_with_text]
-        chunk_texts = [ct for _, ct in chunks_with_text]
-        chunk_id_set = set(chunk_ids)
-
-        # Walk markers and gather (start, end, original_id, claim).
-        markers = []
-        for match in marker_pattern.finditer(answer):
-            original_id = f"c{match.group(1)}"
-            claim_start = self._find_sentence_start(answer, match.start())
-            claim = answer[claim_start:match.start()].strip()
-            markers.append({
-                "match_start": match.start(),
-                "match_end": match.end(),
-                "original_id": original_id,
-                "claim": claim,
-            })
-
-        if not markers:
+        }
+        if not chunk_text_by_id:
             return answer, []
 
-        # Re-attribute each marker using the reranker.
+        # Split answer into sentences with their byte ranges. Markdown
+        # bullets and headings count as their own "sentence" so list
+        # answers attribute one citation per item rather than the
+        # whole list collapsing onto one chunk.
+        sentences = self._split_into_sentences(answer)
+        if not sentences:
+            return answer, []
+
+        # Resolve the working set of chunk_ids. If the structured
+        # call returned nothing, fall back to "top-2 chunks against
+        # the whole answer" using the reranker so we never serve an
+        # uncited answer.
+        working_ids: List[str] = []
+        if used_chunk_ids:
+            for cid in used_chunk_ids:
+                if cid in chunk_text_by_id:
+                    working_ids.append(cid)
+
+        if not working_ids:
+            working_ids = self._fallback_top_chunks_for_answer(
+                answer, chunk_text_by_id, top_n=2
+            )
+
+        if not working_ids:
+            return answer, []
+
+        # Reranker-driven sentence-to-chunk attribution. If the
+        # reranker can't load, we degrade to "all citations land on
+        # the final sentence" — still cited, just less precise.
+        rk = self.reranker
         try:
             import numpy as np
         except ImportError:
-            logger.warning("numpy unavailable; skipping re-attribution")
-            return answer, []
+            np = None
 
-        citations: List[Dict[str, Any]] = []
-        corrections: List[tuple] = []  # (start, end, replacement_str)
-        seen_in_citations: set = set()
+        if rk is None or np is None:
+            tail_idx = len(sentences) - 1
+            citations = [
+                {
+                    "chunk_id": cid,
+                    "quote": (chunk_text_by_id[cid] or "")[:300].strip(),
+                }
+                for cid in working_ids
+            ]
+            answer_with_markers = self._inject_markers_into_sentences(
+                answer, sentences, {tail_idx: working_ids}
+            )
+            return answer_with_markers, citations
 
-        # Pre-compute the token budget for the reranker. We use the
-        # MODEL's actual max — not ``config.reranker_max_length``,
-        # which is a construction-time setting that can exceed the
-        # transformer's architectural ``max_position_embeddings``.
-        # When config > arch, the tokenizer doesn't truncate enough
-        # and ``predict()`` raises a tensor-shape mismatch. We split
-        # the resulting budget between claim and chunk; chunks are
-        # usually larger so they get the bigger share. Pre-truncating
-        # chunk_texts ONCE per query lets us reuse them across all
-        # markers — the per-claim scoring only re-truncates the
-        # claim each iteration.
+        # Token budgets — same trick as before. Pre-truncate the
+        # chunk text ONCE per query and reuse across every chunk_id
+        # we resolve.
         max_total = max(64, self._get_reranker_max_tokens() - 8)
-        claim_token_budget = min(96, max_total // 4)
-        chunk_token_budget = max(64, max_total - claim_token_budget)
-        truncated_chunk_texts = [
-            self._truncate_for_reranker(ct, chunk_token_budget)
-            for ct in chunk_texts
+        sentence_budget = min(96, max_total // 4)
+        chunk_budget = max(64, max_total - sentence_budget)
+        sentence_truncated = [
+            self._truncate_for_reranker(s["text"], sentence_budget)
+            for s in sentences
         ]
 
-        for m in markers:
-            claim = m["claim"]
-            if not claim:
+        # sentence_idx -> [chunk_id, ...]
+        attach_map: Dict[int, List[str]] = {}
+        citations: List[Dict[str, Any]] = []
+
+        for cid in working_ids:
+            chunk_text = chunk_text_by_id.get(cid, "")
+            if not chunk_text.strip():
                 continue
-            t_claim = self._truncate_for_reranker(claim, claim_token_budget)
+            t_chunk = self._truncate_for_reranker(chunk_text, chunk_budget)
             try:
-                pairs = [[t_claim, ct] for ct in truncated_chunk_texts]
-                scores = self.reranker.predict(pairs)
+                pairs = [[t_chunk, s] for s in sentence_truncated]
+                scores = rk.predict(pairs)
             except Exception as e:
                 logger.warning(
-                    f"Reranker re-attribution failed for marker: {e}"
+                    f"Reranker sentence-attribution failed for {cid}: {e}"
                 )
                 continue
-
             best_idx = int(np.argmax(scores))
-            best_id = chunk_ids[best_idx]
-            best_chunk_text = chunk_texts[best_idx]
+            attach_map.setdefault(best_idx, []).append(cid)
+            citations.append({
+                "chunk_id": cid,
+                "quote": self._find_best_sentence(
+                    sentences[best_idx]["text"], chunk_text
+                ),
+            })
 
-            # Plan a marker correction if the reranker disagrees with
-            # the LLM. No magic threshold — the argmax is the source
-            # of truth. If the LLM and reranker happen to agree, no
-            # override is recorded.
-            if (
-                best_id != m["original_id"]
-                and m["original_id"] in chunk_id_set
-            ):
-                corrections.append(
-                    (m["match_start"], m["match_end"], f"[{best_id}]")
-                )
-            elif m["original_id"] not in chunk_id_set:
-                # LLM emitted a chunk_id we never retrieved (rare but
-                # possible if the LLM hallucinated or invented an id).
-                # Force-correct to the reranker's best.
-                corrections.append(
-                    (m["match_start"], m["match_end"], f"[{best_id}]")
-                )
+        if not attach_map:
+            return answer, []
 
-            # Deterministic quote = best sentence in the chosen
-            # chunk for this specific claim. Replaces the prior
-            # LLM-based Pass 2 quote extraction. Dedup by chunk_id
-            # so we don't emit duplicate citation entries when the
-            # same chunk supports multiple claims.
-            if best_id not in seen_in_citations:
-                seen_in_citations.add(best_id)
-                quote = self._find_best_sentence(claim, best_chunk_text)
-                citations.append({"chunk_id": best_id, "quote": quote})
+        answer_with_markers = self._inject_markers_into_sentences(
+            answer, sentences, attach_map
+        )
+        return answer_with_markers, citations
 
-        # Apply corrections in REVERSE order so earlier offsets stay
-        # valid as we splice replacements in.
-        if corrections:
-            corrected = answer
-            for start, end, replacement in sorted(
-                corrections, key=lambda x: -x[0]
-            ):
-                corrected = corrected[:start] + replacement + corrected[end:]
-            return corrected, citations
+    @staticmethod
+    def _split_into_sentences(text: str) -> List[Dict[str, Any]]:
+        """Split ``text`` into sentence-like spans for citation
+        attribution. Returns dicts with ``text``, ``start``, ``end``
+        — char offsets into the original string, end-exclusive.
 
-        return answer, citations
+        Markdown awareness:
+          * Each non-blank line is treated as its own unit.
+          * Inside paragraph lines, sentence boundaries split on
+            ``. ! ?`` followed by whitespace.
+          * Bullet points and headings stay as one unit (don't try
+            to sub-split a single list item).
+          * Trailing whitespace and any markers we left in are
+            tolerated — markers can land just after the visible
+            text.
+        """
+        if not text:
+            return []
+        spans: List[Dict[str, Any]] = []
+        # Walk the text line by line, tracking absolute offsets.
+        i = 0
+        n = len(text)
+        while i < n:
+            j = text.find("\n", i)
+            if j == -1:
+                j = n
+            line = text[i:j]
+            stripped = line.strip()
+            if not stripped:
+                i = j + 1
+                continue
+
+            # Bullets/headings — keep as one span to preserve list
+            # boundaries (citation lands right after the item).
+            if re.match(r"^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)", line):
+                spans.append({"text": stripped, "start": i, "end": j})
+                i = j + 1
+                continue
+
+            # Paragraph line — sub-split on sentence delimiters.
+            local = 0
+            for m in re.finditer(r"[.!?](?:\s+|$)", line):
+                end_local = m.end()
+                seg = line[local:end_local].strip()
+                if seg:
+                    seg_start = i + local
+                    seg_end = i + end_local
+                    spans.append({
+                        "text": seg, "start": seg_start, "end": seg_end,
+                    })
+                local = end_local
+            if local < len(line):
+                tail = line[local:].strip()
+                if tail:
+                    spans.append({
+                        "text": tail,
+                        "start": i + local,
+                        "end": j,
+                    })
+            i = j + 1
+        return spans
+
+    def _fallback_top_chunks_for_answer(
+        self,
+        answer: str,
+        chunk_text_by_id: Dict[str, str],
+        top_n: int = 2,
+    ) -> List[str]:
+        """Used when the structured-output call returned nothing.
+        Score every chunk against the full answer with the reranker
+        and pick the top-N. Guarantees an answer is never uncited.
+
+        Falls back further to "first N chunks in retrieval order"
+        when the reranker is unavailable.
+        """
+        ids = list(chunk_text_by_id.keys())
+        if not ids:
+            return []
+        if self.reranker is None:
+            return ids[:top_n]
+        try:
+            import numpy as np
+        except ImportError:
+            return ids[:top_n]
+        max_total = max(64, self._get_reranker_max_tokens() - 8)
+        a_budget = min(160, max_total // 3)
+        c_budget = max(64, max_total - a_budget)
+        a_t = self._truncate_for_reranker(answer, a_budget)
+        try:
+            pairs = [
+                [a_t, self._truncate_for_reranker(chunk_text_by_id[cid], c_budget)]
+                for cid in ids
+            ]
+            scores = self.reranker.predict(pairs)
+        except Exception as e:
+            logger.warning(f"Fallback chunk-rerank failed: {e}")
+            return ids[:top_n]
+        order = np.argsort(scores)[::-1]
+        return [ids[int(i)] for i in order[:top_n]]
+
+    @staticmethod
+    def _inject_markers_into_sentences(
+        answer: str,
+        sentences: List[Dict[str, Any]],
+        attach_map: Dict[int, List[str]],
+    ) -> str:
+        """Splice ``[cN]`` markers into ``answer`` at each sentence's
+        end offset. Markers for the same sentence are concatenated
+        in stable order. Edits are applied in REVERSE so earlier
+        offsets remain valid as we splice.
+        """
+        if not attach_map:
+            return answer
+        edits: List[tuple] = []
+        for idx, ids in attach_map.items():
+            if idx < 0 or idx >= len(sentences):
+                continue
+            insert_pos = sentences[idx]["end"]
+            marker_str = "".join(f"[{cid}]" for cid in ids)
+            # Strip any trailing whitespace/punctuation already
+            # present at insert_pos so the marker sits flush.
+            edits.append((insert_pos, marker_str))
+        if not edits:
+            return answer
+        out = answer
+        for pos, marker in sorted(edits, key=lambda x: -x[0]):
+            out = out[:pos] + marker + out[pos:]
+        return out
 
     @staticmethod
     def _strip_to_body(text: str, title: str = "") -> str:
@@ -2467,52 +2692,36 @@ class RAGService:
 
         # Build multi-turn messages for conversation memory.
         #
-        # The system message is updated to require [chunk_id] markers
-        # after every factual claim. The model has been shown the same
-        # marker format in the chunk headers above, so it has clear
-        # examples to follow. Smaller models (≤7B) sometimes drop
-        # markers — the frontend renders gracefully without them
-        # (just shows the answer text, no superscripts).
+        # NOTE: the LLM is no longer asked to emit ``[cN]`` markers
+        # inline — that approach was fragile (small models, list-
+        # style answers, and multi-turn drift all caused the model
+        # to silently drop markers, leaving answers uncited). We now
+        # let the LLM answer freely in markdown prose; a separate
+        # post-stream JSON-mode call selects which chunk_ids were
+        # used, and the reranker then inserts ``[cN]`` markers at
+        # the sentence boundaries each chunk best supports. This is
+        # the structured-output pattern (LangChain ``with_structured_
+        # output``, LlamaIndex ``CitationQueryEngine``) — schema-
+        # enforced, so an answer can never be uncited.
         system_msg = {
             "role": "system",
             "content": (
-                "You are a scientific research assistant. Answer questions "
-                "using ONLY the provided context from research papers. Use "
-                "markdown formatting.\n\n"
-                "CITATION RULES — read carefully:\n"
-                "1. EVERY factual claim in your answer MUST be followed by "
-                "at least one [cN] marker where N is the number of the "
-                "chunk that supports it. The chunks above are labelled "
-                "[c1], [c2], [c3], etc. — copy that exact label. A claim "
-                "without a citation is not allowed.\n"
-                "2. Prefer ONE citation per claim. You may use TWO if and "
-                "only if two chunks contribute genuinely distinct evidence "
-                "to the same claim (e.g., one provides the fact, the "
-                "other the supporting number). NEVER stack 3 or more "
-                "markers on a single claim — if you feel the need to, "
-                "pick the single best one.\n"
-                "3. Distribute citations across the answer: different "
-                "claims should cite different chunks where the chunks "
-                "actually support different facts. Do not anchor every "
-                "claim to the same chunk just because it ranked first in "
-                "the context.\n"
-                "4. Place markers immediately after the claim, before any "
-                "punctuation.\n"
-                "5. Use ONLY [cN] labels that appear verbatim in the "
-                "context above. Never invent labels.\n"
-                "6. If the context does not contain enough information to "
-                "answer, say so clearly without using any markers.\n\n"
-                "FORMAT EXAMPLE (illustrative; placeholders <a> <b> <c> "
-                "stand in for real cN labels — substitute the actual "
-                "labels from YOUR context above):\n"
-                "  \"The first finding is supported by direct evidence[<a>]. "
-                "A separate observation, drawn from a different chunk, "
-                "extends this[<b>]. The third claim combines a fact and "
-                "a measurement reported across two chunks[<a>][<c>].\"\n"
-                "Notice: every claim has a citation; markers are placed "
-                "before punctuation; different claims cite different "
-                "chunks; at most two markers appear together, and only "
-                "when both genuinely contribute distinct evidence."
+                "You are a scientific research assistant. Answer the "
+                "question using ONLY the provided context from research "
+                "papers above. Use clear markdown formatting (headings, "
+                "lists, bold for key terms).\n\n"
+                "Rules:\n"
+                "1. Ground every factual claim in the supplied context. "
+                "If the context does not contain enough information, say "
+                "so explicitly rather than guessing.\n"
+                "2. Be precise: prefer concrete numbers, dataset names, "
+                "and quoted terminology from the context over vague "
+                "summaries.\n"
+                "3. Do NOT add bracketed reference markers like [1], "
+                "[c1], (Smith 2020), or footnote-style citations of any "
+                "kind. The application attaches citations automatically "
+                "after you finish — your job is only to write the "
+                "answer."
             ),
         }
 
@@ -2520,7 +2729,7 @@ class RAGService:
 
         # Add conversation history (last 5 turns = 10 messages max).
         #
-        # Strip citation markers from prior assistant turns. We
+        # Rewrite citation markers in prior assistant turns. We
         # accept all the variants LLMs naturally emit: ``[cN]``
         # (canonical, what the prompt asks for), bare ``[N]``
         # (most common — bare numeric brackets dominate training
@@ -2528,9 +2737,24 @@ class RAGService:
         # inside the brackets like ``[ c1]`` or ``[ 1 ]`` (some
         # models pad for visual separation). Uppercase ``[C1]`` is
         # also accepted defensively.
-        # Per-turn positional ids mean the same label can refer to
-        # different chunks in different turns — so leaving any
-        # marker form in history would actively mislead the LLM.
+        #
+        # Per-turn positional ids mean ``c1`` in turn 1 may point at
+        # a totally different chunk than ``c1`` in turn 2, so we
+        # MUST NOT leave the literal ``[cN]`` form in history — that
+        # would mis-attribute. But fully *erasing* markers caused a
+        # different bug: the LLM, looking at its own marker-free
+        # prior turn, drifted into a "this assistant doesn't cite"
+        # style and stopped emitting markers on follow-up questions
+        # (few-shot mimicry over the system prompt). Logs showed
+        # ``total_markers=1`` on Q1 and ``total_markers=0`` on Q2/Q3
+        # within the same conversation.
+        #
+        # Compromise: replace each marker with ``[†]`` (the academic
+        # footnote dagger). It preserves the inline-citation pattern
+        # the LLM should imitate without leaking any turn-specific
+        # chunk id. Rule 5 of the system prompt ("Use ONLY [cN]
+        # labels that appear verbatim in the context above") still
+        # forces fresh, valid citations on the current turn.
         marker_pattern = re.compile(r"\[\s*[Cc]?\s*\d+\s*\]")
         if chat_history:
             history_window = chat_history[-10:]  # Last 5 Q&A pairs
@@ -2538,11 +2762,7 @@ class RAGService:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 if role == "assistant" and content:
-                    # Replace markers with a single space, then collapse
-                    # any double spaces left behind so the prose reads
-                    # cleanly.
-                    content = marker_pattern.sub(" ", content)
-                    content = re.sub(r"  +", " ", content).strip()
+                    content = marker_pattern.sub("[†]", content)
                 messages.append({"role": role, "content": content})
 
         # Add current question with context
@@ -2573,7 +2793,15 @@ Question: {question}"""
         response = await self._invoke_llm(
             messages=prepared["messages"], timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS
         )
-        return {"answer": response.content.strip(), "sources": prepared["sources"]}
+        # Non-streaming path is a fallback only; the structured-
+        # output citation pipeline lives in ``query_stream`` (which
+        # is what the frontend uses). Returning the plain answer +
+        # sources here keeps this path lightweight and matches the
+        # ``QueryResponse`` schema (no ``citations`` field).
+        return {
+            "answer": (response.content or "").strip(),
+            "sources": prepared["sources"],
+        }
 
     async def query_stream(
         self,
@@ -2751,36 +2979,50 @@ Question: {question}"""
                 snippet,
             )
 
-        # Universal citation correction step. Replaces the previous
-        # LLM-based Pass 2 (which asked the LLM to extract verbatim
-        # quotes from each cited chunk and was a) costly, b) error-
-        # prone when the LLM cited the wrong chunk in Pass 1).
-        #
-        # langroid principle: the LLM gives chunk numbers, our code
-        # does the rest. Re-attribution uses the cross-encoder
-        # reranker (already loaded for retrieval rerank) to score
-        # each [cN]'s claim against every retrieved chunk and pick
-        # the actually-best support. Per-claim sentence selection
-        # produces deterministic quotes without any LLM call.
+        # Structured-output citation pass. Two stages:
+        #   1. Ask the LLM (JSON mode) which chunk_ids it used to
+        #      write the streamed answer. Schema-constrained, so it
+        #      can't return an empty list and can't hallucinate ids
+        #      outside the retrieved set.
+        #   2. Reranker assigns each of those chunks to the answer
+        #      sentence it best supports, then we splice ``[cN]``
+        #      markers in at those sentence boundaries.
+        # If stage 1 fails, stage 2 falls back to "top-2 reranker-
+        # scored chunks against the whole answer" so an answer is
+        # never uncited.
         citations: List[Dict[str, Any]] = []
         rewrite_error: Optional[str] = None
         corrected_answer = accumulated
+        used_chunk_ids: List[str] = []
         if accumulated.strip():
             try:
-                corrected_answer, citations = self._reattribute_and_extract(
-                    accumulated, prepared["sources"]
+                used_chunk_ids = await self._select_used_chunks(
+                    question=question,
+                    answer=accumulated,
+                    sources=prepared["sources"],
                 )
             except Exception as e:
-                logger.warning(f"Citation re-attribution failed: {e}")
+                logger.warning(f"chunk-id selection failed: {e}")
+                used_chunk_ids = []
+            try:
+                corrected_answer, citations = self._reattribute_and_extract(
+                    accumulated,
+                    prepared["sources"],
+                    used_chunk_ids=used_chunk_ids,
+                )
+            except Exception as e:
+                logger.warning(f"Citation injection failed: {e}")
                 citations = []
                 corrected_answer = accumulated
                 rewrite_error = str(e)[:200]
 
         # Diagnostic — fires unconditionally so we always see the
-        # outcome of re-attribution. Notes whether the answer text
-        # was rewritten (i.e. the reranker disagreed with the LLM
-        # on at least one marker) and shows a per-citation preview
-        # of the deterministic quote.
+        # outcome of the structured-output citation pass. Logs the
+        # ids the LLM said it used (stage 1) and the citations the
+        # reranker actually attached to sentences (stage 2). When
+        # ``llm_selected`` is empty but ``citations`` is not, the
+        # fallback "top-N chunks against the whole answer" path
+        # ran — that's expected behavior, not an error.
         if accumulated.strip():
             answer_rewritten = corrected_answer != accumulated
             citations_summary = [
@@ -2791,8 +3033,9 @@ Question: {question}"""
                 for c in citations
             ]
             logger.warning(
-                "[CITATION DIAG] reattributed=%s rewritten=%s "
+                "[CITATION DIAG] llm_selected=%s injected=%s rewritten=%s "
                 "citations=%s%s",
+                used_chunk_ids,
                 len(citations),
                 answer_rewritten,
                 citations_summary,
