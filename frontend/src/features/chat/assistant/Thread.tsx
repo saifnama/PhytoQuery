@@ -259,15 +259,25 @@ const MarkdownText: FC = () => {
 
   const preprocess = useCallback(
     (text: string) => {
-      // Marker format is ``[cN]`` per-turn positional id (the
-      // LlamaIndex CitationQueryEngine pattern). Frontend assigns
-      // 1-based display numbers in order of first appearance,
-      // deduped per chunk_id, so re-citing the same chunk shows
-      // the same [N] throughout the answer. The chunk_id stays
-      // ``cN`` internally — only the visible number is renumbered.
+      // Marker format is per-turn positional id. We accept both the
+      // canonical ``[cN]`` and bare ``[N]`` because most LLMs drop
+      // the ``c`` prefix — bare numeric brackets dominate their
+      // training data and the LLM happily emits ``[1]`` even when
+      // the prompt asks for ``[c1]``. Both forms normalize to
+      // ``cN`` internally. ``validChunkIds`` bounds-checks against
+      // the message's sources, so any bare ``[N]`` that doesn't map
+      // to a real chunk (e.g. reference numbers from quoted paper
+      // text) is left as plain prose — never rendered as a
+      // clickable badge.
       const numbering = new Map<string, number>();
       let next = 1;
-      return text.replace(/\[(c\d+)\]/g, (match, id: string) => {
+      // Whitespace inside the brackets is tolerated because real
+      // LLMs emit padded forms like ``[ c1]`` or ``[ 1 ]`` in
+      // practice (observed in production diagnostics). Without
+      // this allowance, the marker stays as plain text and never
+      // becomes a clickable badge.
+      return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, (match, num: string) => {
+        const id = `c${num}`;
         if (!validChunkIds.has(id)) return match;
         if (!numbering.has(id)) {
           numbering.set(id, next);

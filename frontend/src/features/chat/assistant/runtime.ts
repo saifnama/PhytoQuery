@@ -35,8 +35,15 @@ import { useMemo, useRef } from 'react';
 const HISTORY_STORAGE_KEY = 'pq_chat_history';
 
 /** Source attribution as our backend returns it. ``chunk_id`` is the
- * stable 8-char hex identifier the LLM emits inline (e.g. ``[a3f2c1]``)
- * and the frontend maps to a 1-based superscript number on render. */
+ * per-turn positional id (``c1``, ``c2``, …) the LLM emits inline
+ * and the frontend maps to a 1-based superscript number on render.
+ *
+ * ``body_start``/``body_end`` are char offsets into the saved paper
+ * markdown, recorded at ingest time. When present, the citation
+ * preview panel slices the markdown directly for byte-exact
+ * highlighting; when absent (legacy chunks or ingest substring
+ * search failed), the panel falls back to fuzzy matching. ``page``
+ * is the 1-based PDF page the chunk starts on, also from ingest. */
 export interface RagSource {
   chunk_id?: string;
   source: string;
@@ -44,6 +51,9 @@ export interface RagSource {
   parser_type: string;
   score: number;
   chunk_text: string;
+  body_start?: number;
+  body_end?: number;
+  page?: number;
 }
 
 /** One verbatim quote backing one claim, returned by Pass 2 of the
@@ -121,7 +131,17 @@ async function postQuery(
 /** NDJSON streaming frame. Backend yields one JSON object per line:
  *   - {type:"text_delta", text:"..."}        — additive text token
  *   - {type:"sources", sources:[...]}        — retrieved chunks
- *   - {type:"citations", citations:[...]}    — pass-2 verbatim quotes
+ *   - {type:"citations", citations:[...]}    — deterministic per-claim quotes
+ *   - {type:"answer_corrected", text:"..."}  — full answer text after
+ *                                              reranker-driven citation
+ *                                              re-attribution. Replaces
+ *                                              the streamed text wholesale;
+ *                                              superscript numbering stays
+ *                                              stable (frontend numbers by
+ *                                              order of appearance) so the
+ *                                              user doesn't see a flicker —
+ *                                              only the underlying chunk_id
+ *                                              link changes.
  *   - {type:"error",   error:"..."}          — fatal error mid-stream
  *   - {type:"done"}                          — clean end of stream
  */
@@ -129,6 +149,7 @@ type StreamFrame =
   | { type: 'text_delta'; text: string }
   | { type: 'sources'; sources: RagSource[] }
   | { type: 'citations'; citations: Citation[] }
+  | { type: 'answer_corrected'; text: string }
   | { type: 'error'; error: string }
   | { type: 'done' };
 
@@ -363,6 +384,23 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
               }
             } else if (frame.type === 'citations') {
               citations = frame.citations;
+            } else if (frame.type === 'answer_corrected') {
+              // Reranker-driven re-attribution found at least one
+              // [cN] marker the LLM cited that didn't match the
+              // best-scoring chunk for the claim. Replace the
+              // streamed text wholesale so subsequent renders use
+              // the corrected chunk_id mappings. Visible superscript
+              // numbers stay stable because Thread.tsx numbers
+              // markers by order of first appearance — only the
+              // underlying #cite-cN link target changes, so the
+              // user doesn't see a flicker.
+              accumulated = frame.text;
+              yield {
+                content: [{ type: 'text', text: accumulated }],
+                metadata: {
+                  custom: { sources, citations } satisfies RagMessageCustomData,
+                },
+              };
             } else if (frame.type === 'error') {
               streamErrored = true;
               throw new Error(frame.error || 'Stream error');

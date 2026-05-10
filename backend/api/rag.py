@@ -247,6 +247,12 @@ async def get_uploaded_file_markdown(
             logger.warning(f"Failed to cache markdown for {safe_filename}: {e}")
 
         attach_session_cookie(response, request, user_id)
+        # Disable browser caching for markdown. Citation offsets are
+        # paired with the live markdown bytes, so a stale cached copy
+        # would land highlights on the wrong text after any re-upload
+        # (the parent_store updates but the browser keeps serving
+        # the previous fetch's body).
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
         return {"markdown": full_text}
 
     try:
@@ -256,6 +262,8 @@ async def get_uploaded_file_markdown(
         raise HTTPException(status_code=500, detail="Failed to read markdown.")
 
     attach_session_cookie(response, request, user_id)
+    # Disable browser caching — see lazy-regen branch above.
+    response.headers["Cache-Control"] = "no-store, must-revalidate"
     return {"markdown": markdown_text}
 
 

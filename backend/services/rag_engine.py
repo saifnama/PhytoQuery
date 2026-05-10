@@ -1147,7 +1147,15 @@ class RAGService:
         safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
         return os.path.join(config.qdrant_dir, f"{safe_user_id}_parents.json")
 
-    def _load_parent_store(self, user_id: str) -> Dict[str, str]:
+    def _load_parent_store(self, user_id: str) -> Dict[str, Any]:
+        """Load the per-user parent store from disk.
+
+        Values can be either a bare ``str`` (legacy entries from
+        before offset-tracking shipped) or a ``dict`` carrying
+        ``{text, body_start, body_end, page, section_title}`` (current
+        format). Callers that need normalization should go through
+        ``_get_parent_data``.
+        """
         path = self._get_parent_store_path(user_id)
         if os.path.exists(path):
             try:
@@ -1157,7 +1165,7 @@ class RAGService:
                 return {}
         return {}
 
-    def _save_parent_store(self, user_id: str, store: Dict[str, str]) -> None:
+    def _save_parent_store(self, user_id: str, store: Dict[str, Any]) -> None:
         path = self._get_parent_store_path(user_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         fd, temp_path = tempfile.mkstemp(
@@ -1322,15 +1330,72 @@ class RAGService:
 
         return source_names, extracted_texts
 
-    def _add_parents(self, user_id: str, parent_chunks: List[Dict[str, str]]) -> None:
+    def _add_parents(self, user_id: str, parent_chunks: List[Dict[str, Any]]) -> None:
+        """Persist parents to disk.
+
+        Each parent is stored as a dict carrying the chunk text plus
+        optional offset metadata. The offsets pin the parent's body
+        text to a precise ``[body_start, body_end)`` char range in
+        the saved paper markdown — used at render time to anchor
+        citation highlights without fuzzy matching.
+
+        Backwards compatible: writes the new dict shape, but readers
+        in this module also accept the legacy bare-string shape from
+        parent stores written by older builds.
+        """
         store = self._load_parent_store(user_id)
         for p in parent_chunks:
-            store[p["parent_id"]] = p["text"]
+            entry: Dict[str, Any] = {"text": p["text"]}
+            for key in ("body_start", "body_end", "page", "section_title"):
+                if p.get(key) is not None:
+                    entry[key] = p[key]
+            store[p["parent_id"]] = entry
         self._save_parent_store(user_id, store)
 
     def _get_parent_text(self, parent_id: str, user_id: str) -> str:
+        """Backwards-compat shim: return just the text body. Used by
+        callers that don't need the offsets."""
+        data = self._get_parent_data(parent_id, user_id)
+        return data.get("text", "") if data else ""
+
+    def _get_parent_data(self, parent_id: str, user_id: str) -> Dict[str, Any]:
+        """Return the parent entry as a dict regardless of which
+        on-disk shape produced it. Legacy bare-string entries are
+        normalized to ``{"text": <str>}`` so callers don't branch."""
         store = self._load_parent_store(user_id)
-        return store.get(parent_id, "")
+        raw = store.get(parent_id)
+        if raw is None:
+            return {}
+        if isinstance(raw, str):
+            return {"text": raw}
+        if isinstance(raw, dict):
+            return raw
+        # Defensive: unknown shape — coerce to text only
+        return {"text": str(raw)}
+
+    @staticmethod
+    def _find_page_for_offset(full_text: str, offset: int) -> Optional[int]:
+        """Recover the 1-based page number for a char offset inside
+        ``full_text`` by scanning ``<!-- Page N -->`` markers (the
+        per-page boundaries pymupdf4llm emits at extraction time).
+
+        Returns the page of the LAST marker preceding ``offset``, or
+        ``None`` if the offset precedes any marker / no markers exist
+        / offset is invalid. Used to enrich chunk metadata so the
+        citation panel can show 'p. N' without re-scanning the
+        whole document at query time.
+        """
+        if offset is None or offset < 0 or not full_text:
+            return None
+        page_pattern = re.compile(r"<!--\s*Page\s+(\d+)\s*-->")
+        last_page: Optional[int] = None
+        scan_to = min(max(offset, 1), len(full_text))
+        for match in page_pattern.finditer(full_text, 0, scan_to):
+            try:
+                last_page = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+        return last_page
 
     def _cleanup_parent_store(self, user_id: str) -> None:
         """Remove parent-store entries no longer referenced by any child.
@@ -1471,6 +1536,9 @@ class RAGService:
             pdf_metadata,
             source,
             use_semantic_children=use_semantic_children,
+            # Pass the full markdown so each parent can record an
+            # exact char offset for the citation-highlight panel.
+            full_text=full_text,
         )
 
         # Store parent chunks for parent-child retrieval
@@ -1646,6 +1714,323 @@ class RAGService:
                 )
 
         return sorted_results
+
+    def _get_reranker_max_tokens(self) -> int:
+        """Return the loaded reranker model's *actual* max input
+        token count.
+
+        Critical: this is NOT ``config.reranker_max_length``. That
+        config value is what the model is *constructed* with and
+        can be set higher than the underlying transformer's
+        ``max_position_embeddings``. When that happens, the
+        tokenizer happily produces up to the configured length but
+        the model raises ``tensor a (N) must match tensor b (512)``
+        at predict time. We need the smaller of:
+
+          - the tokenizer's ``model_max_length`` (often the right
+            value, but sometimes a sentinel like 1e18)
+          - the model's ``config.max_position_embeddings``
+            (the hard architectural limit)
+          - the user-set ``config.reranker_max_length`` (if smaller
+            than the architectural limit, honor it)
+
+        Returns 512 as a defensive default if introspection fails.
+        """
+        if self.reranker is None:
+            return 512
+
+        candidates = []
+        try:
+            tok_max = getattr(
+                self.reranker.tokenizer, "model_max_length", None
+            )
+            # Tokenizers without an enforced limit set this to a
+            # huge sentinel (~1e18). Filter values that are clearly
+            # out of range for any real cross-encoder.
+            if tok_max and 0 < tok_max < 8192:
+                candidates.append(int(tok_max))
+        except Exception:
+            pass
+
+        try:
+            mdl = getattr(self.reranker, "model", None)
+            mdl_cfg = getattr(mdl, "config", None) if mdl else None
+            if mdl_cfg is not None:
+                mpe = getattr(mdl_cfg, "max_position_embeddings", None)
+                if mpe and 0 < mpe < 8192:
+                    candidates.append(int(mpe))
+        except Exception:
+            pass
+
+        try:
+            cfg_max = int(config.reranker_max_length)
+            if 0 < cfg_max < 8192:
+                candidates.append(cfg_max)
+        except Exception:
+            pass
+
+        if candidates:
+            return min(candidates)
+        return 512
+
+    def _truncate_for_reranker(self, text: str, max_tokens: int) -> str:
+        """Truncate ``text`` so that the reranker's tokenizer
+        produces at most ``max_tokens`` tokens.
+
+        Cross-encoders (the kind we use) have a fixed
+        max-position-embedding (typically 512). When a (claim,
+        chunk) pair tokenizes longer than that, ``predict()``
+        raises a tensor-shape mismatch. Existing retrieval rerank
+        avoids this because children are small; our re-attribution
+        scores parents which can be 2500+ chars (~700 tokens) and
+        overflow.
+
+        Token-precise truncation via the reranker's own tokenizer —
+        no character heuristics, so this works regardless of the
+        underlying model. Falls back to a 4-char-per-token estimate
+        only if the tokenizer call itself errors.
+        """
+        if not text or self.reranker is None or max_tokens <= 0:
+            return text
+        try:
+            tokenizer = self.reranker.tokenizer
+            ids = tokenizer.encode(text, add_special_tokens=False)
+            if len(ids) <= max_tokens:
+                return text
+            return tokenizer.decode(
+                ids[:max_tokens], skip_special_tokens=True
+            )
+        except Exception as e:
+            logger.warning(
+                f"Reranker tokenizer truncation failed ({e}); "
+                f"falling back to char estimate"
+            )
+            # Conservative char fallback (~4 chars per token for
+            # English; we deliberately under-estimate to stay safe).
+            return text[: max_tokens * 4]
+
+    def _find_sentence_start(self, text: str, position: int) -> int:
+        """Locate the start index of the sentence ending at or before
+        ``position`` in ``text``. Used by re-attribution to extract
+        the claim a citation marker is attached to. Falls back to
+        the start of the text if no sentence boundary is found.
+
+        Boundaries: ``. ``, ``! ``, ``? `` (with the trailing space
+        to avoid abbreviations), or paragraph break ``\\n\\n``. The
+        start of the matched delimiter is past, so the returned
+        index points at the FIRST char of the sentence body.
+        """
+        best = 0
+        for delim in (". ", "! ", "? ", "\n\n", ".\n", "!\n", "?\n"):
+            idx = text.rfind(delim, 0, position)
+            if idx != -1:
+                candidate = idx + len(delim)
+                if candidate > best:
+                    best = candidate
+        return best
+
+    def _find_best_sentence(self, claim: str, chunk_text: str) -> str:
+        """Return the sentence in ``chunk_text`` most relevant to
+        ``claim`` according to the cross-encoder reranker.
+
+        Falls back to the first non-trivial sentence if the reranker
+        is unavailable, the chunk has only one sentence, or scoring
+        raises. This is the langroid principle applied at sentence
+        granularity — the LLM gives the chunk number, deterministic
+        scoring picks the supporting sentence.
+        """
+        if not chunk_text:
+            return ""
+        sentences = [
+            s.strip()
+            for s in re.split(r"(?<=[.!?])\s+", chunk_text)
+            if s.strip()
+        ]
+        # Drop very short fragments (likely artifacts of bullet
+        # points, abbreviations like "et al.", etc.) so we don't
+        # rank noise above real sentences.
+        sentences = [s for s in sentences if len(s) >= 20]
+        if not sentences:
+            # Fallback to the chunk start if sentence-splitting yielded
+            # nothing usable.
+            return chunk_text[:300].strip()
+        if len(sentences) == 1 or self.reranker is None:
+            return sentences[0]
+        try:
+            import numpy as np
+            # Use the MODEL's actual max token count, not
+            # ``config.reranker_max_length`` — the latter is the
+            # construction-time setting and can exceed what the
+            # transformer's ``max_position_embeddings`` allows. ``-8``
+            # budgets for special tokens ([CLS], [SEP], etc.).
+            max_total = max(64, self._get_reranker_max_tokens() - 8)
+            half = max_total // 2
+            t_claim = self._truncate_for_reranker(claim, half)
+            t_sentences = [
+                self._truncate_for_reranker(s, half) for s in sentences
+            ]
+            pairs = [[t_claim, s] for s in t_sentences]
+            scores = self.reranker.predict(pairs)
+            best_idx = int(np.argmax(scores))
+            return sentences[best_idx]
+        except Exception as e:
+            logger.warning(f"Sentence reranker scoring failed: {e}")
+            return sentences[0]
+
+    def _reattribute_and_extract(
+        self,
+        answer: str,
+        sources: List[Dict[str, Any]],
+    ) -> tuple:
+        """Universal citation correction step. Per the langroid
+        pattern: trust the LLM for chunk numbering, then let
+        deterministic scoring validate that each citation actually
+        matches its claim.
+
+        For each ``[cN]`` marker in the answer:
+          1. Extract the claim sentence (preceding text up to the
+             marker, bounded at the previous sentence delimiter).
+          2. Score every retrieved chunk against the claim with the
+             cross-encoder reranker — the same model used at
+             retrieval rerank time, so it's already loaded and
+             warm.
+          3. The chunk with the highest score is the actually-best
+             support for that claim. If the LLM picked a different
+             chunk, override the marker.
+          4. Within the chosen chunk, find the most relevant
+             sentence via the same reranker — that becomes the
+             ``quote`` shown to the frontend (no LLM extraction).
+
+        Returns ``(corrected_answer, citations)`` where citations
+        is a list of ``{chunk_id, quote}`` dicts, one per cited
+        marker. Marker corrections are applied to the answer text
+        in reverse order to preserve byte offsets during the splice.
+
+        If the reranker is unavailable, returns the answer unchanged
+        plus an empty citations list — the system gracefully
+        degrades to chunk-level highlighting from the source dict.
+        """
+        if not answer or not sources or self.reranker is None:
+            return answer, []
+
+        marker_pattern = re.compile(r"\[\s*[Cc]?\s*(\d+)\s*\]")
+
+        # Build the candidate pool: chunks with non-trivial text.
+        chunks_with_text = [
+            (s["chunk_id"], s.get("chunk_text", ""))
+            for s in sources
+            if s.get("chunk_id") and s.get("chunk_text", "").strip()
+        ]
+        if not chunks_with_text:
+            return answer, []
+        chunk_ids = [cid for cid, _ in chunks_with_text]
+        chunk_texts = [ct for _, ct in chunks_with_text]
+        chunk_id_set = set(chunk_ids)
+
+        # Walk markers and gather (start, end, original_id, claim).
+        markers = []
+        for match in marker_pattern.finditer(answer):
+            original_id = f"c{match.group(1)}"
+            claim_start = self._find_sentence_start(answer, match.start())
+            claim = answer[claim_start:match.start()].strip()
+            markers.append({
+                "match_start": match.start(),
+                "match_end": match.end(),
+                "original_id": original_id,
+                "claim": claim,
+            })
+
+        if not markers:
+            return answer, []
+
+        # Re-attribute each marker using the reranker.
+        try:
+            import numpy as np
+        except ImportError:
+            logger.warning("numpy unavailable; skipping re-attribution")
+            return answer, []
+
+        citations: List[Dict[str, Any]] = []
+        corrections: List[tuple] = []  # (start, end, replacement_str)
+        seen_in_citations: set = set()
+
+        # Pre-compute the token budget for the reranker. We use the
+        # MODEL's actual max — not ``config.reranker_max_length``,
+        # which is a construction-time setting that can exceed the
+        # transformer's architectural ``max_position_embeddings``.
+        # When config > arch, the tokenizer doesn't truncate enough
+        # and ``predict()`` raises a tensor-shape mismatch. We split
+        # the resulting budget between claim and chunk; chunks are
+        # usually larger so they get the bigger share. Pre-truncating
+        # chunk_texts ONCE per query lets us reuse them across all
+        # markers — the per-claim scoring only re-truncates the
+        # claim each iteration.
+        max_total = max(64, self._get_reranker_max_tokens() - 8)
+        claim_token_budget = min(96, max_total // 4)
+        chunk_token_budget = max(64, max_total - claim_token_budget)
+        truncated_chunk_texts = [
+            self._truncate_for_reranker(ct, chunk_token_budget)
+            for ct in chunk_texts
+        ]
+
+        for m in markers:
+            claim = m["claim"]
+            if not claim:
+                continue
+            t_claim = self._truncate_for_reranker(claim, claim_token_budget)
+            try:
+                pairs = [[t_claim, ct] for ct in truncated_chunk_texts]
+                scores = self.reranker.predict(pairs)
+            except Exception as e:
+                logger.warning(
+                    f"Reranker re-attribution failed for marker: {e}"
+                )
+                continue
+
+            best_idx = int(np.argmax(scores))
+            best_id = chunk_ids[best_idx]
+            best_chunk_text = chunk_texts[best_idx]
+
+            # Plan a marker correction if the reranker disagrees with
+            # the LLM. No magic threshold — the argmax is the source
+            # of truth. If the LLM and reranker happen to agree, no
+            # override is recorded.
+            if (
+                best_id != m["original_id"]
+                and m["original_id"] in chunk_id_set
+            ):
+                corrections.append(
+                    (m["match_start"], m["match_end"], f"[{best_id}]")
+                )
+            elif m["original_id"] not in chunk_id_set:
+                # LLM emitted a chunk_id we never retrieved (rare but
+                # possible if the LLM hallucinated or invented an id).
+                # Force-correct to the reranker's best.
+                corrections.append(
+                    (m["match_start"], m["match_end"], f"[{best_id}]")
+                )
+
+            # Deterministic quote = best sentence in the chosen
+            # chunk for this specific claim. Replaces the prior
+            # LLM-based Pass 2 quote extraction. Dedup by chunk_id
+            # so we don't emit duplicate citation entries when the
+            # same chunk supports multiple claims.
+            if best_id not in seen_in_citations:
+                seen_in_citations.add(best_id)
+                quote = self._find_best_sentence(claim, best_chunk_text)
+                citations.append({"chunk_id": best_id, "quote": quote})
+
+        # Apply corrections in REVERSE order so earlier offsets stay
+        # valid as we splice replacements in.
+        if corrections:
+            corrected = answer
+            for start, end, replacement in sorted(
+                corrections, key=lambda x: -x[0]
+            ):
+                corrected = corrected[:start] + replacement + corrected[end:]
+            return corrected, citations
+
+        return answer, citations
 
     @staticmethod
     def _strip_to_body(text: str, title: str = "") -> str:
@@ -1946,10 +2331,14 @@ class RAGService:
                 continue
 
             parent_ids_seen.add(parent_id)
-            ptext = self._get_parent_text(parent_id, user_id)
+            parent_data = self._get_parent_data(parent_id, user_id)
+            ptext = parent_data.get("text", "")
             if ptext:
                 from langchain_core.documents import Document
-                # Create a synthetic result with parent text
+                # Create a synthetic result with parent text. Carry
+                # the parent's body_start/body_end/page offsets onto
+                # the result dict so they survive into the source
+                # output without us re-reading the parent store.
                 candidate_parents.append({
                     "doc": Document(
                         page_content=ptext,
@@ -1957,6 +2346,9 @@ class RAGService:
                     ),
                     "rerank_score": result.get("rerank_score", 0),
                     "normalized_score": result.get("normalized_score", 0),
+                    "body_start": parent_data.get("body_start"),
+                    "body_end": parent_data.get("body_end"),
+                    "page": parent_data.get("page"),
                 })
             else:
                 candidate_parents.append(result)
@@ -2040,18 +2432,30 @@ class RAGService:
             # prefixes prevent exact matching and the highlight
             # falls back to fuzzy approximation.
             citable_text = self._strip_to_body(d.page_content, title=title)
-            sources.append(
-                {
-                    "chunk_id": chunk_id,
-                    "source": src,
-                    "section": sec,
-                    "parser_type": parser_type,
-                    "score": score,
-                    # Full chunk body — citation matching needs the
-                    # complete text to fuzzy-locate the verbatim quote.
-                    "chunk_text": citable_text,
-                }
-            )
+            # Pull the offset metadata recorded at ingest time onto the
+            # source dict. When body_start/body_end are present, the
+            # frontend slices the saved markdown directly — byte-exact
+            # highlight, no fuzzy matching needed. When absent (legacy
+            # chunks indexed before this feature, or chunks where the
+            # ingest-time substring search failed), the frontend falls
+            # back to its existing fuzzy strategies.
+            source_record: Dict[str, Any] = {
+                "chunk_id": chunk_id,
+                "source": src,
+                "section": sec,
+                "parser_type": parser_type,
+                "score": score,
+                "chunk_text": citable_text,
+            }
+            body_start = result.get("body_start")
+            body_end = result.get("body_end")
+            page = result.get("page") or d.metadata.get("page") or None
+            if body_start is not None and body_end is not None:
+                source_record["body_start"] = body_start
+                source_record["body_end"] = body_end
+            if page:
+                source_record["page"] = page
+            sources.append(source_record)
 
         context = "\n\n".join(context_parts)
 
@@ -2116,13 +2520,18 @@ class RAGService:
 
         # Add conversation history (last 5 turns = 10 messages max).
         #
-        # Strip ``[cN]`` citation markers from prior assistant turns.
+        # Strip citation markers from prior assistant turns. We
+        # accept all the variants LLMs naturally emit: ``[cN]``
+        # (canonical, what the prompt asks for), bare ``[N]``
+        # (most common — bare numeric brackets dominate training
+        # data), and any of those with leading/trailing whitespace
+        # inside the brackets like ``[ c1]`` or ``[ 1 ]`` (some
+        # models pad for visual separation). Uppercase ``[C1]`` is
+        # also accepted defensively.
         # Per-turn positional ids mean the same label can refer to
-        # different chunks in different turns — so leaving them in
-        # history would actively mislead the LLM. We strip them out;
-        # the prose that remains gives the LLM enough context about
-        # what was previously discussed.
-        marker_pattern = re.compile(r"\[c\d+\]")
+        # different chunks in different turns — so leaving any
+        # marker form in history would actively mislead the LLM.
+        marker_pattern = re.compile(r"\[\s*[Cc]?\s*\d+\s*\]")
         if chat_history:
             history_window = chat_history[-10:]  # Last 5 Q&A pairs
             for msg in history_window:
@@ -2230,39 +2639,175 @@ Question: {question}"""
         # chunks — small retrieved set, (c) prompt drift — markers
         # not following the [cN] format.
         if accumulated.strip():
-            found_markers = re.findall(r"\[(c\d+)\]", accumulated)
+            # Accept both ``[cN]`` and bare ``[N]``; normalize bare
+            # numeric markers to canonical ``cN`` form. Bounds-check
+            # against retrieved chunk_ids so reference numbers
+            # quoted from source text don't masquerade as citations.
+            retrieved_id_set = {
+                s["chunk_id"] for s in prepared.get("sources", [])
+            }
+            # Same permissive pattern as the strip + extract sites
+            # — accepts ``[c1]``, ``[1]``, ``[C1]``, ``[ c1]``,
+            # ``[ 1 ]``, etc. Whitespace inside the brackets is
+            # observed in practice from real LLM outputs.
+            raw_markers = re.findall(
+                r"\[\s*[Cc]?\s*(\d+)\s*\]", accumulated
+            )
+            found_markers = [
+                f"c{num}" for num in raw_markers
+                if f"c{num}" in retrieved_id_set
+            ]
             unique_cited = sorted(set(found_markers))
             retrieved_ids = sorted(
                 s["chunk_id"] for s in prepared.get("sources", [])
             )
-            # Promoted to WARNING so it surfaces at the default
-            # logger threshold most Python apps run at. Semantically
-            # this is diagnostic, not a true warning — but visibility
-            # matters more than label purity here.
+            # Build per-chunk diagnostic mapping. We also OFFSET-VALIDATE
+            # each chunk: reload the saved paper markdown once per
+            # source, slice ``markdown[body_start:body_end]``, and
+            # compare to the ``chunk_text`` field. If they diverge,
+            # the offset is stale OR ``_strip_to_body`` is producing
+            # a different body than what was stored at ingest.
+            sources_for_log = prepared.get("sources", [])
+            md_cache: Dict[str, Optional[str]] = {}
+
+            def _load_md_once(filename: str) -> Optional[str]:
+                if filename in md_cache:
+                    return md_cache[filename]
+                try:
+                    md_path = get_user_markdown_file_path(user_id, filename)
+                    if md_path.is_file():
+                        md_cache[filename] = md_path.read_text(encoding="utf-8")
+                    else:
+                        md_cache[filename] = None
+                except Exception:
+                    md_cache[filename] = None
+                return md_cache[filename]
+
+            def _validate(s: Dict[str, Any]) -> str:
+                bs = s.get("body_start")
+                be = s.get("body_end")
+                if bs is None or be is None:
+                    return "no-offset"
+                md = _load_md_once(s.get("source", ""))
+                if md is None:
+                    return f"off{bs}-md-missing"
+                if not (0 <= bs < be <= len(md)):
+                    return f"off{bs}-OOB(md_len={len(md)})"
+                slice_text = md[bs:be]
+                ctext = s.get("chunk_text", "")
+                if slice_text == ctext:
+                    return f"off{bs}-OK"
+                # Compute first divergence position for actionable
+                # diagnostics.
+                limit = min(len(slice_text), len(ctext))
+                first_diff = next(
+                    (
+                        i for i in range(limit)
+                        if slice_text[i] != ctext[i]
+                    ),
+                    limit,
+                )
+                return (
+                    f"off{bs}-MISMATCH("
+                    f"slice_len={len(slice_text)},"
+                    f"ctext_len={len(ctext)},"
+                    f"first_diff={first_diff})"
+                )
+
+            id_to_source = {
+                s["chunk_id"]: (
+                    f"{s.get('source', '?')}"
+                    + (f":p{s['page']}" if s.get("page") else "")
+                    + f":{_validate(s)}"
+                )
+                for s in sources_for_log
+            }
+            # Snippet of the actual LLM output so we can diagnose
+            # zero-marker cases. Tells us whether the LLM emitted
+            # NO citations at all (prompt/model compliance issue) or
+            # markers in an unexpected format the regex doesn't
+            # catch (parentheses (1), angle brackets <1>, prefixed
+            # like [Source 1], unicode superscripts ¹², etc.).
+            # Whitespace collapsed for readability; truncated to
+            # keep the log line manageable.
+            snippet_raw = accumulated[:280]
+            snippet = re.sub(r"\s+", " ", snippet_raw).strip()
+            # Also surface ALL bracketed substrings (any content),
+            # so non-numeric markers like [Source 1] stand out at a
+            # glance even though they don't match the citation
+            # regex. Limited to first 8 to avoid log spam.
+            any_brackets = re.findall(r"\[[^\]\n]{1,40}\]", snippet_raw)[:8]
             logger.warning(
                 "[CITATION DIAG] total_markers=%d unique_cited=%d/%d "
-                "retrieved=%s cited=%s",
+                "retrieved=%s cited=%s mapping=%s "
+                "any_brackets=%s snippet=%r",
                 len(found_markers),
                 len(unique_cited),
                 len(retrieved_ids),
                 retrieved_ids,
                 unique_cited,
+                id_to_source,
+                any_brackets,
+                snippet,
             )
 
-        # Pass 2 — extract verbatim quotes per cited chunk_id via
-        # JSON-mode LLM call. Best-effort: any failure (timeout,
-        # malformed JSON from a small model, no markers in the answer)
-        # results in an empty citations list — the answer text and
-        # source list still render correctly.
+        # Universal citation correction step. Replaces the previous
+        # LLM-based Pass 2 (which asked the LLM to extract verbatim
+        # quotes from each cited chunk and was a) costly, b) error-
+        # prone when the LLM cited the wrong chunk in Pass 1).
+        #
+        # langroid principle: the LLM gives chunk numbers, our code
+        # does the rest. Re-attribution uses the cross-encoder
+        # reranker (already loaded for retrieval rerank) to score
+        # each [cN]'s claim against every retrieved chunk and pick
+        # the actually-best support. Per-claim sentence selection
+        # produces deterministic quotes without any LLM call.
         citations: List[Dict[str, Any]] = []
+        rewrite_error: Optional[str] = None
+        corrected_answer = accumulated
         if accumulated.strip():
             try:
-                citations = await self._extract_citations(
+                corrected_answer, citations = self._reattribute_and_extract(
                     accumulated, prepared["sources"]
                 )
             except Exception as e:
-                logger.warning(f"Citation extraction (pass 2) failed: {e}")
+                logger.warning(f"Citation re-attribution failed: {e}")
                 citations = []
+                corrected_answer = accumulated
+                rewrite_error = str(e)[:200]
+
+        # Diagnostic — fires unconditionally so we always see the
+        # outcome of re-attribution. Notes whether the answer text
+        # was rewritten (i.e. the reranker disagreed with the LLM
+        # on at least one marker) and shows a per-citation preview
+        # of the deterministic quote.
+        if accumulated.strip():
+            answer_rewritten = corrected_answer != accumulated
+            citations_summary = [
+                {
+                    "chunk_id": c.get("chunk_id"),
+                    "quote_preview": (c.get("quote") or "")[:140],
+                }
+                for c in citations
+            ]
+            logger.warning(
+                "[CITATION DIAG] reattributed=%s rewritten=%s "
+                "citations=%s%s",
+                len(citations),
+                answer_rewritten,
+                citations_summary,
+                f" error={rewrite_error!r}" if rewrite_error else "",
+            )
+
+        # If re-attribution rewrote any markers, push the corrected
+        # answer text to the frontend so subsequent renders use the
+        # right [cN] → chunk mapping. The displayed superscript
+        # numbers stay stable because the frontend numbers by order
+        # of first appearance — only the underlying chunk_id link
+        # changes, so users don't see the answer text "flicker".
+        if corrected_answer != accumulated:
+            yield {"type": "answer_corrected", "text": corrected_answer}
+
         yield {"type": "citations", "citations": citations}
 
         yield {"type": "done"}
@@ -2293,9 +2838,14 @@ Question: {question}"""
         from backend.schemas.schemas import Citations as _CitationsSchema
 
         # 1. Find chunk_ids actually mentioned in the answer.
-        # Marker format is ``[cN]`` (per-turn positional id).
-        marker_pattern = re.compile(r"\[(c\d+)\]")
-        cited_ids = set(marker_pattern.findall(answer))
+        # Tolerates every marker variant LLMs commonly emit:
+        # ``[c1]``, ``[1]``, ``[C1]``, ``[ c1]``, ``[ 1 ]``, etc.
+        # All normalize to ``cN`` for downstream lookup.
+        # Bounds-checked below by intersecting with retrieved
+        # chunk_ids so bare numeric brackets quoted from paper
+        # body text don't false-positive.
+        marker_pattern = re.compile(r"\[\s*[Cc]?\s*(\d+)\s*\]")
+        cited_ids = {f"c{num}" for num in marker_pattern.findall(answer)}
         if not cited_ids:
             return []
 
@@ -2806,12 +3356,56 @@ Summary:"""
                 for p_idx, p_text in enumerate(parent_texts):
                     pid = f"{parent_id}_p{p_idx}"
                     parent_with_header = doc_header + p_text
+                    page_from_origin = getattr(chunk.meta.origin, "page_no", 0)
+
+                    # Resolve body offset in the exported markdown.
+                    # HybridChunker can reassemble across structural
+                    # boundaries, so the contextualized chunk text
+                    # may not be a contiguous substring — we fall back
+                    # to searching for the chunk body without the
+                    # contextualization breadcrumbs before giving up.
+                    # ``matched_text`` tracks WHICH string was actually
+                    # found so ``body_end`` reflects the real matched
+                    # span (the previous version used ``len(p_text)``
+                    # even when the raw_text fallback fired, which
+                    # overshot the highlight when raw_text was
+                    # shorter than the contextualized chunk).
+                    body_start: Optional[int] = None
+                    body_end: Optional[int] = None
+                    if extracted_text and p_text.strip():
+                        matched_text: Optional[str] = None
+                        pos = extracted_text.find(p_text)
+                        if pos != -1:
+                            matched_text = p_text
+                        else:
+                            raw_text = getattr(chunk, "text", "") or ""
+                            if raw_text.strip():
+                                raw_pos = extracted_text.find(raw_text)
+                                if raw_pos != -1:
+                                    pos = raw_pos
+                                    matched_text = raw_text
+                        if pos != -1 and matched_text:
+                            # Same trimmed-body alignment as the
+                            # PyMuPDF path. Without this, leading or
+                            # trailing whitespace in ``matched_text``
+                            # causes the recorded offset to disagree
+                            # with the ``chunk_text`` field exposed
+                            # to the frontend (which comes from
+                            # ``_strip_to_body`` and is .strip()-ed).
+                            leading_ws = len(matched_text) - len(matched_text.lstrip())
+                            trailing_ws = len(matched_text) - len(matched_text.rstrip())
+                            body_start = pos + leading_ws
+                            body_end = pos + len(matched_text) - trailing_ws
+
                     parent_chunks.append({
                         "parent_id": pid,
                         "text": parent_with_header,
                         "section_title": section_title,
+                        "body_start": body_start,
+                        "body_end": body_end,
+                        "page": page_from_origin or None,
                     })
-                    
+
                     # --- CHILD CHUNKS from this parent ---
                     child_texts = self._split_semantic_children(p_text)
                     for c_idx, c_text in enumerate(child_texts):
@@ -2829,11 +3423,13 @@ Summary:"""
                                 "doc_authors": pdf_metadata.get("authors", ""),
                                 "doc_doi": pdf_metadata.get("doi", ""),
                                 "doc_journal": pdf_metadata.get("journal", ""),
-                                "page": getattr(chunk.meta.origin, "page_no", 0),
+                                "page": page_from_origin,
                                 "section_title": section_title,
                                 "headings": headings,
                                 "parent_id": pid,
                                 "child_index": c_idx,
+                                "char_count": len(c_text),
+                                "word_count": len(c_text.split()),
                             },
                         })
             
@@ -3131,6 +3727,7 @@ Summary:"""
         doc_metadata: Dict[str, str] = None,
         source: str = "",
         use_semantic_children: bool = True,
+        full_text: str = "",
     ):
         """Create parent-child hierarchical chunks with Markdown splitting and contextual headers.
 
@@ -3142,6 +3739,15 @@ Summary:"""
            [Document Title] > [Section Title] > [chunk text]
 
         Tables are indexed directly without parent-child split.
+
+        When ``full_text`` is provided (the saved paper markdown),
+        each parent gets a ``body_start``/``body_end`` offset pinning
+        its body to a precise char range in the source — used at
+        render time to anchor citation highlights without fuzzy
+        matching. Pages are also recovered from ``<!-- Page N -->``
+        markers when present. ``full_text=""`` (default) preserves
+        the prior behavior with no offset metadata.
+
         Returns: (parent_chunks, all_chunks_for_indexing)
         """
         doc_metadata = doc_metadata or {}
@@ -3217,16 +3823,53 @@ Summary:"""
             # Split section into parent-sized markdown chunks
             parent_texts = parent_splitter.split_text(section_md)
             for p_idx, p_text in enumerate(parent_texts):
-                # Strip the splitter-injected section header to avoid doubles
+                # Strip the splitter-injected section header to avoid doubles.
+                # The remaining ``p_text`` is the parent's BODY — the same
+                # bytes we expect to find verbatim in the saved paper
+                # markdown (modulo header lines elided during section
+                # detection).
                 if header_prefix and p_text.startswith(header_prefix):
                     p_text = p_text[len(header_prefix):]
                 parent_with_header = header + p_text
                 pid = f"{parent_id}_p{p_idx}"
+
+                # Resolve the parent's body offset in the original
+                # markdown. ``find()`` is byte-exact so this either
+                # returns a precise [start, end) span or -1 (we
+                # record nothing in that case and the frontend falls
+                # back to fuzzy matching for this chunk only).
+                #
+                # We align the recorded span to the *trimmed* body —
+                # advance past leading whitespace and pull back from
+                # trailing whitespace. Without this, ``p_text`` from
+                # the splitter often carries a leading newline that
+                # ``_strip_to_body`` (the function exposing
+                # ``chunk_text`` to Pass 2 and the frontend) removes
+                # via ``.strip()``. The recorded offsets would then
+                # disagree with ``chunk_text`` by 1-2 whitespace
+                # chars at the boundaries, breaking byte-exact
+                # comparison and causing Pass 2 quote-verification
+                # drift + frontend slice/chunk_text mismatch.
+                body_start: Optional[int] = None
+                body_end: Optional[int] = None
+                page: Optional[int] = None
+                if full_text and p_text.strip():
+                    pos = full_text.find(p_text)
+                    if pos != -1:
+                        leading_ws = len(p_text) - len(p_text.lstrip())
+                        trailing_ws = len(p_text) - len(p_text.rstrip())
+                        body_start = pos + leading_ws
+                        body_end = pos + len(p_text) - trailing_ws
+                        page = self._find_page_for_offset(full_text, body_start)
+
                 parent_chunks.append(
                     {
                         "parent_id": pid,
                         "text": parent_with_header,
                         "section_title": section_title,
+                        "body_start": body_start,
+                        "body_end": body_end,
+                        "page": page,
                     }
                 )
 
@@ -3244,15 +3887,23 @@ Summary:"""
                 for c_idx, c_text in enumerate(child_texts):
                     # Prepend contextual header to child for embedding
                     child_with_header = header + c_text
+                    child_meta: Dict[str, Any] = {
+                        "section_title": section_title,
+                        "content_type": "text",
+                        "parent_id": pid,
+                        "child_index": c_idx,
+                        # Cheap quantitative metadata (Qdrant payload).
+                        # Useful for filtering and analytics; doesn't
+                        # affect retrieval scoring.
+                        "char_count": len(c_text),
+                        "word_count": len(c_text.split()),
+                    }
+                    if page is not None:
+                        child_meta["page"] = page
                     all_chunks.append(
                         {
                             "text": child_with_header,
-                            "metadata": {
-                                "section_title": section_title,
-                                "content_type": "text",
-                                "parent_id": pid,
-                                "child_index": c_idx,
-                            },
+                            "metadata": child_meta,
                         }
                     )
 

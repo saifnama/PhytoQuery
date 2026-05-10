@@ -188,24 +188,64 @@ function findFlexibleSpan(
 }
 
 /** Splice a single ``mark`` tag into the markdown anchored on the
- * most-specific match we can find. Strategy:
- *   1. If Pass 2 gave us a verbatim ``quote`` and it appears in the
- *      paper markdown, highlight ONLY the quote — bright yellow,
- *      scroll into view. Each citation has its own quote so
- *      different clicks land on different precise spans. This is
- *      the primary mechanism now.
- *   2. Otherwise (Pass 2 failed for this marker, or quote not
- *      locatable), fall back to highlighting the chunk_text region
- *      as a softer chunk-level match. Less precise, still useful.
- *   3. If neither anchors, render the markdown unhighlighted. */
+ * most-specific match we can find. Strategy cascade, ordered by
+ * accuracy not by latency (all strategies are fast):
+ *   0. ``body_start``/``body_end`` recorded at INGEST time → byte-
+ *      exact slice of the markdown. No fuzzy matching, no
+ *      ambiguity. This is the primary mechanism for chunks indexed
+ *      after the offset-tracking feature shipped. Inside that span
+ *      we also try to brighten the verbatim quote (if present in
+ *      the slice) for finer granularity.
+ *   1. If no offsets present (legacy chunk OR ingest-time substring
+ *      search failed) and Pass 2 gave us a ``quote`` that appears
+ *      in the markdown, highlight just the quote.
+ *   2. If still no anchor, fuzzy-match the full chunk text via
+ *      findFlexibleSpan's three-step cascade (exact → multi-slice
+ *      → n-gram density).
+ *   3. Last resort, render unhighlighted. */
 function highlightInMarkdown(
   markdown: string,
-  chunkText: string,
+  source: RagSource,
   quote?: string,
 ): { highlighted: string; chunkAnchorId: string | null } {
   const anchorId = 'pq-citation-anchor';
+  const chunkText = source.chunk_text;
 
-  // Primary: anchor on the verbatim quote.
+  // Strategy 0 — exact offset slice from ingest-time metadata.
+  // Only honor offsets that look sane against the current markdown
+  // (defensive in case the markdown was re-extracted with a
+  // different parser since indexing).
+  const bs = source.body_start;
+  const be = source.body_end;
+  if (
+    typeof bs === 'number' &&
+    typeof be === 'number' &&
+    bs >= 0 &&
+    be > bs &&
+    be <= markdown.length
+  ) {
+    const before = markdown.slice(0, bs);
+    let chunk = markdown.slice(bs, be);
+    const after = markdown.slice(be);
+
+    // Inside the offset-bounded chunk, brighten the verbatim quote
+    // if Pass 2 returned one and it's actually present here.
+    if (quote && quote.trim().length >= 8) {
+      const quoteSpan = findFlexibleSpan(chunk, quote);
+      if (quoteSpan) {
+        const [qs, qe] = quoteSpan;
+        chunk =
+          chunk.slice(0, qs) +
+          `<mark class="quote-highlight">${chunk.slice(qs, qe)}</mark>` +
+          chunk.slice(qe);
+      }
+    }
+
+    const wrapped = `<mark class="chunk-highlight" id="${anchorId}">${chunk}</mark>`;
+    return { highlighted: before + wrapped + after, chunkAnchorId: anchorId };
+  }
+
+  // Strategy 1 — quote-only fuzzy match (Pass 2 verbatim).
   if (quote && quote.trim().length >= 8) {
     const quoteSpan = findFlexibleSpan(markdown, quote);
     if (quoteSpan) {
@@ -219,8 +259,7 @@ function highlightInMarkdown(
     }
   }
 
-  // Fallback: anchor on the full chunk text (less precise — chunks
-  // may not appear contiguously in the source markdown).
+  // Strategy 2 — chunk-text fuzzy match.
   const chunkSpan = findFlexibleSpan(markdown, chunkText);
   if (chunkSpan) {
     const [cStart, cEnd] = chunkSpan;
@@ -232,8 +271,7 @@ function highlightInMarkdown(
     return { highlighted: before + wrapped + after, chunkAnchorId: anchorId };
   }
 
-  // Last resort: render unhighlighted. The user still sees the
-  // paper's markdown opened to the cited file/section.
+  // Strategy 3 — unhighlighted. Panel still useful as a navigator.
   return { highlighted: markdown, chunkAnchorId: null };
 }
 
@@ -281,8 +319,8 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
 
   const { highlighted, chunkAnchorId } = useMemo(() => {
     if (!markdown) return { highlighted: '', chunkAnchorId: null };
-    return highlightInMarkdown(markdown, source.chunk_text, citation?.quote);
-  }, [markdown, source.chunk_text, citation?.quote]);
+    return highlightInMarkdown(markdown, source, citation?.quote);
+  }, [markdown, source, citation?.quote]);
 
   // Scroll the highlighted chunk into view once the markdown renders.
   useEffect(() => {
@@ -309,9 +347,11 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
           >
             {source.source}
           </h3>
-          {source.section && (
+          {(source.section || source.page) && (
             <p className="text-xs text-base-content/60 truncate">
               {source.section}
+              {source.section && source.page ? ' · ' : ''}
+              {source.page ? `p. ${source.page}` : ''}
             </p>
           )}
         </div>
