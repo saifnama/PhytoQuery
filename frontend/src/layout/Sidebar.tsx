@@ -48,13 +48,16 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
 
     try {
       if (fileArr.length > CHUNK_THRESHOLD) {
-        let lastResult: Awaited<ReturnType<typeof ragApi.uploadFiles>> | null = null;
-        await ragApi.uploadFilesChunked(
+        // ``uploadFilesChunked`` returns the last batch's UploadResponse;
+        // no need for a ``let`` + callback-capture pattern (TS flow
+        // analysis can't see writes inside callbacks, which previously
+        // narrowed ``lastResult`` to ``never`` after the await and
+        // broke ``tsc -b``).
+        const lastResult = await ragApi.uploadFilesChunked(
           fileArr,
           'docling',
           CHUNK_THRESHOLD,
           (idx, total, batchResult) => {
-            lastResult = batchResult;
             setUploadStatus(
               `Queued batch ${idx + 1} of ${total} (${batchResult.files.length} file${
                 batchResult.files.length > 1 ? 's' : ''
@@ -62,9 +65,9 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
             );
           },
         );
-        if (lastResult && lastResult.status === 'processing' && lastResult.job_id) {
+        if (lastResult.status === 'processing' && lastResult.job_id) {
           beginPollingJob(lastResult.job_id);
-        } else if (lastResult) {
+        } else {
           setUploadStatus(
             `Indexed ${lastResult.files.length} file${lastResult.files.length > 1 ? 's' : ''}.`,
           );

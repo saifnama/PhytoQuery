@@ -368,13 +368,18 @@ const RagPage: React.FC = () => {
 
     try {
       if (fileArr.length > CHUNK_THRESHOLD) {
-        let lastResult: Awaited<ReturnType<typeof ragApi.uploadFiles>> | null = null;
-        await ragApi.uploadFilesChunked(
+        // ``uploadFilesChunked`` already returns the LAST batch's
+        // UploadResponse, so we don't need a ``let`` + callback-capture
+        // pattern. The previous shape (``let lastResult = null;`` mutated
+        // inside ``onBatch``) tripped TypeScript's flow analysis — TS
+        // doesn't track writes inside callbacks, so post-await the type
+        // narrowed to ``never`` and broke ``tsc -b``. Using the awaited
+        // return value sidesteps the issue entirely.
+        const lastResult = await ragApi.uploadFilesChunked(
           fileArr,
           parserType,
           CHUNK_THRESHOLD,
           (idx, total, batchResult) => {
-            lastResult = batchResult;
             setUploadStatus(
               `Queued batch ${idx + 1} of ${total} (${batchResult.files.length} file${
                 batchResult.files.length > 1 ? 's' : ''
@@ -382,9 +387,9 @@ const RagPage: React.FC = () => {
             );
           },
         );
-        if (lastResult && lastResult.status === 'processing' && lastResult.job_id) {
+        if (lastResult.status === 'processing' && lastResult.job_id) {
           beginPollingJob(lastResult.job_id);
-        } else if (lastResult) {
+        } else {
           applyUploadResult(lastResult, parserType);
           await loadIndexedFiles();
           setUploadStatus(

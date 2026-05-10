@@ -32,7 +32,7 @@ rank-bm25==0.2.2
 # unclosed braces, smart quotes. ``json_repair`` recovers the intended
 # object from these without an extra LLM call. See _select_used_chunks
 # in services/rag_engine.py.
-json-repair==0.35.0
+json-repair==0.59.6
 
 # === PDF & Document Parsing ===
 pymupdf==1.27.2.3
