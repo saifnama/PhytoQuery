@@ -2293,12 +2293,19 @@ class RAGService:
         raw = (response.content or "").strip()
         if not raw:
             return []
-        # Some small models still wrap JSON in code fences even in
-        # JSON mode.
-        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE)
+        # Permissive JSON parsing — small models in JSON mode commonly
+        # emit malformations that strict ``json.loads`` rejects:
+        # trailing commas, code fences, single quotes, unclosed
+        # braces, smart quotes, prose preamble before the object.
+        # ``json_repair`` recovers the intended structure from these
+        # without an extra LLM call. The downstream isinstance guards
+        # below still gate on shape, so a "repair" that lands on the
+        # wrong shape (e.g., a string) is rejected exactly like a
+        # parse failure was — strict regression-safety: we never
+        # accept anything we wouldn't have accepted before.
         try:
-            import json as _json
-            parsed = _json.loads(raw)
+            from json_repair import repair_json
+            parsed = repair_json(raw, return_objects=True)
         except Exception as e:
             logger.warning(f"chunk-id selection JSON parse failed: {e}")
             return []

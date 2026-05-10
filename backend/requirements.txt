@@ -26,6 +26,13 @@ qdrant-client==1.17.1
 sentence-transformers==5.4.1
 transformers==4.57.1  # Keep in lockstep with zerank-2 + sentence-transformers integration
 rank-bm25==0.2.2
+# Permissive JSON parser used by the structured-output citation pass.
+# Production LLMs (especially smaller models in JSON mode) emit common
+# malformations: trailing commas, code-fenced output, single quotes,
+# unclosed braces, smart quotes. ``json_repair`` recovers the intended
+# object from these without an extra LLM call. See _select_used_chunks
+# in services/rag_engine.py.
+json-repair==0.35.0
 
 # === PDF & Document Parsing ===
 pymupdf==1.27.2.3
