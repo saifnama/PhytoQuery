@@ -19,14 +19,18 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 
 ### Chat / RAG
 - Upload PDFs and query with AI
-- Inline PDF viewer
+- Inline PDF viewer with side-by-side citation preview panel
 - Upload to RAG directly from paper (stays on page, no navigation)
-- Citations with source references
+- **Structured-output citations** — schema-enforced JSON-mode follow-up call selects which retrieved chunks were used; the cross-encoder reranker then attaches `[cN]` markers to the sentence each chunk best supports. Replaces inline marker prompting (which silently dropped on list-style answers) with a guarantee: the schema rejects empty citation lists, so an answer can never be uncited.
+- **Click-to-highlight**: clicking a citation chip opens the source paper at the cited passage, with the exact sentence flash-highlighted via byte-precise `body_start`/`body_end` offsets recorded at index time
 - **Dual parser**: PyMuPDF (fast) or Docling (detailed, structure-preserving)
-- **Hybrid retrieval**: Vector search + BM25 keyword matching with Reciprocal Rank Fusion
+- **Hybrid retrieval**: dense vectors (Qdrant HNSW) + BM25 keyword matching with Reciprocal Rank Fusion. The BM25 sparse index is built once after each upload and persisted to disk — query-time BM25 is sub-millisecond regardless of corpus size (1000+ PDFs)
+- **Parallel ingestion**: per-user upload jobs parse PDFs concurrently via `ThreadPoolExecutor` (PyMuPDF and Docling both release the GIL); per-file `try/except` so one bad PDF can't kill a 1000-PDF batch; flushes to Qdrant every 50 files so peak RAM is bounded and partial progress survives a crash
+- **Chunked upload**: the frontend slices large multi-file uploads into 20-PDF batches so reverse-proxy body limits (nginx, Cloudflare 100 MB) don't trip on multi-GB selections
 - **Instruction-Aware Architecture**: Custom domain prompts for both embedding (Qwen3) and reranking (zerank-2)
 - **MRL Truncation**: Storage-efficient vectors (1024 dims) using Matryoshka Representation Learning
 - **Lazy model loading**: RAG models only load on first use (~200MB startup)
+- **Permissive JSON parsing**: `json-repair` recovers from trailing commas, code fences, single quotes, and unclosed braces in LLM JSON-mode output — no extra LLM call needed
 
 ### Named Entity Recognition (NER)
 - **Dictionary-backed**: PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
@@ -46,16 +50,17 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | Layer | Technology |
 |-------|------------|
 | Backend | FastAPI (Python), uvicorn (dev server) |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, React Router 7 |
+| Frontend state | Zustand (client UI), TanStack Query (server data + polling cache) |
 | NLP | spaCy PhraseMatcher (dictionary-backed) |
 | Embeddings | Qwen3-Embedding-4B (primary), BAAI/bge-m3 (fallback) |
 | Reranker | zeroentropy/zerank-2 (CrossEncoder) |
-| RAG | LangChain, ChromaDB, sentence-transformers, rank-bm25 |
+| RAG | LangChain, Qdrant (embedded), sentence-transformers, rank-bm25, json-repair |
 | PDF Parsing | Docling (detailed), PyMuPDF/fitz (fast) |
 | Graph | vis-network |
 | Sanitization | nh3 (server), DOMPurify (client) |
 | Paper Sources | Europe PMC API, OpenAlex API |
-| LLM | OpenRouter / Ollama |
+| LLM | Groq / OpenRouter / Ollama (provider-agnostic dispatch) |
 | Config | python-dotenv (.env files per environment) |
 
 ## Project Structure
@@ -86,14 +91,18 @@ PhytoQuery/
 │   └── tests/         # pytest tests
 ├── frontend/           # React app
 │   ├── src/
-│   │   ├── features/  # Page components
-│   │   ├── layout/   # Header, Sidebar
-│   │   └── lib/     # API client
+│   │   ├── features/    # Page components
+│   │   ├── layout/      # Header, Sidebar
+│   │   ├── components/  # App-level shared components (UploadStatusListener, …)
+│   │   ├── stores/      # Zustand stores (uploadStore, …)
+│   │   ├── hooks/       # TanStack Query hooks (useIndexedFiles, useUploadJobStatus, …)
+│   │   ├── ui/          # Reusable UI primitives (ErrorBoundary, …)
+│   │   └── lib/         # API client (axios + ragApi/paperApi)
 │   └── dist/        # Built output
 ├── data/             # Runtime data
 │   ├── cache/       # Paper & NER cache
-│   ├── chroma_db/  # Vector store
-│   └── uploads/     # Uploaded PDFs
+│   ├── qdrant/      # Vector store + per-user parent JSON + per-user BM25 cache (.pkl)
+│   └── uploads/     # Uploaded PDFs (per-user folders)
 └── README.md
 ```
 
@@ -261,8 +270,14 @@ Gazetteer CSV files in `backend/gazetteer/data/`:
 |----------|--------|-------------|
 | `/paper/json` | POST | Fetch paper by DOI/PMCID/PMID (source: europepmc or openalex) |
 | `/search/json` | POST | Search Europe PMC or OpenAlex |
-| `/api/chat/query/json` | POST | RAG chat |
-| `/api/chat/upload/json` | POST | Upload PDF to RAG |
+| `/api/chat/query/stream` | POST | RAG chat — NDJSON streaming (`text_delta`, `sources`, `answer_corrected`, `citations`, `done`) |
+| `/api/chat/query/json` | POST | RAG chat — non-streaming fallback |
+| `/api/chat/upload/json` | POST | Upload PDFs to RAG (returns `job_id`; processing runs in the background) |
+| `/api/chat/upload/status/{job_id}` | GET | Poll an upload job — `processing` / `completed` / `failed` |
+| `/api/chat/upload/jobs` | GET | List active upload jobs for the current session |
+| `/api/chat/files/json` | GET | List indexed files in the user's RAG corpus |
+| `/api/chat/files/{name}/markdown` | GET | Extracted markdown for the citation preview panel |
+| `/api/chat/files/{name}/content` | GET | Inline PDF viewer source |
 | `/ner/doi/json` | POST | Standalone NER |
 | `/paper/pdf` | GET | Download paper PDF |
 
@@ -274,53 +289,55 @@ pytest backend/tests/ -v
 
 ## Troubleshooting
 
-### Chroma indexing errors on PDF upload
+### Qdrant indexing errors on PDF upload
 
-The backend recognises and auto-recovers from several chromadb-1.x failure
-modes. If you see one of these in the logs:
+The backend recognises and auto-recovers from two Qdrant failure modes.
+If you see one of these in the logs:
 
 | Symptom in logs | What it means |
 |---|---|
-| `Could not connect to tenant default_tenant. Are you sure it exists` | SQLite tenants table is missing/empty. Happens after an interrupted init or when the directory was created by a pre-1.0 chromadb that didn't have the tenant model. |
-| `attempt to write a readonly database` / `(code: 1032)` | SQLite's `SQLITE_READONLY_DBMOVED` — the database file was replaced or unlinked while a connection still held it. Most visible on macOS/Linux because of how their filesystems handle still-open deleted inodes; can also bite Windows. |
-| `Error updating collection: Database error: …` | Generic stale-handle corruption that wraps either of the above. |
+| `Wrong vector size` / `Wrong vector dimension` | The embedding-model dim changed since the collection was first created (e.g., switching from `bge-m3` 1024-dim to `Qwen3-Embedding-4B` 2560-dim). Each `RagService` derives a `model_suffix` hash and bakes it into the collection name (`user_{id}_{suffix}`) so a real model swap creates a fresh collection — but if you set `RAG_EMBEDDING_DIM` to a smaller MRL truncation after indexing at full dim, the points in the old collection no longer match. |
+| `Collection not found` / `404` from Qdrant | The cached `QdrantVectorStore` wrapper still references a collection name that has since been dropped (e.g., manual `rm -rf data/qdrant`). The wrapper cache lives in-process so it survives the deletion. |
 
-**Auto-recovery (already in place).** `services/rag_engine.py` does three
-things to recover without manual intervention:
+**Auto-recovery (already in place).** `services/rag_engine.py` does
+three things to recover without manual intervention:
 
-- `_get_user_collection` constructs an explicit
-  `chromadb.PersistentClient(path=…, settings=Settings(allow_reset=True))`
-  rather than using `Chroma(persist_directory=…)` implicitly. The explicit
-  client deterministically creates `default_tenant` and `default_database`
-  on first init.
-- The indexing retry path detects any of the corruption signatures above
-  and calls a helper `_reset_user_chroma_in_place(user_id)` that uses
-  **`client.reset()`** to clear collections via SQLite's own TRUNCATE — no
-  filesystem operations, no moved-inode race, cross-OS safe.
-- If `reset()` itself fails (rare — only when the SQLite is so badly
-  corrupted that no client can open it at all), the helper falls back to
-  `shutil.rmtree` as a last resort.
+- The indexing retry path in `process_and_index_pdfs_with_texts` detects
+  either signature (substring match on the exception message) and calls
+  `_invalidate_user_collection(user_id)` to drop the stale wrapper from
+  the in-process cache. If the failure looks like dimension drift, it
+  also calls `_reset_user_chroma_in_place(user_id)` which delegates to
+  Qdrant's `client.delete_collection(...)` — clean, atomic, no
+  filesystem operations.
+- The retry then re-deletes the affected sources, re-creates the
+  collection on first access (`_ensure_qdrant_collection` is idempotent),
+  and re-runs `add_documents`. The user sees the upload finish
+  successfully on a transparent retry.
+- The BM25 sparse cache is invalidated alongside any collection
+  reset/delete so a stale pickle can never serve search results from a
+  dropped corpus.
 
-**Why we don't just `rmtree` and reopen.** That's what we tried first, and
-on macOS/Linux it produces the very `SQLITE_READONLY_DBMOVED` error this
-section is about. SQLite tracks the inode of the file at open time; if you
-delete the file and a new one shows up at the same path, SQLite refuses to
-write to avoid corruption. `client.reset()` operates through the open
-connection so SQLite never sees a "moved" file.
+**Why this is simpler than the old Chroma path.** Earlier versions used
+embedded ChromaDB (SQLite under the hood), which had a class of
+"moved-inode readonly" failures on macOS/Linux when a directory was
+deleted underneath an open connection. Qdrant's embedded client doesn't
+have that pathology — it operates on its own page-locked storage and
+recovers cleanly from `delete_collection` followed by re-creation.
 
 **Manual recovery** (only if auto-recovery somehow loops):
 
 ```bash
 # Stop the backend process first.
 # macOS / Linux:
-rm -rf data/chroma_db
+rm -rf data/qdrant
 # Windows (PowerShell):
-Remove-Item -Recurse -Force data\chroma_db
+Remove-Item -Recurse -Force data\qdrant
 # Restart the backend; the directory is recreated cleanly on next upload.
 ```
 
-Only the user's vector indexes are dropped — uploaded PDFs in
-`data/uploads/` and the paper cache in `data/cache/` are untouched.
+Only vector indexes, parent stores, and BM25 caches are dropped —
+uploaded PDFs in `data/uploads/` and the paper cache in `data/cache/`
+are untouched.
 
 ### `Reranking failed: cannot reshape tensor of 0 elements into shape [...]`
 

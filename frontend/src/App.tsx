@@ -8,6 +8,7 @@ import DatabasePapersPage from './features/papers/DatabasePapersPage';
 import RagPage from './features/chat/RagPage';
 import PaperPage from './features/reader/PaperPage';
 import { ragApi } from './lib/api';
+import { UploadStatusListener } from './components/UploadStatusListener';
 
 // Lazy-load heavy 3D graph — only loaded when user navigates to /dashboard/3d
 const Dashboard3D = lazy(() => import('./features/search/Dashboard3D').then(m => ({ default: m.default })));
@@ -28,6 +29,11 @@ function App() {
 
   return (
     <BrowserRouter>
+      {/* Invisible — watches the shared upload store and polls the
+          active backend indexing job. Mounted at the layout level so
+          uploads triggered from any surface (RagPage, Sidebar) stay
+          observed regardless of which route the user is on. */}
+      <UploadStatusListener />
       <div className="bg-gray-50 flex h-screen overflow-hidden">
         <main className="flex-1 flex flex-col min-w-0 relative z-10">
           <Header />

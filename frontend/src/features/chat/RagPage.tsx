@@ -25,6 +25,8 @@ import {
   type RagSource,
 } from './assistant/runtime';
 import { MarkdownPreviewPanel } from './MarkdownPreviewPanel';
+import { useUploadStore } from '../../stores/uploadStore';
+import { useIndexedFiles } from '../../hooks/useIndexedFiles';
 
 interface UploadedFile {
   name: string;
@@ -117,8 +119,15 @@ const RagPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = location.state as RagLocationState | null;
-  const [uploadStatus, setUploadStatus] = useState<string>('');
-  const [isUploading, setIsUploading] = useState(false);
+  // Upload status + isUploading live in the shared Zustand store so
+  // RagPage and the layout Sidebar always agree on whether an upload
+  // is in flight (see frontend/src/stores/uploadStore.ts). The store
+  // selectors use individual getters so re-renders only fire when
+  // the slice the component reads actually changes.
+  const uploadStatus = useUploadStore((s) => s.status);
+  const setUploadStatus = useUploadStore((s) => s.setStatus);
+  const isUploading = useUploadStore((s) => s.isUploading);
+  const setIsUploading = useUploadStore((s) => s.setIsUploading);
   const [parserType, setParserType] = useState<'pymupdf' | 'docling'>(() => {
     const saved = sessionStorage.getItem(SESSION_KEYS.PARSER);
     return (saved as 'pymupdf' | 'docling' | null) || 'pymupdf';
@@ -145,7 +154,6 @@ const RagPage: React.FC = () => {
   const [activePdfFile, setActivePdfFile] = useState<UploadedFile | null>(null);
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Build the assistant-ui runtime. The selected-file getter is read on
   // every send so the user's checkbox state always reflects in the
@@ -166,52 +174,57 @@ const RagPage: React.FC = () => {
     ),
   );
 
-  // Cleanup polling on unmount
+  // (No manual interval cleanup needed — TanStack Query stops the
+  // upload-status poll automatically when its query goes inactive,
+  // and the App-level UploadStatusListener clears ``currentJobId``
+  // on terminal status. The previous ``pollIntervalRef`` cleanup is
+  // gone with the manual setInterval that needed it.)
+
+  // Server state for the indexed-files list lives in TanStack Query
+  // (see frontend/src/hooks/useIndexedFiles.ts). The query auto-fetches
+  // on mount, dedupes across tabs/components, and is invalidated after
+  // every upload completion. The selection-status merge below is the
+  // same defensive logic we used before: if the backend reports an
+  // empty list while we have files locally (e.g., during the eventual-
+  // consistency window right after upload), we preserve the locals so
+  // the UI doesn't flash empty.
+  const { data: indexedFilesData, refetch: refetchIndexedFiles } = useIndexedFiles();
+
+  // Merge server payload into the local ``uploadedFiles`` whenever the
+  // query data changes. ``setUploadedFiles`` is a stable React setter
+  // so this effect only refires when the backend payload changes.
   useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
+    if (!indexedFilesData) return;
+    setUploadedFiles((prev) => {
+      if (indexedFilesData.length === 0 && prev.length > 0) {
+        // Backend returned no files but we have locals — keep locals.
+        return prev;
       }
-    };
-  }, []);
 
-  // Load indexed files from backend and merge with persisted selection
-  // status. The merge is *defensive*: if the backend reports an empty
-  // list while we have files locally (e.g., a brief eventual-consistency
-  // window right after upload, or a stale 404 on the existence probe),
-  // we preserve the local list rather than wiping it. The "Reset all"
-  // flow already clears local state explicitly, so this can't hide a
-  // real reset.
+      const selectionMap = new Map(prev.map((f) => [f.name, f.selected]));
+      const summaryMap = new Map(prev.map((f) => [f.name, f.summary]));
+
+      return indexedFilesData.map((f) => ({
+        name: f.name,
+        fileType: f.file_type,
+        chunkCount: f.chunk_count,
+        // If we had a selection status for this file before, preserve it; otherwise default to true
+        selected: selectionMap.has(f.name) ? !!selectionMap.get(f.name) : true,
+        parserType: f.parser_type as 'pymupdf' | 'docling',
+        authors: f.authors || '',
+        doi: f.doi || '',
+        journal: f.journal || '',
+        summary: f.summary || summaryMap.get(f.name) || '',
+      }));
+    });
+  }, [indexedFilesData]);
+
+  // Compatibility shim — call sites still use ``loadIndexedFiles()``;
+  // forward to the query's refetch so behavior is unchanged. Awaiting
+  // the refetch resolves once data has been refreshed.
   const loadIndexedFiles = useCallback(async () => {
-    try {
-      const files = await ragApi.listFiles();
-
-      setUploadedFiles((prev) => {
-        if (files.length === 0 && prev.length > 0) {
-          // Backend returned no files but we have locals — keep locals.
-          return prev;
-        }
-
-        const selectionMap = new Map(prev.map((f) => [f.name, f.selected]));
-        const summaryMap = new Map(prev.map((f) => [f.name, f.summary]));
-
-        return files.map((f) => ({
-          name: f.name,
-          fileType: f.file_type,
-          chunkCount: f.chunk_count,
-          // If we had a selection status for this file before, preserve it; otherwise default to true
-          selected: selectionMap.has(f.name) ? !!selectionMap.get(f.name) : true,
-          parserType: f.parser_type as 'pymupdf' | 'docling',
-          authors: f.authors || '',
-          doi: f.doi || '',
-          journal: f.journal || '',
-          summary: f.summary || summaryMap.get(f.name) || '',
-        }));
-      });
-    } catch {
-      // Silently ignore
-    }
-  }, []);
+    await refetchIndexedFiles();
+  }, [refetchIndexedFiles]);
 
   const closePdfViewer = useCallback(() => {
     setActivePdfFile(null);
@@ -238,52 +251,24 @@ const RagPage: React.FC = () => {
     });
   }, []);
 
-  const startUploadPolling = useCallback((jobId: string, parserType: 'pymupdf' | 'docling') => {
-    // Clear any existing poll
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-    }
-    setIsUploading(true);
-    setUploadStatus(`Processing upload...`);
-
-    const poll = async () => {
-      try {
-        const status = await ragApi.getUploadStatus(jobId);
-        if (status.status === 'completed') {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          setIsUploading(false);
-          setUploadStatus(
-            `Indexed ${status.files.length} file${status.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
-          );
-          applyUploadResult(
-            { files: status.files, summaries: status.summaries },
-            parserType
-          );
-          await loadIndexedFiles();
-        } else if (status.status === 'failed') {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
-          setIsUploading(false);
-          setUploadStatus(`Upload failed: ${status.error || 'Unknown error'}`);
-        } else {
-          // still processing
-          setUploadStatus(`Processing ${status.files.join(', ')}...`);
-        }
-      } catch (e) {
-        // Keep polling on transient errors
-        console.error('Poll error:', e);
-      }
-    };
-
-    // Poll immediately, then every 2 seconds
-    poll();
-    pollIntervalRef.current = setInterval(poll, 2000);
-  }, [applyUploadResult, loadIndexedFiles]);
+  // The upload-status polling that used to live here as
+  // ``startUploadPolling`` (with its own setInterval, pollIntervalRef,
+  // and inline status handling) has moved to a single App-level
+  // ``UploadStatusListener`` driven by TanStack Query (see
+  // frontend/src/components/UploadStatusListener.tsx). Trigger a poll
+  // by writing the new ``job_id`` into the upload store via
+  // ``setCurrentJobId(jobId)`` after the multipart POST returns. The
+  // listener handles status text, completion side-effects, and cache
+  // invalidation centrally — no per-component refs to manage.
+  const setCurrentJobId = useUploadStore((s) => s.setCurrentJobId);
+  const beginPollingJob = useCallback(
+    (jobId: string) => {
+      setIsUploading(true);
+      setUploadStatus('Processing upload…');
+      setCurrentJobId(jobId);
+    },
+    [setIsUploading, setUploadStatus, setCurrentJobId],
+  );
 
   const openPdfViewer = useCallback((file: UploadedFile) => {
     setActivePdfFile(file);
@@ -305,9 +290,11 @@ const RagPage: React.FC = () => {
     sessionStorage.setItem(SESSION_KEYS.SIDEBAR, String(sidebarCollapsed));
   }, [sidebarCollapsed]);
 
-  useEffect(() => {
-    loadIndexedFiles();
-  }, [loadIndexedFiles]);
+  // The on-mount fetch that used to live here is gone — ``useIndexedFiles``
+  // auto-fetches on mount via TanStack Query, so a second refetch here
+  // would just duplicate the request. Polling/refresh after upload is
+  // handled by ``invalidateIndexedFiles()`` in the upload completion
+  // path; manual refetches still go through ``loadIndexedFiles()``.
 
   useEffect(() => {
     if (!activePdfFile) return;
@@ -343,7 +330,7 @@ const RagPage: React.FC = () => {
         const file = new File([blob], finalName, { type: 'application/pdf' });
         const result = await ragApi.uploadFiles([file], parserType);
         if (result.status === 'processing' && result.job_id) {
-          startUploadPolling(result.job_id, parserType);
+          beginPollingJob(result.job_id);
         } else {
           applyUploadResult(result, parserType);
           await loadIndexedFiles();
@@ -396,7 +383,7 @@ const RagPage: React.FC = () => {
           },
         );
         if (lastResult && lastResult.status === 'processing' && lastResult.job_id) {
-          startUploadPolling(lastResult.job_id, parserType);
+          beginPollingJob(lastResult.job_id);
         } else if (lastResult) {
           applyUploadResult(lastResult, parserType);
           await loadIndexedFiles();
@@ -407,7 +394,7 @@ const RagPage: React.FC = () => {
       } else {
         const result = await ragApi.uploadFiles(fileArr, parserType);
         if (result.status === 'processing' && result.job_id) {
-          startUploadPolling(result.job_id, parserType);
+          beginPollingJob(result.job_id);
         } else {
           setUploadStatus(
             `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
