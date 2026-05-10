@@ -180,6 +180,56 @@ export const ragApi = {
   },
 
   /**
+   * Upload many PDFs in fixed-size batches.
+   *
+   * Why: a single multipart POST of ~1000 PDFs (5 GB+) trips
+   * reverse-proxy body-size limits (nginx, Cloudflare default 100 MB)
+   * long before FastAPI sees it, and consumes peak memory both in the
+   * browser and on the server. Slicing into batches of ~20 keeps each
+   * request well under typical proxy caps and lets the user see
+   * incremental progress as each batch is queued.
+   *
+   * Each batch becomes its own background indexing job on the server
+   * (own ``job_id``); ``onBatch`` fires once per batch with the upload
+   * response so the caller can chain its own polling per job.
+   *
+   * Returns the LAST batch's UploadResponse (so the existing single-
+   * batch caller path keeps working unchanged when ``files.length``
+   * is below the chunk threshold). For multi-batch uploads, prefer
+   * the ``onBatch`` callback to track every job_id.
+   */
+  async uploadFilesChunked(
+    files: File[],
+    parserType: 'pymupdf' | 'docling' = 'docling',
+    chunkSize = 20,
+    onBatch?: (
+      batchIndex: number,
+      totalBatches: number,
+      batchResult: UploadResponse,
+    ) => void,
+  ): Promise<UploadResponse> {
+    if (files.length === 0) {
+      throw new Error('uploadFilesChunked: no files');
+    }
+    const batches: File[][] = [];
+    for (let i = 0; i < files.length; i += chunkSize) {
+      batches.push(files.slice(i, i + chunkSize));
+    }
+    let last: UploadResponse | undefined;
+    for (let i = 0; i < batches.length; i += 1) {
+      const result = await ragApi.uploadFiles(batches[i], parserType);
+      last = result;
+      if (onBatch) {
+        onBatch(i, batches.length, result);
+      }
+    }
+    if (!last) {
+      throw new Error('uploadFilesChunked: no batches succeeded');
+    }
+    return last;
+  },
+
+  /**
    * Poll the status of an async upload job.
    */
   async getUploadStatus(jobId: string): Promise<UploadJobStatus> {

@@ -66,13 +66,44 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
     setIsUploading(true);
     setUploadStatus('');
 
+    // Slice into 20-PDF batches when many files are selected so we
+    // stay under reverse-proxy upload caps and don't hold a multi-GB
+    // payload in browser memory.
+    const fileArr = Array.from(files);
+    const CHUNK_THRESHOLD = 20;
+
     try {
-      const result = await ragApi.uploadFiles(Array.from(files));
-      if (result.status === 'processing' && result.job_id) {
-        startUploadPolling(result.job_id);
+      if (fileArr.length > CHUNK_THRESHOLD) {
+        let lastResult: Awaited<ReturnType<typeof ragApi.uploadFiles>> | null = null;
+        await ragApi.uploadFilesChunked(
+          fileArr,
+          'docling',
+          CHUNK_THRESHOLD,
+          (idx, total, batchResult) => {
+            lastResult = batchResult;
+            setUploadStatus(
+              `Queued batch ${idx + 1} of ${total} (${batchResult.files.length} file${
+                batchResult.files.length > 1 ? 's' : ''
+              })…`,
+            );
+          },
+        );
+        if (lastResult && lastResult.status === 'processing' && lastResult.job_id) {
+          startUploadPolling(lastResult.job_id);
+        } else if (lastResult) {
+          setUploadStatus(
+            `Indexed ${lastResult.files.length} file${lastResult.files.length > 1 ? 's' : ''}.`,
+          );
+          setIsUploading(false);
+        }
       } else {
-        setUploadStatus(`Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''}.`);
-        setIsUploading(false);
+        const result = await ragApi.uploadFiles(fileArr);
+        if (result.status === 'processing' && result.job_id) {
+          startUploadPolling(result.job_id);
+        } else {
+          setUploadStatus(`Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''}.`);
+          setIsUploading(false);
+        }
       }
     } catch (error) {
       console.error('Upload failed:', error);

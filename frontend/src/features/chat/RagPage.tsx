@@ -370,19 +370,54 @@ const RagPage: React.FC = () => {
     setIsUploading(true);
     setUploadStatus('');
 
+    // For large multi-file uploads, slice into batches of 20 PDFs
+    // each so we stay well under reverse-proxy body-size limits
+    // (nginx and Cloudflare commonly cap at 100 MB) and the browser
+    // does not have to hold a 5+ GB multipart payload in memory.
+    // Each batch becomes its own background job on the server; we
+    // poll the LAST batch's job_id for the completion summary.
+    const fileArr = Array.from(files);
+    const CHUNK_THRESHOLD = 20;
+
     try {
-      const result = await ragApi.uploadFiles(Array.from(files), parserType);
-      if (result.status === 'processing' && result.job_id) {
-        startUploadPolling(result.job_id, parserType);
-      } else {
-        setUploadStatus(
-          `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
-            parserType === 'pymupdf' ? 'Fast' : 'Detailed'
-          }).`
+      if (fileArr.length > CHUNK_THRESHOLD) {
+        let lastResult: Awaited<ReturnType<typeof ragApi.uploadFiles>> | null = null;
+        await ragApi.uploadFilesChunked(
+          fileArr,
+          parserType,
+          CHUNK_THRESHOLD,
+          (idx, total, batchResult) => {
+            lastResult = batchResult;
+            setUploadStatus(
+              `Queued batch ${idx + 1} of ${total} (${batchResult.files.length} file${
+                batchResult.files.length > 1 ? 's' : ''
+              })…`,
+            );
+          },
         );
-        applyUploadResult(result, parserType);
-        // Refresh from backend to get accurate chunk counts
-        await loadIndexedFiles();
+        if (lastResult && lastResult.status === 'processing' && lastResult.job_id) {
+          startUploadPolling(lastResult.job_id, parserType);
+        } else if (lastResult) {
+          applyUploadResult(lastResult, parserType);
+          await loadIndexedFiles();
+          setUploadStatus(
+            `Indexed ${lastResult.files.length} file${lastResult.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`,
+          );
+        }
+      } else {
+        const result = await ragApi.uploadFiles(fileArr, parserType);
+        if (result.status === 'processing' && result.job_id) {
+          startUploadPolling(result.job_id, parserType);
+        } else {
+          setUploadStatus(
+            `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
+              parserType === 'pymupdf' ? 'Fast' : 'Detailed'
+            }).`,
+          );
+          applyUploadResult(result, parserType);
+          // Refresh from backend to get accurate chunk counts
+          await loadIndexedFiles();
+        }
       }
     } catch (error) {
       console.error('Upload failed:', error);

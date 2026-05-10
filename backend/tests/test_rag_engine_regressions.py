@@ -405,6 +405,7 @@ def test_process_and_index_pdfs_with_texts_replaces_existing_sources(monkeypatch
             )
         ],
         "extracted body text",
+        [],
     )
 
     indexed_files, extracted_texts = service.process_and_index_pdfs_with_texts(
@@ -450,7 +451,7 @@ def test_process_pdf_pymupdf_uses_simple_chunking_not_semantic(monkeypatch):
 
     service._split_semantic_children = fail_if_semantic_used
 
-    documents, full_text = service._process_pdf(
+    documents, full_text, parent_chunks = service._process_pdf(
         "C:/tmp/paper.pdf",
         user_id="sess_1",
         parser_type="pymupdf",
@@ -500,6 +501,7 @@ def test_process_and_index_pdfs_with_texts_sanitizes_complex_metadata(monkeypatc
             )
         ],
         "extracted body text",
+        [],
     )
 
     indexed_files, extracted_texts = service.process_and_index_pdfs_with_texts(

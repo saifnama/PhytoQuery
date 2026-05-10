@@ -6,6 +6,7 @@ import gc
 import time
 import hashlib
 import json
+import pickle
 import asyncio
 import logging
 import tempfile
@@ -270,6 +271,16 @@ class RAGConfig:
     parser_type: str = "pymupdf"  # "pymupdf" (fast) or "docling" (detailed)
     max_num_pages: int = 200
     max_file_size: int = 104_857_600  # 100 MB
+    # Parallel-upload tuning (rag_engine.py:process_and_index_pdfs_with_texts)
+    # ``upload_workers`` — concurrent parser threads. PyMuPDF and
+    # Docling both release the GIL during their hot paths so threads
+    # scale linearly up to ~4-8 cores. Set to 1 to force sequential
+    # parsing.
+    # ``index_flush_size`` — embed+insert is flushed every N parsed
+    # files so a 1000-PDF upload doesn't have to hold every chunk in
+    # RAM and a mid-job crash leaves earlier files indexed.
+    upload_workers: int = 4
+    index_flush_size: int = 50
     # Embedding models
     fallback_embedding_model: str = RAG_FALLBACK_EMBEDDING_MODEL
     embedding_dim: Optional[int] = RAG_EMBEDDING_DIM  # MRL truncation (None = full dim)
@@ -1140,6 +1151,12 @@ class RAGService:
                 )
         finally:
             self._invalidate_user_collection(user_id)
+            try:
+                self._invalidate_bm25(user_id)
+            except Exception as e:
+                logger.warning(
+                    f"BM25 cache invalidation after collection reset failed for {user_id}: {e}"
+                )
 
     # --- Parent-Child Chunking: Parent Store ---
 
@@ -1181,6 +1198,178 @@ class RAGService:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
+    # --- BM25 sparse-index cache --------------------------------
+    # Hybrid retrieval combines dense vectors + BM25 keyword
+    # ranking. The dense side scales fine to 100K+ chunks via
+    # Qdrant HNSW; the BM25 side does not — naively rebuilding
+    # ``BM25Okapi`` on every query means scrolling all chunks out
+    # of Qdrant, tokenizing, and indexing them per-call (5-30s on
+    # 1000 papers). We instead build BM25 ONCE after each upload
+    # and cache it on disk + in memory. The cache is invalidated
+    # on every add/delete so it can never be stale.
+
+    def _get_bm25_cache_path(self, user_id: str) -> str:
+        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
+        suffix = self._get_collection_suffix()
+        return os.path.join(
+            config.qdrant_dir, f"{safe_user_id}_{suffix}_bm25.pkl"
+        )
+
+    def _invalidate_bm25(self, user_id: str) -> None:
+        """Drop the BM25 cache (in-memory + on-disk) for ``user_id``.
+        Called after every upload commit and every source delete."""
+        if not hasattr(self, "_bm25_cache"):
+            self._bm25_cache: Dict[str, Any] = {}
+        self._bm25_cache.pop(user_id, None)
+        path = self._get_bm25_cache_path(user_id)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            logger.warning(f"BM25 cache file delete failed for {user_id}: {e}")
+
+    def _build_bm25_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Scroll the user's Qdrant collection, tokenize every
+        chunk's ``page_content``, build a ``BM25Okapi`` index, and
+        persist the (texts, metas, tokenized) trio to disk so we
+        never have to re-scroll for keyword search.
+
+        Returns the in-memory cache entry on success or ``None`` if
+        the collection is empty / unavailable.
+        """
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError:
+            logger.warning("rank-bm25 not installed; BM25 disabled")
+            return None
+        try:
+            from qdrant_client.http import models as qmodels  # noqa: F401
+        except ImportError:
+            return None
+
+        client = self._get_qdrant_client()
+        collection_name = self._get_user_collection_name(user_id)
+
+        all_texts: List[str] = []
+        all_metas: List[Dict[str, Any]] = []
+        offset = None
+        try:
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection_name,
+                    limit=1000,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    all_texts.append(payload.get("page_content", "") or "")
+                    all_metas.append(payload.get("metadata", {}) or {})
+                if offset is None:
+                    break
+        except Exception as e:
+            logger.warning(f"BM25 scroll failed for {user_id}: {e}")
+            return None
+
+        if not all_texts:
+            return None
+
+        tokenized = [t.lower().split() for t in all_texts]
+        bm25 = BM25Okapi(tokenized)
+
+        entry = {
+            "bm25": bm25,
+            "tokenized": tokenized,
+            "texts": all_texts,
+            "metas": all_metas,
+            "size": len(all_texts),
+        }
+
+        # Persist tokenized + texts + metas (NOT the BM25Okapi
+        # object itself — pickling rank_bm25's internals is not
+        # version-stable across releases). Reload rebuilds BM25Okapi
+        # from tokenized in O(N).
+        path = self._get_bm25_cache_path(user_id)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd, temp_path = tempfile.mkstemp(
+                dir=os.path.dirname(path),
+                prefix=os.path.basename(path),
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    pickle.dump(
+                        {
+                            "tokenized": tokenized,
+                            "texts": all_texts,
+                            "metas": all_metas,
+                        },
+                        f,
+                        protocol=pickle.HIGHEST_PROTOCOL,
+                    )
+                os.replace(temp_path, path)
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"BM25 cache persist failed for {user_id}: {e}")
+
+        if not hasattr(self, "_bm25_cache"):
+            self._bm25_cache = {}
+        self._bm25_cache[user_id] = entry
+        logger.info(
+            f"Built BM25 index for {user_id}: {len(all_texts)} chunks (cached on disk)"
+        )
+        return entry
+
+    def _load_bm25_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Return the cached BM25 entry for ``user_id``.
+
+        Layered lookup:
+          1. In-memory cache (process lifetime).
+          2. On-disk pickle (persists across restarts).
+          3. Build from Qdrant scroll (slow, only on first query
+             after upload or after a process restart with no pickle).
+        """
+        if not hasattr(self, "_bm25_cache"):
+            self._bm25_cache = {}
+        if user_id in self._bm25_cache:
+            return self._bm25_cache[user_id]
+
+        path = self._get_bm25_cache_path(user_id)
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    raw = pickle.load(f)
+                from rank_bm25 import BM25Okapi
+                tokenized = raw.get("tokenized") or []
+                if tokenized:
+                    entry = {
+                        "bm25": BM25Okapi(tokenized),
+                        "tokenized": tokenized,
+                        "texts": raw.get("texts") or [],
+                        "metas": raw.get("metas") or [],
+                        "size": len(tokenized),
+                    }
+                    self._bm25_cache[user_id] = entry
+                    return entry
+            except Exception as e:
+                logger.warning(
+                    f"BM25 cache load failed for {user_id}: {e}; rebuilding"
+                )
+                # Fall through to build path
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+        return self._build_bm25_for_user(user_id)
+
     def _delete_existing_sources(self, user_id: str, source_names: List[str]) -> None:
         """Delete existing chunks for sources that are being re-uploaded."""
         if not source_names:
@@ -1215,6 +1404,17 @@ class RAGService:
                 f"Replaced existing indexed chunks for {unique_sources} from user {user_id}'s Qdrant collection"
             )
             self._cleanup_parent_store(user_id)
+            # Any source deletion makes the cached BM25 stale —
+            # drop it. Next query rebuilds + re-persists. The
+            # post-upload path also invalidates, but covering both
+            # entry points means one-off deletes (without a
+            # follow-on upload) can't leave stale BM25 state.
+            try:
+                self._invalidate_bm25(user_id)
+            except Exception as e:
+                logger.warning(
+                    f"BM25 cache invalidation after delete failed for {user_id}: {e}"
+                )
         except Exception as exc:
             # Common when the collection has zero matching points; treat as
             # a no-op rather than failing the whole upload.
@@ -1228,86 +1428,233 @@ class RAGService:
         parser_type: str = "pymupdf",
         user_id: str = "default",
     ):
-        """Extract, chunk, index, and return per-file extracted text for summaries."""
+        """Extract, chunk, and index a batch of PDFs at scale.
+
+        At-scale design (1000+ PDF uploads):
+          1. **Parallel parse** — files are parsed/chunked
+             concurrently via a ``ThreadPoolExecutor``. Both
+             PyMuPDF (C extension) and Docling (releases GIL on
+             heavy ML work) benefit from threading without needing
+             process pools.
+          2. **Per-file isolation** — a single corrupt or
+             unparseable PDF cannot kill the whole job. Each file
+             runs inside try/except; failures are logged and
+             collected in ``failed_files`` but the batch continues.
+          3. **Batched flush** — child documents and parents are
+             flushed every ``index_flush_size`` files (default 50)
+             rather than accumulating the full batch in RAM. Caps
+             peak memory and means partial work survives a crash.
+          4. **Single delete pass** — all source names are pre-
+             deleted up front so the per-batch ``add_documents``
+             calls can be straight inserts.
+          5. **BM25 cache rebuild** — once the upload commits, the
+             persistent BM25 index is invalidated so the next
+             query rebuilds it from the fresh Qdrant state. Cached
+             on disk after first build so subsequent queries skip
+             the scroll+tokenize cost.
+
+        Returns ``(source_names, extracted_texts)``. Sources that
+        failed to parse are still listed in ``source_names`` (they
+        were uploaded), but they will not appear in
+        ``extracted_texts``.
+        """
         total_started = time.perf_counter()
-        all_docs = []
         extracted_texts: Dict[str, str] = {}
         source_names = [os.path.basename(path) for path in pdf_paths]
-        parse_and_chunk_ms = 0.0
-        for path in pdf_paths:
-            file_started = time.perf_counter()
-            docs, extracted_text = self._process_pdf(
-                path,
-                user_id=user_id,
-                parser_type=parser_type,
-            )
-            file_elapsed_ms = (time.perf_counter() - file_started) * 1000
-            parse_and_chunk_ms += file_elapsed_ms
-            all_docs.extend(docs)
-            if extracted_text:
-                extracted_texts[os.path.basename(path)] = extracted_text
-            logger.info(
-                "RAG upload phase: parser=%s file=%s parse_and_chunk=%.1fms chunks=%s extracted_chars=%s",
-                parser_type,
-                os.path.basename(path),
-                file_elapsed_ms,
-                len(docs),
-                len(extracted_text or ""),
-            )
+        failed_files: List[Dict[str, str]] = []
 
-        if all_docs:
-            sanitized_docs = _sanitize_documents_for_qdrant(all_docs)
-            self.embeddings.begin_timing_session()
-            index_started = time.perf_counter()
+        # Up-front: clear any prior copies of these sources so the
+        # batched inserts below are pure additions.
+        self._delete_existing_sources(user_id, source_names)
+
+        # Pre-init lazy resources that ``_process_pdf`` would
+        # otherwise initialize inside a thread (would race).
+        if parser_type == "docling":
             try:
-                self._delete_existing_sources(user_id, source_names)
-                vectorstore = self._get_user_collection(user_id)
-                vectorstore.add_documents(sanitized_docs)
-            except Exception as e:
-                # Qdrant corruption / dimension-mismatch signatures.
-                # ``Wrong vector size`` fires when the embedding model dim
-                # changed between indexings on the same collection.
-                # ``not found`` / ``404`` fires when the cached vectorstore
-                # references a collection that has since been dropped.
-                msg = str(e).lower()
-                is_corrupt = (
-                    "wrong vector size" in msg
-                    or "wrong vector dimension" in msg
-                    or ("collection" in msg and "not found" in msg)
-                    or "404" in msg
-                )
-                logger.warning(
-                    f"Indexing failed for user {user_id} ({e!r}); "
-                    f"{'resetting Qdrant collection and ' if is_corrupt else ''}"
-                    f"invalidating cached client and retrying once."
-                )
-                self._invalidate_user_collection(user_id)
-                if is_corrupt:
-                    self._reset_user_chroma_in_place(user_id)
-                self._delete_existing_sources(user_id, source_names)
-                vectorstore = self._get_user_collection(user_id)
-                try:
-                    vectorstore.add_documents(sanitized_docs)
-                except Exception as retry_err:
-                    logger.error(
-                        f"Retry failed even after cache invalidation for {user_id}: {retry_err}"
-                    )
-                    raise retry_err from retry_err
-            finally:
-                embed_stats = self.embeddings.consume_timing_session()
+                _ = self._docling_converter  # property/lazy attr — touch under lock
+            except Exception:
+                pass
+        # Semantic splitter is lazy-init inside _split_semantic_children;
+        # touch it once on the main thread to win the race.
+        try:
+            self._get_semantic_splitter()
+        except Exception:
+            # Splitter is optional; pymupdf path doesn't use it.
+            pass
 
-            index_total_ms = (time.perf_counter() - index_started) * 1000
-            embed_ms = float(embed_stats.get("total_ms", 0.0))
-            embed_calls = int(embed_stats.get("calls", 0))
-            embed_texts = int(embed_stats.get("texts", 0))
-            store_overhead_ms = max(index_total_ms - embed_ms, 0.0)
-            total_elapsed_ms = (time.perf_counter() - total_started) * 1000
+        # Parallelism — bounded by config.upload_workers (default 4).
+        # PyMuPDF and Docling both release the GIL on their hot
+        # paths so threads scale ~linearly with cores up to ~4-8.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        workers = max(1, int(getattr(config, "upload_workers", 4)))
+        flush_size = max(1, int(getattr(config, "index_flush_size", 50)))
+
+        def _parse_one(path: str) -> Dict[str, Any]:
+            file_started = time.perf_counter()
+            source = os.path.basename(path)
+            try:
+                docs, extracted_text, parent_chunks = self._process_pdf(
+                    path, user_id=user_id, parser_type=parser_type,
+                )
+                return {
+                    "ok": True,
+                    "path": path,
+                    "source": source,
+                    "docs": docs,
+                    "parents": parent_chunks,
+                    "text": extracted_text or "",
+                    "ms": (time.perf_counter() - file_started) * 1000,
+                }
+            except Exception as e:
+                logger.exception(f"Parse failed for {source}: {e}")
+                return {
+                    "ok": False,
+                    "path": path,
+                    "source": source,
+                    "error": str(e)[:300],
+                    "ms": (time.perf_counter() - file_started) * 1000,
+                }
+
+        parse_and_chunk_ms = 0.0
+        embed_ms = 0.0
+        embed_calls = 0
+        embed_texts = 0
+        index_total_ms = 0.0
+        total_chunk_count = 0
+
+        # Buffers flushed every ``flush_size`` files.
+        buf_docs: List[Any] = []
+        buf_parents: List[Dict[str, Any]] = []
+        buf_files = 0
+
+        def _flush() -> None:
+            nonlocal buf_docs, buf_parents, buf_files
+            nonlocal embed_ms, embed_calls, embed_texts, index_total_ms
+            nonlocal total_chunk_count
+            if not buf_docs and not buf_parents:
+                buf_docs, buf_parents, buf_files = [], [], 0
+                return
+            # 1. Persist parents for THIS batch (read JSON once,
+            # mutate, write once).
+            if buf_parents:
+                self._add_parents(user_id, buf_parents)
+            # 2. Embed + insert children for THIS batch.
+            if buf_docs:
+                sanitized = _sanitize_documents_for_qdrant(buf_docs)
+                self.embeddings.begin_timing_session()
+                index_started = time.perf_counter()
+                try:
+                    vectorstore = self._get_user_collection(user_id)
+                    vectorstore.add_documents(sanitized)
+                except Exception as e:
+                    # Same recovery path as before — Qdrant
+                    # dimension/collection errors recoverable by
+                    # invalidating cache + (if corrupt) wiping the
+                    # collection.
+                    msg = str(e).lower()
+                    is_corrupt = (
+                        "wrong vector size" in msg
+                        or "wrong vector dimension" in msg
+                        or ("collection" in msg and "not found" in msg)
+                        or "404" in msg
+                    )
+                    logger.warning(
+                        f"Indexing failed for user {user_id} ({e!r}); "
+                        f"{'resetting Qdrant collection and ' if is_corrupt else ''}"
+                        f"invalidating cached client and retrying once."
+                    )
+                    self._invalidate_user_collection(user_id)
+                    if is_corrupt:
+                        self._reset_user_chroma_in_place(user_id)
+                    vectorstore = self._get_user_collection(user_id)
+                    vectorstore.add_documents(sanitized)
+                finally:
+                    embed_stats = self.embeddings.consume_timing_session()
+                index_total_ms += (time.perf_counter() - index_started) * 1000
+                embed_ms += float(embed_stats.get("total_ms", 0.0))
+                embed_calls += int(embed_stats.get("calls", 0))
+                embed_texts += int(embed_stats.get("texts", 0))
+                total_chunk_count += len(buf_docs)
+            buf_docs, buf_parents, buf_files = [], [], 0
+
+        # Drive parse in parallel; consume results in COMPLETION
+        # order (not submission order) so straggling Docling files
+        # don't stall the flush pipeline.
+        if workers > 1 and len(pdf_paths) > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                future_to_path = {pool.submit(_parse_one, p): p for p in pdf_paths}
+                for fut in as_completed(future_to_path):
+                    res = fut.result()
+                    parse_and_chunk_ms += float(res.get("ms", 0.0))
+                    if not res["ok"]:
+                        failed_files.append(
+                            {"source": res["source"], "error": res["error"]}
+                        )
+                        continue
+                    docs = res["docs"]
+                    parents = res["parents"]
+                    if res.get("text"):
+                        extracted_texts[res["source"]] = res["text"]
+                    logger.info(
+                        "RAG upload phase: parser=%s file=%s parse_and_chunk=%.1fms chunks=%s extracted_chars=%s",
+                        parser_type,
+                        res["source"],
+                        res["ms"],
+                        len(docs),
+                        len(res.get("text") or ""),
+                    )
+                    buf_docs.extend(docs)
+                    buf_parents.extend(parents)
+                    buf_files += 1
+                    if buf_files >= flush_size:
+                        _flush()
+        else:
+            # Sequential path — single thread, single file, or
+            # explicit ``upload_workers=1``.
+            for path in pdf_paths:
+                res = _parse_one(path)
+                parse_and_chunk_ms += float(res.get("ms", 0.0))
+                if not res["ok"]:
+                    failed_files.append(
+                        {"source": res["source"], "error": res["error"]}
+                    )
+                    continue
+                docs = res["docs"]
+                parents = res["parents"]
+                if res.get("text"):
+                    extracted_texts[res["source"]] = res["text"]
+                logger.info(
+                    "RAG upload phase: parser=%s file=%s parse_and_chunk=%.1fms chunks=%s extracted_chars=%s",
+                    parser_type, res["source"], res["ms"],
+                    len(docs), len(res.get("text") or ""),
+                )
+                buf_docs.extend(docs)
+                buf_parents.extend(parents)
+                buf_files += 1
+                if buf_files >= flush_size:
+                    _flush()
+
+        # Final flush — anything still in buffers.
+        _flush()
+
+        # BM25 cache: drop the stale persisted index now that
+        # Qdrant has new content. Next query will rebuild + persist.
+        try:
+            self._invalidate_bm25(user_id)
+        except Exception as e:
+            logger.warning(f"BM25 cache invalidation failed for {user_id}: {e}")
+
+        store_overhead_ms = max(index_total_ms - embed_ms, 0.0)
+        total_elapsed_ms = (time.perf_counter() - total_started) * 1000
+        if total_chunk_count:
             logger.info(
-                "RAG upload timings: parser=%s user=%s files=%s chunks=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
+                "RAG upload timings: parser=%s user=%s files=%s ok=%s failed=%s chunks=%s %s embed_calls=%s embed_texts=%s total=%.1fms",
                 parser_type,
                 user_id,
                 len(pdf_paths),
-                len(all_docs),
+                len(pdf_paths) - len(failed_files),
+                len(failed_files),
+                total_chunk_count,
                 _format_phase_timings({
                     "parse_and_chunk": parse_and_chunk_ms,
                     "embed": embed_ms,
@@ -1320,12 +1667,20 @@ class RAGService:
             )
         else:
             logger.info(
-                "RAG upload timings: parser=%s user=%s files=%s chunks=0 parse_and_chunk=%.1fms total=%.1fms",
+                "RAG upload timings: parser=%s user=%s files=%s ok=%s failed=%s chunks=0 parse_and_chunk=%.1fms total=%.1fms",
                 parser_type,
                 user_id,
                 len(pdf_paths),
+                len(pdf_paths) - len(failed_files),
+                len(failed_files),
                 parse_and_chunk_ms,
-                (time.perf_counter() - total_started) * 1000,
+                total_elapsed_ms,
+            )
+        if failed_files:
+            logger.warning(
+                "RAG upload completed with %d failures: %s",
+                len(failed_files),
+                [f["source"] for f in failed_files],
             )
 
         return source_names, extracted_texts
@@ -1520,7 +1875,7 @@ class RAGService:
             full_text, tables = self._extract_with_docling(pdf_path)
 
         if not full_text:
-            return [], ""
+            return [], "", []
 
         # Persist the extracted markdown so the citation preview
         # panel can serve it via /api/chat/files/{name}/markdown.
@@ -1541,8 +1896,12 @@ class RAGService:
             full_text=full_text,
         )
 
-        # Store parent chunks for parent-child retrieval
-        self._add_parents(user_id, parent_chunks)
+        # Parents are returned to the caller (not written here) so
+        # the upload orchestrator can batch them at flush time. This
+        # is critical for thread-safe parallel parsing — each thread
+        # produces its own parent_chunks; the orchestrator merges
+        # them once per flush, avoiding the read-mutate-write race
+        # over the per-user parent JSON.
 
         # 3. Deduplication
         unique_chunks = self._deduplicate_chunks(chunks)
@@ -1566,7 +1925,7 @@ class RAGService:
             from langchain_core.documents import Document
             documents.append(Document(page_content=chunk["text"], metadata=meta))
 
-        return documents, full_text
+        return documents, full_text, parent_chunks
 
     def _hybrid_search(
         self,
@@ -1574,6 +1933,7 @@ class RAGService:
         vectorstore,  # langchain_qdrant.QdrantVectorStore (lazy import)
         filter_files: Optional[List[str]] = None,
         k: int = None,
+        user_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Hybrid search combining vector similarity + BM25 keyword matching.
 
@@ -1611,77 +1971,57 @@ class RAGService:
             docs = vectorstore.similarity_search(question, **search_kwargs)
             vector_results = [(doc, 0.5) for doc in docs]
 
-        # --- 2. BM25 keyword search ---
-        # Pull every chunk text (for the selected sources, if any) out of
-        # Qdrant via paginated scroll, then build a BM25Okapi index over
-        # them in-memory. Same algorithm we used over Chroma's
-        # ``collection.get``; just a different way to enumerate points.
+        # --- 2. BM25 keyword search (cached) ---
+        # The BM25 index is built once after each upload and cached
+        # on disk + in memory; per-query cost is just ``get_scores``
+        # over the pre-tokenized corpus, no Qdrant scroll. The cache
+        # is invalidated by ``_invalidate_bm25`` whenever sources
+        # are added or removed (see process_and_index_pdfs_with_texts
+        # and _delete_existing_sources), so it can never be stale.
+        # ``filter_files`` is applied as a post-filter on the
+        # pre-built corpus rather than re-scrolling — at scale this
+        # is the difference between sub-millisecond and many-second
+        # query latency.
         bm25_results = []
         try:
-            from rank_bm25 import BM25Okapi
             from langchain_core.documents import Document
-
-            client = self._get_qdrant_client()
-            collection_name = vectorstore.collection_name
-
-            scroll_filter = None
-            if filter_files:
-                scroll_filter = qmodels.Filter(
-                    should=[
-                        qmodels.FieldCondition(
-                            key="metadata.source",
-                            match=qmodels.MatchValue(value=src),
-                        )
-                        for src in filter_files
-                    ]
-                )
-
-            all_docs_text: List[str] = []
-            all_metas: List[Dict[str, Any]] = []
-            offset = None
-            while True:
-                points, offset = client.scroll(
-                    collection_name=collection_name,
-                    scroll_filter=scroll_filter,
-                    limit=1000,
-                    with_payload=True,
-                    with_vectors=False,
-                    offset=offset,
-                )
-                for point in points:
-                    payload = point.payload or {}
-                    all_docs_text.append(payload.get("page_content", "") or "")
-                    all_metas.append(payload.get("metadata", {}) or {})
-                if offset is None:
-                    break
-
-            if all_docs_text:
-                # Tokenize for BM25
-                tokenized = [doc.lower().split() for doc in all_docs_text]
-                bm25 = BM25Okapi(tokenized)
+            entry = self._load_bm25_for_user(user_id) if user_id else None
+            if entry is not None:
+                bm25 = entry["bm25"]
+                texts = entry["texts"]
+                metas = entry["metas"]
                 query_tokens = question.lower().split()
                 bm25_scores = bm25.get_scores(query_tokens)
 
-                # Get top-k BM25 results
-                top_indices = sorted(
-                    range(len(bm25_scores)),
-                    key=lambda i: bm25_scores[i],
-                    reverse=True,
-                )[:k]
+                # Apply optional source filter as a post-filter mask.
+                allow_idx: Optional[set] = None
+                if filter_files:
+                    allowed = set(filter_files)
+                    allow_idx = {
+                        i for i, m in enumerate(metas)
+                        if (m or {}).get("source") in allowed
+                    }
+
+                # Top-k by BM25 score, dropping zero-score chunks.
+                if allow_idx is not None:
+                    candidate_indices = [i for i in allow_idx if bm25_scores[i] > 0]
+                else:
+                    candidate_indices = [
+                        i for i in range(len(bm25_scores)) if bm25_scores[i] > 0
+                    ]
+                candidate_indices.sort(
+                    key=lambda i: bm25_scores[i], reverse=True
+                )
+                top_indices = candidate_indices[:k]
 
                 for idx in top_indices:
-                    if bm25_scores[idx] > 0:
-                        doc = Document(
-                            page_content=all_docs_text[idx],
-                            metadata=all_metas[idx] if idx < len(all_metas) else {},
-                        )
-                        bm25_results.append((doc, bm25_scores[idx]))
-        except ImportError:
-            logger.warning(
-                "rank-bm25 not installed, falling back to vector-only search"
-            )
+                    doc = Document(
+                        page_content=texts[idx],
+                        metadata=metas[idx] if idx < len(metas) else {},
+                    )
+                    bm25_results.append((doc, float(bm25_scores[idx])))
         except Exception as e:
-            logger.warning(f"BM25 search failed, using vector-only: {e}")
+            logger.warning(f"BM25 cached search failed, using vector-only: {e}")
 
         # --- 3. Reciprocal Rank Fusion ---
         chunk_scores: Dict[str, Dict[str, Any]] = {}
@@ -2408,7 +2748,8 @@ class RAGService:
 
         # 1. Retrieve many child chunks from vector store (up to 200)
         search_results = self._hybrid_search(
-            question, vectorstore, filter_files, k=config.retrieve_k
+            question, vectorstore, filter_files, k=config.retrieve_k,
+            user_id=user_id,
         )
 
         # 2. Cross-Encoder Reranking on ALL retrieved children
@@ -3676,17 +4017,22 @@ Summary:"""
                             },
                         })
             
-            # Store parents and return children for indexing
-            self._add_parents(user_id, parent_chunks)
+            # Parents are returned (not persisted here) so the
+            # upload orchestrator can batch-write them once per
+            # flush — see ``_process_pdf`` for the full rationale.
             logger.info(f"Docling skill created {len(parent_chunks)} parents, {len(all_child_chunks)} children for {source}")
-            
+
             # Deduplicate children
             unique_children = self._deduplicate_chunks(all_child_chunks)
             total = len(unique_children)
             for c in unique_children:
                 c["metadata"]["total_chunks"] = total
             from langchain_core.documents import Document
-            return [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children], extracted_text
+            return (
+                [Document(page_content=c["text"], metadata=c["metadata"]) for c in unique_children],
+                extracted_text,
+                parent_chunks,
+            )
         else:
             logger.warning("Docling chunking components missing, falling back to basic extraction")
             raise ImportError("Docling chunking components missing")
