@@ -8,11 +8,34 @@ Usage:
 import os
 from pathlib import Path
 
-# Auto-load .env file from project root (PhytoQuery/.env)
-# override=False means real env vars (e.g. from Slurm) take priority over .env
+# Auto-load env files. Precedence (highest → lowest):
+#   1. Real OS env vars (always win — Slurm's CUDA_VISIBLE_DEVICES,
+#      ``docker run -e``, systemd ``Environment=``).
+#   2. ``.env.<PHYTOQUERY_PROFILE>`` — profile-specific overrides.
+#      Profile = a single env var that switches the whole webapp's
+#      config in one flip. Examples:
+#        PHYTOQUERY_PROFILE=macbook  → loads .env.macbook
+#        PHYTOQUERY_PROFILE=server   → loads .env.server
+#        PHYTOQUERY_PROFILE=demo     → loads .env.demo
+#      Unset/empty = no profile, just the base ``.env``. Replaces
+#      the old "cp .env.macbook .env" shuffle — set the profile
+#      once per environment (shell, systemd, Slurm batch) and the
+#      right values load automatically.
+#   3. ``.env`` — base / shared defaults.
+#   4. Defaults declared in this module.
+#
+# ``override=False`` everywhere: a higher-priority source already
+# in env stays put; each file only fills in values still unset.
 try:
     from dotenv import load_dotenv
     _project_root = Path(__file__).resolve().parent.parent
+
+    _profile = os.environ.get("PHYTOQUERY_PROFILE", "").strip().lower()
+    if _profile:
+        _profile_file = _project_root / f".env.{_profile}"
+        if _profile_file.exists():
+            load_dotenv(_profile_file, override=False)
+
     load_dotenv(_project_root / ".env", override=False)
 except ImportError:
     pass  # python-dotenv not installed; rely on system env vars
@@ -59,6 +82,16 @@ RAG_GROQ_API_KEY = env("RAG_GROQ_API_KEY")
 RAG_GROQ_MODEL = env("RAG_GROQ_MODEL", "llama-3.3-70b-versatile")
 RAG_OLLAMA_URL = env("RAG_OLLAMA_URL")
 RAG_OLLAMA_MODEL = env("RAG_OLLAMA_MODEL", "llama3.1:8b")
+
+# Optional remote Qdrant server (the Rust binary at qdrant/qdrant).
+# Leave empty (the default) to keep using embedded local-mode Qdrant
+# at ``data/qdrant/`` — zero deployment dependency, works on every
+# OS. Set to ``http://host:6333`` to point at a Qdrant server
+# instead (enables uvicorn --workers N, payload indexes,
+# quantization, real HNSW; requires running ``docker run -p
+# 6333:6333 -v ... qdrant/qdrant`` or equivalent). Single config
+# flip; no other code path changes.
+RAG_QDRANT_URL = env("RAG_QDRANT_URL")
 
 RAG_TEMPERATURE = env_float("RAG_TEMPERATURE", 0.1)
 RAG_CONTEXT_WINDOW = env_int("RAG_CONTEXT_WINDOW", 8192)

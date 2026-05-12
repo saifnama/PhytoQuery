@@ -3,7 +3,7 @@ import json
 import re
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from backend.core.http_client import HttpClientManager
 
@@ -343,12 +343,15 @@ class NERService:
             text = text  # Keep original text reference
 
         # 4. LLM extraction (sequential to avoid rate limiting)
-        # Even if LLM fails, we still have dictionary entities
+        # Each chunk goes through ``_extract_entities_with_retry`` —
+        # on schema/validation failure we re-prompt the model with
+        # the specific error so a 7B local model can correct itself
+        # instead of silently returning []. Dictionary entities are
+        # still the safety net if the LLM path errors out entirely.
         llm_entities = []
         try:
             for chunk in chunks:
-                raw_response = await self.call_llm(chunk)
-                parsed = self.parse_llm_response(raw_response)
+                parsed = await self._extract_entities_with_retry(chunk)
                 llm_entities.extend(parsed)
         except Exception as e:
             logger.warning(
@@ -476,10 +479,13 @@ class NERService:
                 ent["section"] = section_title
                 all_dict_entities.append(ent)
 
-            # LLM extraction on this section
+            # LLM extraction on this section — uses validation-retry
+            # so semantic LLM failures (wrong type labels, empty
+            # arrays, object-wrapped responses) get re-prompted
+            # instead of silently dropping all entities for the
+            # section.
             try:
-                raw_response = await self.call_llm(section_text)
-                parsed = self.parse_llm_response(raw_response)
+                parsed = await self._extract_entities_with_retry(section_text)
                 for e in parsed:
                     e["section"] = section_title
                     all_llm_entities.append(e)
@@ -656,8 +662,18 @@ class NERService:
                 chunks.append(chunk)
         return chunks
 
-    async def call_llm(self, text_chunk: str) -> str:
-        """Call LLM for NER: Ollama first, then OpenRouter fallback."""
+    async def call_llm(
+        self,
+        text_chunk: str,
+        error_hint: Optional[str] = None,
+    ) -> str:
+        """Call LLM for NER: Ollama first, then OpenRouter fallback.
+
+        ``error_hint`` — when set, prepended to the user message so
+        the model can see what went wrong with its previous attempt
+        (validation-retry pattern). ``None`` preserves the original
+        single-shot behavior for callers that don't need retry.
+        """
         provider = None
         try:
             provider = get_active_provider()
@@ -665,16 +681,29 @@ class NERService:
             logger.error(f"NER provider config error: {e}")
             return ""
 
+        # User-facing message body. The error hint is prepended as a
+        # correction block so it's the first thing the model attends
+        # to; the original "Extract entities from..." instruction
+        # remains stable so the system prompt + few-shot examples
+        # still apply cleanly.
+        if error_hint:
+            user_content = (
+                "Your previous response was rejected for the "
+                f"following reason:\n  {error_hint}\n\n"
+                "Retry with a corrected response that follows the "
+                "schema from the system prompt.\n\n"
+                f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+            )
+        else:
+            user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+
         # Try Ollama first (primary)
         if provider == "ollama":
             payload = {
                 "model": NER_OLLAMA_MODEL,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"Extract entities from:\n\n{text_chunk}\n\n/no_think",
-                    },
+                    {"role": "user", "content": user_content},
                 ],
                 "stream": False,
                 "options": {
@@ -704,6 +733,7 @@ class NERService:
                 api_key=NER_GROQ_API_KEY,
                 model=NER_GROQ_MODEL,
                 text_chunk=text_chunk,
+                error_hint=error_hint,
             )
             if content:
                 return content
@@ -716,11 +746,161 @@ class NERService:
                 api_key=NER_OPENROUTER_API_KEY,
                 model=NER_OPENROUTER_MODEL,
                 text_chunk=text_chunk,
+                error_hint=error_hint,
             )
             if content:
                 return content
 
         return ""
+
+    async def _extract_entities_with_retry(
+        self,
+        text_chunk: str,
+        max_attempts: int = 2,
+    ) -> List[Dict[str, Any]]:
+        """LLM entity extraction with validation-retry.
+
+        Mirrors the validation-retry pattern of
+        ``rag_engine._select_used_chunks``: on each attempt, calls
+        the LLM, runs ``json_repair`` for syntax recovery, then
+        validates shape (array of objects with at least one
+        recognized ``type``/``span`` pair). On semantic failure
+        (empty array, all-wrong-type entries, wrong root shape),
+        re-prompts the LLM with a specific error so it can correct
+        itself rather than silently returning ``[]``.
+
+        Returns a list of entity dicts in the internal format
+        ``{"text", "label", "score", "name_type", "linked_to"}``.
+        Empty list on terminal failure; callers retain the same
+        fallback semantics (dictionary entities still apply).
+        """
+        if not text_chunk or not text_chunk.strip():
+            return []
+
+        try:
+            from json_repair import repair_json
+        except ImportError:
+            # Defensive — json-repair is in requirements but if the
+            # package is missing at runtime fall back to single-shot
+            # parse via the existing helper.
+            raw = await self.call_llm(text_chunk)
+            return self.parse_llm_response(raw)
+
+        llm_types = {"CHEMICAL", "SPECIES", "LOCATION", "BIOACTIVITY", "DISEASE"}
+        error_hint: Optional[str] = None
+
+        for attempt in range(max_attempts):
+            raw = await self.call_llm(text_chunk, error_hint=error_hint)
+            if not raw:
+                error_hint = (
+                    "Your previous response was empty. Return a JSON "
+                    'array of entities like '
+                    '[{"span":"...", "type":"CHEMICAL", "score":0.9}].'
+                )
+                continue
+
+            # Strip reasoning blocks before parsing (Qwen-style CoT
+            # wrappers — emitted even when /no_think is requested).
+            cleaned = re.sub(
+                r"<reasoning>.*?</reasoning>", "", raw, flags=re.DOTALL
+            ).strip()
+            if not cleaned:
+                error_hint = (
+                    "Your response contained only a <reasoning> block. "
+                    "Return the JSON array directly, not inside reasoning tags."
+                )
+                continue
+
+            try:
+                parsed = repair_json(cleaned, return_objects=True)
+            except Exception as e:
+                logger.warning(
+                    f"NER JSON parse failed (attempt {attempt + 1}): {e}"
+                )
+                error_hint = (
+                    "Your previous response could not be parsed as "
+                    "JSON. Return a single array, no prose around it."
+                )
+                continue
+
+            # Locate the entity array — accept both bare-list and
+            # object-wrapped shapes.
+            entities = None
+            if isinstance(parsed, list):
+                entities = parsed
+            elif isinstance(parsed, dict):
+                for key in ("entities", "data", "results", "items"):
+                    value = parsed.get(key)
+                    if isinstance(value, list):
+                        entities = value
+                        break
+                if entities is None:
+                    visible_keys = ", ".join(
+                        sorted(str(k) for k in parsed.keys())[:6]
+                    ) or "<none>"
+                    error_hint = (
+                        "Expected a top-level JSON array, e.g. "
+                        '[{"span":"...", "type":"CHEMICAL"}]. Your '
+                        f"object had keys: {visible_keys}."
+                    )
+                    continue
+            else:
+                error_hint = (
+                    f"Expected a JSON array of entities; got a "
+                    f"{type(parsed).__name__} instead."
+                )
+                continue
+
+            # Convert + validate items. Apply the same filters as the
+            # legacy ``parse_llm_response`` so output is byte-identical
+            # to the existing pipeline when the first attempt succeeds.
+            remap = {"DRUG": "CHEMICAL"}
+            result: List[Dict[str, Any]] = []
+            for e in entities:
+                if not isinstance(e, dict):
+                    continue
+                text = str(e.get("span", e.get("text", ""))).strip()
+                label = str(e.get("type", e.get("label", ""))).strip().upper()
+                label = remap.get(label, label)
+                if label not in llm_types:
+                    continue
+                if not text or label not in self.all_labels:
+                    continue
+                score = float(e.get("score", 1.0))
+                result.append({
+                    "text": text,
+                    "label": label,
+                    "score": score,
+                    "name_type": e.get("name_type"),
+                    "linked_to": e.get("linked_to"),
+                })
+
+            if not result:
+                # Array shape was right but nothing in it survived
+                # validation. Most common cause on small models:
+                # wrong type labels (e.g. "Chemical" vs "CHEMICAL",
+                # or invented categories like "MOLECULE").
+                error_hint = (
+                    "None of the entities you returned passed validation. "
+                    'Use exact uppercase types from this set: '
+                    f"{sorted(llm_types)}. Each item needs "
+                    '"span" (entity text) and "type" (one of the labels).'
+                )
+                continue
+
+            if attempt > 0:
+                logger.info(
+                    f"NER extraction succeeded on attempt {attempt + 1}/"
+                    f"{max_attempts} after validation-retry "
+                    f"({len(result)} entities)"
+                )
+            return result
+
+        logger.warning(
+            f"NER extraction: all {max_attempts} attempts failed; "
+            f"final error hint: {error_hint!r}"
+        )
+        return []
 
     async def _call_openai_compatible(
         self,
@@ -729,22 +909,35 @@ class NERService:
         api_key: str,
         model: str,
         text_chunk: str,
+        error_hint: Optional[str] = None,
     ) -> str:
         """Generic OpenAI-compatible chat completion call (Groq, OpenRouter).
 
         Both providers expose the same wire format: POST {model, messages,
         temperature} to /chat/completions, Bearer auth, response shape
         ``{ choices: [ { message: { content } } ] }``.
+
+        ``error_hint`` — when set, prepended to the user message so
+        the model can see what went wrong with its previous attempt
+        (validation-retry pattern; mirrors ``call_llm``).
         """
+        if error_hint:
+            user_content = (
+                "Your previous response was rejected for the "
+                f"following reason:\n  {error_hint}\n\n"
+                "Retry with a corrected response that follows the "
+                "schema from the system prompt.\n\n"
+                f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+            )
+        else:
+            user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+
         headers = {"Authorization": f"Bearer {api_key}"}
         payload = {
             "model": model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Extract entities from:\n\n{text_chunk}\n\n/no_think",
-                },
+                {"role": "user", "content": user_content},
             ],
             "stream": False,
             "temperature": 0.0,
@@ -801,19 +994,51 @@ class NERService:
 
     def parse_llm_response(self, raw_text: str) -> List[Dict[str, Any]]:
         """Parse response: strip <reasoning> block, extract JSON,
-        and map span/type to text/label for internal compatibility."""
-        # Strip <reasoning>...</reasoning> block
+        and map span/type to text/label for internal compatibility.
+
+        Uses ``json_repair`` for parsing — same pattern as
+        ``rag_engine._select_used_chunks``. Small models in JSON mode
+        commonly emit trailing commas, single quotes, smart quotes,
+        unclosed brackets, or prose preamble around the array; the
+        repair pass recovers all of these without a follow-up LLM
+        call. The downstream ``isinstance(e, dict)`` guard already
+        rejects anything that lands on the wrong shape, so a
+        repaired-but-invalid response degrades to ``[]`` exactly as
+        a hard-failed parse did before.
+        """
+        # Strip <reasoning>...</reasoning> block (Qwen-style chain-of-
+        # thought wrappers we don't want fed into the JSON parser).
         raw_text = re.sub(
             r"<reasoning>.*?</reasoning>", "", raw_text, flags=re.DOTALL
         ).strip()
-        # Strip markdown code fences if present
-        raw_text = re.sub(r"```json|```", "", raw_text).strip()
-
-        match = re.search(r"\[.*\]", raw_text, re.DOTALL)
-        if not match:
+        if not raw_text:
             return []
+
         try:
-            entities = json.loads(match.group())
+            from json_repair import repair_json
+            parsed = repair_json(raw_text, return_objects=True)
+        except Exception:
+            return []
+
+        # The model is asked to return a top-level array. Accept that
+        # directly; also accept an object whose ``entities``/``data``
+        # field is the array (a common drift the prompt doesn't
+        # forbid). Anything else degrades to ``[]``.
+        if isinstance(parsed, list):
+            entities = parsed
+        elif isinstance(parsed, dict):
+            entities = None
+            for key in ("entities", "data", "results", "items"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    entities = value
+                    break
+            if entities is None:
+                return []
+        else:
+            return []
+
+        try:
             result = []
             for e in entities:
                 if not isinstance(e, dict):

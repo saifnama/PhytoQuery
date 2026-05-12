@@ -18,8 +18,25 @@ async def lifespan(app: FastAPI):
     await HttpClientManager.get_client()
     logger.info("PhytoQuery backend startup complete.")
     yield
-    # Shutdown: Close the global HTTP client
+    # Shutdown — order matters here:
+    #   1. Close the global HTTP client first (drains in-flight
+    #      requests cleanly).
+    #   2. Then close the Qdrant local client *before* the Python
+    #      interpreter starts tearing down modules. This avoids the
+    #      cosmetic "Exception ignored in: QdrantClient.__del__" /
+    #      "sys.meta_path is None" traceback that fires when the
+    #      destructor runs after the import system is gone. We use
+    #      ``peek_rag_service`` (not ``get_rag_service``) so we
+    #      never trigger a wasteful lazy-init at shutdown when the
+    #      service was never used during this process.
     await HttpClientManager.close_client()
+    try:
+        from backend.services.rag_engine import peek_rag_service
+        svc = peek_rag_service()
+        if svc is not None:
+            svc.close()
+    except Exception as exc:
+        logger.warning(f"RAG service shutdown raised (ignored): {exc}")
 
 
 app = FastAPI(

@@ -844,6 +844,13 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
 
 
 class RAGService:
+    # Class-level default for the atexit-registration guard. Set
+    # at class scope (not just in ``__init__``) so test fakes that
+    # construct via ``RAGService.__new__(RAGService)`` and skip
+    # ``__init__`` still see a sane default and don't crash on
+    # ``_get_qdrant_client``.
+    _atexit_registered: bool = False
+
     def __init__(self):
         self._device = get_optimal_device()
         self.embeddings = PhytoQueryEmbeddings(
@@ -873,6 +880,10 @@ class RAGService:
         # Shared Qdrant local client (one DB, many per-user collections).
         self._qdrant_client = None
         self._qdrant_lock = threading.Lock()
+        # One-shot guard so ``_get_qdrant_client`` registers the
+        # ``atexit`` close-handler exactly once, even though the
+        # method is called concurrently from many code paths.
+        self._atexit_registered = False
         # Cache for Docling converter to avoid reloading models
         self._docling_converter = None
         # Lazy-init semantic child splitter
@@ -1049,6 +1060,17 @@ class RAGService:
         within that single directory rather than per-user folders. This
         avoids the SQLite-tenant gymnastics that plagued the old Chroma
         path and lets ``delete_collection`` be a single atomic call.
+
+        On first creation, registers an ``atexit`` handler that
+        guarantees ``close()`` runs on *any* process-exit path
+        (Ctrl+C / SIGINT, ``sys.exit``, test teardown, normal
+        completion, FastAPI lifespan). atexit fires while the
+        interpreter is still functional — modules are not yet being
+        torn down — so the lazy imports inside ``close()`` succeed
+        and no "Exception ignored in: __del__" traceback prints.
+        This is the universal cleanup; the FastAPI lifespan hook is
+        a complementary earlier-fire path for the graceful-shutdown
+        case (atexit's idempotent ``close()`` then no-ops).
         """
         if self._qdrant_client is not None:
             return self._qdrant_client
@@ -1057,13 +1079,109 @@ class RAGService:
                 return self._qdrant_client
             from qdrant_client import QdrantClient
 
-            os.makedirs(config.qdrant_dir, exist_ok=True)
-            self._qdrant_client = QdrantClient(path=config.qdrant_dir)
-            logger.info(f"Initialized Qdrant local client at {config.qdrant_dir}")
+            # ``RAG_QDRANT_URL`` env (read into ``RAG_QDRANT_URL``
+            # in backend/config.py): when set, connect to a remote
+            # Qdrant server (the real Rust binary, enables HNSW,
+            # payload indexes, multi-worker FastAPI). When empty,
+            # default behavior is unchanged: embedded local-mode
+            # client backed by ``data/qdrant/``. One config flip;
+            # the rest of the codebase doesn't care.
+            from backend.config import RAG_QDRANT_URL
+            if RAG_QDRANT_URL:
+                self._qdrant_client = QdrantClient(url=RAG_QDRANT_URL)
+                logger.info(
+                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}"
+                )
+            else:
+                os.makedirs(config.qdrant_dir, exist_ok=True)
+                self._qdrant_client = QdrantClient(path=config.qdrant_dir)
+                logger.info(
+                    f"Initialized Qdrant local client at {config.qdrant_dir}"
+                )
+
+            # Universal cleanup registration — fires on every exit
+            # path that runs Python code (everything except SIGKILL
+            # / interpreter abort, which wouldn't run __del__ either).
+            # Registered exactly once per service instance.
+            if not self._atexit_registered:
+                import atexit
+                atexit.register(self._atexit_close)
+                self._atexit_registered = True
             return self._qdrant_client
 
+    def _atexit_close(self) -> None:
+        """``atexit``-safe wrapper around ``close()``.
+
+        atexit handlers must never raise — any exception here is
+        silently swallowed. Importantly we do *not* log inside this
+        method because logger handlers may already be in
+        teardown-flush state by the time atexit runs.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """Close the embedded Qdrant client cleanly during app shutdown.
+
+        Without this, the client's ``__del__`` runs during Python
+        interpreter teardown, by which point ``sys.meta_path`` is
+        already ``None`` — so the lazy import inside
+        ``qdrant_local.close()`` raises ``ImportError`` and Python
+        prints "Exception ignored in: <function QdrantClient.__del__>".
+
+        The exception is harmless (Python catches it), but it's
+        cosmetically alarming in production logs and dissertation-
+        demo terminals. Calling ``close()`` from the FastAPI
+        ``lifespan`` shutdown handler runs the same cleanup *before*
+        the interpreter starts tearing down, so imports succeed and
+        no traceback is printed.
+
+        Idempotent — safe to call after the client was never created
+        (no-op) and safe to call twice (second call no-ops).
+        Best-effort — any exception during close is logged, not
+        raised, so it never blocks shutdown.
+        """
+        with self._qdrant_lock:
+            client = self._qdrant_client
+            if client is None:
+                return
+            # Skip silently if the client doesn't expose ``close()`` —
+            # this is the path test fakes hit (they implement only
+            # the methods their assertions need). Real QdrantClient
+            # instances always have ``close()``.
+            if hasattr(client, "close"):
+                try:
+                    client.close()
+                    logger.info("Closed Qdrant local client cleanly")
+                except Exception as e:
+                    logger.warning(f"Qdrant client close raised (ignored): {e}")
+            # Drop the reference so ``__del__`` has nothing to do
+            # when the interpreter eventually tears the object
+            # down — no "Exception ignored in: __del__" lines.
+            self._qdrant_client = None
+            # Also drop per-user vectorstore wrappers; they hold
+            # references back into the (now-closed) client.
+            self._vectorstore_cache.clear()
+
     def _ensure_qdrant_collection(self, client, collection_name: str) -> None:
-        """Create the per-user Qdrant collection if it doesn't exist."""
+        """Create the per-user Qdrant collection if it doesn't exist.
+
+        Note on payload indexes: an earlier revision attempted to
+        ``create_payload_index`` on ``metadata.source`` here, on the
+        reasoning that filtered queries (``_hybrid_search`` with
+        ``filter_files``, ``_delete_existing_sources`` on re-upload,
+        BM25 build's filtered ``scroll``) would benefit from
+        O(log n) lookups. **Embedded Qdrant (the local
+        ``QdrantClient(path=...)`` mode we use) ignores payload
+        indexes** — it prints a UserWarning ("Payload indexes have
+        no effect in the local Qdrant") and stores nothing. Filtered
+        queries still work, just via linear scan. The optimization
+        only applies if Qdrant is deployed as a separate server
+        process. Skipping it here to avoid the warning and the
+        misleading impression of an active index.
+        """
         from qdrant_client.http import models as qmodels
 
         try:
@@ -2223,22 +2341,33 @@ class RAGService:
         answer: str,
         sources: List[Dict[str, Any]],
         timeout_seconds: float = 25.0,
+        max_attempts: int = 2,
     ) -> List[str]:
         """Structured-output pass: ask the LLM which chunk_ids it
-        used to write the answer.
+        used to write the answer, with **validation-retry** on
+        malformed responses.
 
-        Replaces the inline ``[cN]`` marker scheme that depended on
-        the LLM voluntarily following a citation rule (which broke
-        on list-style answers, smaller models, and multi-turn
-        drift). Schema-mode JSON forces the model to commit to a
-        list of chunk_ids — the validator rejects empty/malformed
-        responses, and we additionally constrain the result to ids
-        that were actually retrieved.
+        Mirrors the validation-retry pattern popularized by
+        ``instructor``: when the LLM's JSON response fails any of
+        our shape/content checks (wrong key name, wrong type, all
+        hallucinated ids, empty list), we re-prompt with the
+        specific error so the model can correct itself instead of
+        falling back to reranker-picked chunks. ``json_repair``
+        still handles syntax-level malformations (trailing commas,
+        code fences, single quotes, unclosed braces) on every
+        attempt; ``max_attempts`` governs the *semantic* retry
+        loop on top of that.
+
+        On 7B local models, semantic errors (wrong key name, list
+        vs string, hallucinated id format) are common — this loop
+        recovers the LLM's actual judgment instead of silently
+        falling back. On 70B cloud models, the first attempt
+        almost always succeeds and the loop is a no-op.
 
         Returns a list of validated chunk_ids in priority order
-        (LLM's stated order). Empty list on any failure — caller
-        should fall back to "use top-N reranked chunks for the
-        whole answer."
+        (LLM's stated order). Empty list on terminal failure —
+        caller should fall back to "use top-N reranked chunks for
+        the whole answer."
         """
         if not answer.strip() or not sources:
             return []
@@ -2249,6 +2378,7 @@ class RAGService:
         ]
         if not retrieved_ids:
             return []
+        valid_set = set(retrieved_ids)
 
         # Compact chunk catalog — id + first ~400 chars per chunk so
         # the LLM can identify each one without re-streaming the full
@@ -2259,7 +2389,7 @@ class RAGService:
             if s.get("chunk_id")
         )
 
-        prompt = (
+        base_prompt = (
             "You just wrote the ANSWER below using the source CHUNKS. "
             "List the chunk_ids you actually drew on to write that "
             "answer.\n\n"
@@ -2279,52 +2409,119 @@ class RAGService:
             "JSON:"
         )
 
-        try:
-            response = await self._invoke_llm(
-                prompt=prompt,
-                max_retries=1,
-                timeout_seconds=timeout_seconds,
-                response_format={"type": "json_object"},
-            )
-        except Exception as e:
-            logger.warning(f"chunk-id selection LLM call failed: {e}")
-            return []
+        from json_repair import repair_json
 
-        raw = (response.content or "").strip()
-        if not raw:
-            return []
-        # Permissive JSON parsing — small models in JSON mode commonly
-        # emit malformations that strict ``json.loads`` rejects:
-        # trailing commas, code fences, single quotes, unclosed
-        # braces, smart quotes, prose preamble before the object.
-        # ``json_repair`` recovers the intended structure from these
-        # without an extra LLM call. The downstream isinstance guards
-        # below still gate on shape, so a "repair" that lands on the
-        # wrong shape (e.g., a string) is rejected exactly like a
-        # parse failure was — strict regression-safety: we never
-        # accept anything we wouldn't have accepted before.
-        try:
-            from json_repair import repair_json
-            parsed = repair_json(raw, return_objects=True)
-        except Exception as e:
-            logger.warning(f"chunk-id selection JSON parse failed: {e}")
-            return []
+        error_hint: Optional[str] = None
+        for attempt in range(max_attempts):
+            # On retry, prepend an explicit correction block so the
+            # model can see what went wrong with its previous output.
+            # Hint is *prepended* (not appended) so it's the first
+            # thing the model attends to in long prompts.
+            if error_hint is not None:
+                prompt = (
+                    "Your previous response was rejected for the "
+                    f"following reason:\n  {error_hint}\n\n"
+                    "Retry with a corrected response that conforms "
+                    "to the schema below.\n\n"
+                    f"{base_prompt}"
+                )
+            else:
+                prompt = base_prompt
 
-        ids_raw = parsed.get("chunk_ids") if isinstance(parsed, dict) else None
-        if not isinstance(ids_raw, list):
-            return []
+            try:
+                response = await self._invoke_llm(
+                    prompt=prompt,
+                    max_retries=1,
+                    timeout_seconds=timeout_seconds,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as e:
+                logger.warning(f"chunk-id selection LLM call failed: {e}")
+                return []
 
-        valid_set = set(retrieved_ids)
-        out: List[str] = []
-        seen: set = set()
-        for cid in ids_raw:
-            if not isinstance(cid, str):
+            raw = (response.content or "").strip()
+            if not raw:
+                error_hint = (
+                    "Your previous response was empty. Return a "
+                    'JSON object: {"chunk_ids": ["c1", ...]}.'
+                )
                 continue
-            cid = cid.strip()
-            if cid in valid_set and cid not in seen:
-                out.append(cid)
-                seen.add(cid)
-        return out
+
+            try:
+                parsed = repair_json(raw, return_objects=True)
+            except Exception as e:
+                logger.warning(
+                    f"chunk-id selection JSON parse failed (attempt {attempt + 1}): {e}"
+                )
+                error_hint = (
+                    "Your previous response could not be parsed as "
+                    "JSON. Return a single object, no prose around it."
+                )
+                continue
+
+            # Shape validation — every branch sets a precise
+            # error_hint so the retry prompt can quote the specific
+            # mistake back to the model.
+            if not isinstance(parsed, dict):
+                error_hint = (
+                    f"Expected a JSON object with field 'chunk_ids'; "
+                    f"got a {type(parsed).__name__} instead."
+                )
+                continue
+
+            ids_raw = parsed.get("chunk_ids")
+            if not isinstance(ids_raw, list):
+                if "chunk_ids" not in parsed:
+                    visible_keys = ", ".join(
+                        sorted(str(k) for k in parsed.keys())[:6]
+                    ) or "<none>"
+                    error_hint = (
+                        "Missing required field 'chunk_ids'. Use that "
+                        f"exact key. Your object had: {visible_keys}."
+                    )
+                else:
+                    error_hint = (
+                        "Field 'chunk_ids' must be a list of strings; "
+                        f"got a {type(ids_raw).__name__} instead."
+                    )
+                continue
+
+            out: List[str] = []
+            seen: set = set()
+            for cid in ids_raw:
+                if not isinstance(cid, str):
+                    continue
+                cid = cid.strip()
+                if cid in valid_set and cid not in seen:
+                    out.append(cid)
+                    seen.add(cid)
+
+            if not out:
+                # LLM returned a list but none of the ids are real.
+                # Reshow the valid id set with concrete examples so
+                # the model can pick from them on the next attempt.
+                example_ids = sorted(valid_set)[:8]
+                more = "" if len(valid_set) <= 8 else f" (and {len(valid_set) - 8} more)"
+                error_hint = (
+                    "None of the chunk_ids you provided matched the "
+                    "retrieved set. Valid ids you can pick from: "
+                    f"{example_ids}{more}. Return at least one of these."
+                )
+                continue
+
+            # All validations passed.
+            if attempt > 0:
+                logger.info(
+                    f"chunk-id selection succeeded on attempt {attempt + 1}/"
+                    f"{max_attempts} after validation-retry"
+                )
+            return out
+
+        logger.warning(
+            f"chunk-id selection: all {max_attempts} attempts failed; "
+            f"final error hint: {error_hint!r}"
+        )
+        return []
 
     def _reattribute_and_extract(
         self,

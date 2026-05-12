@@ -3,6 +3,14 @@
 # === Core Framework ===
 fastapi==0.136.1
 uvicorn[standard]==0.46.0
+# Faster asyncio event loop (libuv-backed). Drop-in replacement —
+# uvicorn auto-detects when installed and switches the event loop
+# policy with no code change. ~25-40% throughput gain on concurrent
+# I/O: streaming SSE responses, chunked uploads, background indexing
+# jobs, per-user lock acquisition. No Windows wheels, so the env
+# marker keeps installs on Linux/macOS only and skips Windows
+# cleanly (Windows falls back to asyncio's stdlib SelectorEventLoop).
+uvloop==0.21.0; sys_platform != "win32"
 pydantic==2.13.3
 pydantic-settings==2.14.0
 python-multipart==0.0.27
@@ -22,7 +30,7 @@ langchain-huggingface==1.2.2
 langchain-qdrant==1.1.0
 langchain-experimental==0.4.1
 langchain-text-splitters==1.1.2
-qdrant-client==1.17.1
+qdrant-client==1.18.0
 sentence-transformers==5.4.1
 transformers==4.57.1  # Keep in lockstep with zerank-2 + sentence-transformers integration
 rank-bm25==0.2.2
