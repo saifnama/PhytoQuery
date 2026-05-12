@@ -39,7 +39,7 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
             .where(Paper.journal != None)
             .group_by(Paper.journal)
             .order_by(desc("count"))
-            .limit(8)
+            .limit(10)
         )
         papers_by_journal = [{"name": row[0], "value": row[1]} for row in papers_by_journal_result.all()]
 

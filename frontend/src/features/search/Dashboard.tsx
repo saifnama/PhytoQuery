@@ -1,5 +1,5 @@
 /**
- * Dashboard — ECharts charts: Top Journals, Entity Distribution, Open Access,
+ * Dashboard — ECharts charts: Journal Distribution widget, Entity Distribution,
  * Publication Timeline, Plant Origin Heatmap (world map).
  */
 
@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../../lib/api';
 import { ENTITY_COLORS } from '../../lib/entityColors';
 import { PHYTOQUERY_THEME_NAME } from '../../lib/echartsTheme';
+import JournalDistributionWidget from './JournalDistributionWidget';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -121,38 +122,6 @@ const Dashboard: React.FC = () => {
   }
 
   // ── Chart Options ───────────────────────────────────────────────────────
-
-  const topJournalsOption: EChartsOption = {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: 160, right: 40, top: 10, bottom: 10 },
-    xAxis: { type: 'value' },
-    yAxis: {
-      type: 'category',
-      data: metrics.charts.papers_by_journal.map((d) => d.name),
-      axisLabel: {
-        formatter: (v: string) => (v.length > 20 ? v.slice(0, 20) + '…' : v),
-      },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: metrics.charts.papers_by_journal.map((d) => d.value),
-        barWidth: 18,
-        itemStyle: {
-          color: {
-            type: 'linear',
-            x: 1, y: 0, x2: 0, y2: 0,
-            colorStops: [
-              { offset: 0, color: '#3b82f6' },
-              { offset: 1, color: '#60a5fa' },
-            ],
-          },
-          borderRadius: [0, 4, 4, 0],
-        },
-        emphasis: { itemStyle: { opacity: 0.8 } },
-      },
-    ],
-  };
 
   const entityDistOption: EChartsOption = {
     tooltip: { trigger: 'item' },
@@ -285,15 +254,17 @@ const Dashboard: React.FC = () => {
         />
       </div>
 
-      {/* Row 1: Journals + Entity Distribution */}
+      {/* Row 1: Journal Distribution Widget (full-width) */}
       <div className="charts-grid mt-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <ChartCard title="Top Journals">
-            <div className="h-64 w-full">
-              <ReactECharts option={topJournalsOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-            </div>
-          </ChartCard>
+        <ChartCard title="Top Journals">
+          <JournalDistributionWidget
+            journals={metrics.charts.papers_by_journal}
+            totalPapers={metrics.kpis.total_papers}
+          />
+        </ChartCard>
 
+        {/* Row 2: Entity Distribution + Publication Timeline */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
           <ChartCard title="Entity Distribution">
             <div className="h-64 w-full flex items-center justify-center">
               <ReactECharts option={entityDistOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
@@ -307,14 +278,13 @@ const Dashboard: React.FC = () => {
               ))}
             </div>
           </ChartCard>
-        </div>
 
-        {/* Row 2: Publication Timeline (full-width) */}
-        <ChartCard title="Publication Timeline">
-          <div className="h-64 w-full">
-            <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-          </div>
-        </ChartCard>
+          <ChartCard title="Publication Timeline">
+            <div className="h-64 w-full">
+              <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
+            </div>
+          </ChartCard>
+        </div>
 
         {/* Row 3: Geographic Heatmap */}
         <div className="mt-6">

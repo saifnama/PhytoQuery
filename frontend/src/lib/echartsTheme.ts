@@ -41,3 +41,40 @@ export function ensurePhytoQueryTheme(): void {
   echarts.registerTheme(PHYTOQUERY_THEME_NAME, theme);
   registered = true;
 }
+
+// ─── Coastal Pastel theme (Journal Distribution Widget) ─────────────────────
+
+export const COASTAL_THEME_NAME = 'coastal';
+
+export const COASTAL_PALETTE = [
+  '#A0E4F1', '#B9EDB9', '#86CFBF', '#FFCBA5',
+  '#A0E4F1', '#B9EDB9', '#86CFBF', '#FFCBA5', '#A0E4F1',
+];
+
+const coastalTheme = {
+  color: COASTAL_PALETTE,
+  backgroundColor: 'transparent',
+  textStyle: { fontFamily: FONT },
+  categoryAxis: {
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { show: false },
+    axisLabel: { color: '#5A8080', fontSize: 10, fontFamily: FONT },
+  },
+  valueAxis: {
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { show: false },
+    axisLabel: { show: false },
+  },
+  bar: {
+    itemStyle: { borderRadius: [0, 4, 4, 0] },
+  },
+};
+
+let coastalRegistered = false;
+export function ensureCoastalTheme(): void {
+  if (coastalRegistered) return;
+  echarts.registerTheme(COASTAL_THEME_NAME, coastalTheme);
+  coastalRegistered = true;
+}

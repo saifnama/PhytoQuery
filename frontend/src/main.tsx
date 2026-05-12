@@ -3,9 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import App from './App.tsx'
-import { ensurePhytoQueryTheme } from './lib/echartsTheme'
+import { ensurePhytoQueryTheme, ensureCoastalTheme } from './lib/echartsTheme'
 
 ensurePhytoQueryTheme()
+ensureCoastalTheme()
 
 // One QueryClient for the whole app. Defaults are tuned for our
 // usage: data is considered fresh for 30s (so quick page hops don't
