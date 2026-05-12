@@ -7,11 +7,12 @@ import React, { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import type { EChartsOption } from 'echarts';
-import { Files, Graph, BookBookmark, CubeTransparent } from '@phosphor-icons/react';
+import { CubeTransparent } from '@phosphor-icons/react';
 import { useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../../lib/api';
 import { ENTITY_COLORS } from '../../lib/entityColors';
 import { PHYTOQUERY_THEME_NAME } from '../../lib/echartsTheme';
+import { useTheme } from '../../lib/theme';
 import JournalDistributionWidget from './JournalDistributionWidget';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,43 +32,56 @@ interface DashboardMetrics {
   };
 }
 
-const ENTITY_TYPE_ORDER = [
-  'chemical', 'species', 'plant_part', 'extraction_method',
-  'analytical_technique', 'bioactivity', 'disease', 'location',
-  'season', 'development_stage',
-];
+// ─── Entity distribution helpers (entity_donut_v2_prompt.md spec) ───────────
 
-const ENTITY_COLOR_LIST = ENTITY_TYPE_ORDER.map(
-  (t) => ENTITY_COLORS[t]?.hex ?? ENTITY_COLORS.default.hex
-);
+function entityKey(displayName: string): string {
+  return displayName.toLowerCase().replace(/\s+/g, '_');
+}
 
-// ─── KPI Card ─────────────────────────────────────────────────────────────────
+function formatEntityName(displayName: string): string {
+  return displayName.replace(/_/g, ' ');
+}
 
-function KpiCard({
-  icon,
+interface EntityDatum {
+  value: number;
+  name: string;
+  itemStyle: { color: string };
+}
+
+function prepareEntityData(
+  raw: { name: string; value: number }[]
+): EntityDatum[] {
+  return raw.map((d) => {
+    const key = entityKey(d.name);
+    return {
+      value: d.value,
+      name: formatEntityName(d.name),
+      itemStyle: { color: ENTITY_COLORS[key]?.hex ?? '#94A3B8' },
+    };
+  });
+}
+
+// ─── Stat Card (Style 5 — spec: h.md) ─────────────────────────────────────────
+
+type StatAccent = 'aqua' | 'lavender' | 'sage';
+
+function StatCard({
+  accent,
   label,
   value,
-  sub,
-  gradient,
-  border,
+  footer,
 }: {
-  icon: React.ReactNode;
+  accent: StatAccent;
   label: string;
-  value: string | number;
-  sub: string;
-  gradient: string;
-  border: string;
+  value: number;
+  footer: React.ReactNode;
 }) {
   return (
-    <div className={`saas-card p-6 bg-gradient-to-br ${gradient} border ${border}`}>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">{label}</h3>
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center opacity-80">{icon}</div>
-      </div>
-      <div className="text-3xl font-bold text-slate-900 mb-1">
-        {typeof value === 'number' ? value.toLocaleString() : value}
-      </div>
-      <div className="text-xs font-medium text-slate-400">{sub}</div>
+    <div className="stat-card" data-accent={accent}>
+      <div className="stat-label">{label}</div>
+      <div className="stat-number">{value.toLocaleString()}</div>
+      <div className="stat-divider" />
+      <div className="stat-footer">{footer}</div>
     </div>
   );
 }
@@ -88,6 +102,9 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [worldGeo, setWorldGeo] = useState<unknown>(null);
   const navigate = useNavigate();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const [timelineHover, setTimelineHover] = useState(false);
 
   // Fetch world map geoJSON once (served from /public — no CDN at runtime)
   useEffect(() => {
@@ -121,57 +138,196 @@ const Dashboard: React.FC = () => {
     );
   }
 
+  // ── Stat-card derived values ─────────────────────────────────────────────
+  const papersTotal = metrics.kpis.total_papers;
+  const entitiesTotal = metrics.kpis.total_entities;
+  const journalsTotal = metrics.kpis.total_journals;
+
+  const years = metrics.charts.papers_by_year
+    .map((d) => Number(d.name))
+    .filter((y) => Number.isFinite(y));
+  const yearMin = years.length ? Math.min(...years) : null;
+  const yearMax = years.length ? Math.max(...years) : null;
+
+  const entitiesPerPaper = papersTotal > 0 ? Math.round(entitiesTotal / papersTotal) : 0;
+
+  const dominant = metrics.charts.papers_by_journal[0];
+  const dominantPct = dominant && papersTotal > 0
+    ? Math.round((dominant.value / papersTotal) * 100)
+    : 0;
+
   // ── Chart Options ───────────────────────────────────────────────────────
 
   const entityDistOption: EChartsOption = {
-    tooltip: { trigger: 'item' },
-    legend: { show: false },
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      formatter: '{b}: {d}%',
+    },
+    legend: {
+      top: '5%',
+      left: 'center',
+      icon: 'circle',
+      itemWidth: 8,
+      itemHeight: 8,
+      itemGap: 12,
+      textStyle: { color: '#90A4AE', fontSize: 11 },
+      selectedMode: false,
+    },
     series: [
       {
+        name: 'Entity Distribution',
         type: 'pie',
         radius: ['40%', '70%'],
-        center: ['50%', '50%'],
         avoidLabelOverlap: false,
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-        label: { show: false },
+        label: { show: false, position: 'center' },
         emphasis: {
-          label: { show: true, fontSize: 13, fontWeight: 600, fontFamily: 'Inter' },
-          itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.2)' },
+          label: {
+            show: true,
+            fontSize: 28,
+            fontWeight: 'bold',
+            color: '#1A5F6B',
+            formatter: '{b}',
+          },
+          itemStyle: {
+            shadowBlur: 20,
+            shadowOffsetX: 0,
+            shadowColor: 'rgba(0, 0, 0, 0.25)',
+          },
         },
-        data: metrics.charts.entity_distribution.map((d, i) => ({
-          name: d.name,
-          value: d.value,
-          itemStyle: { color: ENTITY_COLOR_LIST[i % ENTITY_COLOR_LIST.length] },
-        })),
+        labelLine: { show: false },
+        itemStyle: {
+          borderRadius: 6,
+          borderColor: 'transparent',
+          borderWidth: 2,
+        },
+        data: prepareEntityData(metrics.charts.entity_distribution),
       },
     ],
   };
 
+  // ── Publication Timeline — smooth area chart (spec: publication_timeline_prompt.md) ──
+  const timelineYears = metrics.charts.papers_by_year.map((d) => d.name);
+  const timelineCounts = metrics.charts.papers_by_year.map((d) => d.value);
+  const timelineAvg = timelineCounts.length
+    ? Math.round(timelineCounts.reduce((a, b) => a + b, 0) / timelineCounts.length)
+    : 0;
+
   const timelineOption: EChartsOption = {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 50, right: 20, top: 10, bottom: 30 },
+    backgroundColor: 'transparent',
+    grid: { top: 28, right: 16, bottom: 60, left: 48, containLabel: false },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: '#4DD0E1', width: 1, type: 'dashed' },
+      },
+      backgroundColor: isDark ? '#1E2535' : '#ffffff',
+      borderColor: isDark ? 'rgba(255,255,255,0.1)' : '#E0E0E0',
+      borderWidth: 1,
+      textStyle: {
+        color: isDark ? '#F0F2F8' : '#111111',
+        fontSize: 12,
+        fontFamily: 'Inter, system-ui, sans-serif',
+      },
+      formatter: (params: any) => {
+        const p = Array.isArray(params) ? params[0] : params;
+        return `<b style="font-family:monospace">${p.axisValue}</b><br/>${p.value} papers`;
+      },
+    },
     xAxis: {
       type: 'category',
-      data: metrics.charts.papers_by_year.map((d) => d.name),
+      data: timelineYears,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.1)' : '#E0E0E0' } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: isDark ? '#7880A0' : '#6B7280',
+        fontSize: 10,
+        fontFamily: 'monospace',
+        interval: 4,
+        margin: 10,
+      },
+      splitLine: { show: false },
     },
-    yAxis: { type: 'value' },
+    yAxis: {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: isDark ? '#7880A0' : '#6B7280',
+        fontSize: 10,
+        fontFamily: 'monospace',
+      },
+      splitLine: {
+        lineStyle: {
+          color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+        },
+      },
+    },
+    dataZoom: [
+      {
+        type: 'slider',
+        show: timelineHover,
+        height: 18,
+        bottom: 8,
+        borderColor: 'transparent',
+        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#F0F0F0',
+        fillerColor: isDark ? 'rgba(77,208,225,0.2)' : 'rgba(77,208,225,0.15)',
+        handleStyle: { color: '#4DD0E1' },
+        moveHandleStyle: { color: '#4DD0E1' },
+        textStyle: { color: isDark ? '#7880A0' : '#6B7280', fontSize: 10 },
+        labelFormatter: (val: number) => timelineYears[val] ?? '',
+      },
+      { type: 'inside' },
+    ],
     series: [
       {
-        type: 'bar',
-        data: metrics.charts.papers_by_year.map((d) => d.value),
-        barWidth: 32,
-        itemStyle: {
+        type: 'line',
+        data: timelineCounts,
+        smooth: 0.4,
+        symbol: 'none',
+        symbolSize: 6,
+        lineStyle: { color: '#00ACC1', width: 2 },
+        areaStyle: {
           color: {
             type: 'linear',
             x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
-              { offset: 0, color: '#6366f1' },
-              { offset: 1, color: '#818cf8' },
+              { offset: 0, color: isDark ? 'rgba(0,172,193,0.4)' : 'rgba(77,208,225,0.35)' },
+              { offset: 1, color: isDark ? 'rgba(0,172,193,0.02)' : 'rgba(77,208,225,0.02)' },
             ],
           },
-          borderRadius: [4, 4, 0, 0],
         },
-        emphasis: { itemStyle: { opacity: 0.8 } },
+        markPoint: {
+          symbol: 'circle',
+          symbolSize: 8,
+          itemStyle: {
+            color: '#00ACC1',
+            borderColor: isDark ? '#1E2535' : '#ffffff',
+            borderWidth: 2,
+          },
+          label: { show: false },
+          data: [{ type: 'max', name: 'Peak' }],
+        },
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: {
+            color: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
+            type: 'dashed',
+            width: 1,
+          },
+          label: {
+            show: true,
+            position: 'end',
+            formatter: `avg ${timelineAvg}`,
+            color: isDark ? '#7880A0' : '#6B7280',
+            fontSize: 10,
+            fontFamily: 'monospace',
+          },
+          data: [{ type: 'average', name: 'Average' }],
+        },
       },
     ],
   };
@@ -226,31 +382,41 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <KpiCard
-          icon={<Files size={24} weight="duotone" className="text-blue-600" />}
-          label="Total Papers"
-          value={metrics.kpis.total_papers}
-          sub="Indexed and processed"
-          gradient="from-white to-blue-50/50"
-          border="border-blue-100"
+      {/* KPI Cards — Style 5 (h.md) */}
+      <div className="stats-strip mb-8">
+        <StatCard
+          accent="aqua"
+          label="Papers indexed"
+          value={papersTotal}
+          footer={
+            yearMin !== null && yearMax !== null ? (
+              <>
+                {yearMin} <span className="stat-accent">→</span> {yearMax}
+              </>
+            ) : (
+              'No year data'
+            )
+          }
         />
-        <KpiCard
-          icon={<Graph size={24} weight="duotone" className="text-emerald-600" />}
-          label="Entities Extracted"
-          value={metrics.kpis.total_entities}
-          sub="Chemicals, species, and locations"
-          gradient="from-white to-emerald-50/50"
-          border="border-emerald-100"
+        <StatCard
+          accent="lavender"
+          label="Entities extracted"
+          value={entitiesTotal}
+          footer={
+            <>
+              {entitiesPerPaper} entities <span className="stat-accent">·</span> per paper
+            </>
+          }
         />
-        <KpiCard
-          icon={<BookBookmark size={24} weight="duotone" className="text-purple-600" />}
-          label="Journals Indexed"
-          value={metrics.kpis.total_journals}
-          sub={`Top: ${metrics.kpis.top_journals}`}
-          gradient="from-white to-purple-50/50"
-          border="border-purple-100"
+        <StatCard
+          accent="sage"
+          label="Journals indexed"
+          value={journalsTotal}
+          footer={
+            <>
+              1 journal <span className="stat-accent">·</span> {dominantPct}% of corpus
+            </>
+          }
         />
       </div>
 
@@ -266,21 +432,17 @@ const Dashboard: React.FC = () => {
         {/* Row 2: Entity Distribution + Publication Timeline */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
           <ChartCard title="Entity Distribution">
-            <div className="h-64 w-full flex items-center justify-center">
+            <div className="h-80 w-full">
               <ReactECharts option={entityDistOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-            </div>
-            <div className="flex flex-wrap justify-center gap-3 mt-4">
-              {metrics.charts.entity_distribution.slice(0, 5).map((entry, i) => (
-                <div key={entry.name} className="flex items-center gap-1.5 text-xs text-slate-600 font-medium">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ENTITY_COLOR_LIST[i % ENTITY_COLOR_LIST.length] }} />
-                  {entry.name}
-                </div>
-              ))}
             </div>
           </ChartCard>
 
           <ChartCard title="Publication Timeline">
-            <div className="h-64 w-full">
+            <div
+              className="h-[300px] w-full"
+              onMouseEnter={() => setTimelineHover(true)}
+              onMouseLeave={() => setTimelineHover(false)}
+            >
               <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
             </div>
           </ChartCard>
