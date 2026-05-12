@@ -6,7 +6,6 @@ import gc
 import time
 import hashlib
 import json
-import pickle
 import asyncio
 import logging
 import tempfile
@@ -391,7 +390,7 @@ class OllamaLLM:
                 # Ollama uses a top-level ``format`` field; "json" enables
                 # grammar-constrained JSON output.
                 payload["format"] = "json"
-        else:  # OpenAI-compatible: openrouter, groq
+        else:  # OpenAI-compatible: openrouter, groq, llamacpp
             payload = {
                 "model": self.model,
                 "messages": msg_list,
@@ -399,7 +398,16 @@ class OllamaLLM:
             }
             if response_format is not None:
                 payload["response_format"] = response_format
-            headers = {"Authorization": f"Bearer {self.api_key}"}
+            # Only include Authorization when an API key is set.
+            # Self-hosted servers (llama.cpp, vLLM) usually run
+            # without one — sending ``Bearer `` with an empty token
+            # is technically malformed and some HTTP stacks (notably
+            # Cloudflare tunnels) reject it before it reaches the
+            # backend. When ``self.api_key`` is empty, omit the
+            # header entirely.
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
         last_exception = None
         for attempt in range(max_retries):
@@ -422,6 +430,7 @@ class OllamaLLM:
                     env_var = {
                         "groq": "RAG_GROQ_API_KEY",
                         "openrouter": "RAG_OPENROUTER_API_KEY",
+                        "llamacpp": "RAG_LLAMACPP_API_KEY",
                     }.get(self.provider, "the provider's API key")
                     raise RAGProviderAuthError(
                         f"{self.provider.title()} authentication failed. "
@@ -518,8 +527,8 @@ class OllamaLLM:
 
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
-                "RAG is not configured. Set RAG_GROQ_API_KEY, RAG_OPENROUTER_API_KEY, "
-                "or configure RAG_OLLAMA_URL."
+                "RAG is not configured. Set RAG_LLAMACPP_URL, RAG_GROQ_API_KEY, "
+                "RAG_OPENROUTER_API_KEY, or configure RAG_OLLAMA_URL."
             )
 
         headers = {}
@@ -530,14 +539,19 @@ class OllamaLLM:
                 "stream": True,
                 "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
             }
-        else:  # OpenAI-compatible: openrouter, groq
+        else:  # OpenAI-compatible: openrouter, groq, llamacpp
             payload = {
                 "model": self.model,
                 "messages": msg_list,
                 "temperature": self.temperature,
                 "stream": True,
             }
-            headers = {"Authorization": f"Bearer {self.api_key}"}
+            # Same defensive header handling as ``invoke``: self-hosted
+            # OpenAI-compatible servers usually run without an API key,
+            # and ``Bearer `` with empty token can be rejected by HTTP
+            # stacks / proxies before reaching the server.
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
         client = await HttpClientManager.get_client()
         kwargs = {"json": payload, "timeout": None}
@@ -549,6 +563,7 @@ class OllamaLLM:
                 env_var = {
                     "groq": "RAG_GROQ_API_KEY",
                     "openrouter": "RAG_OPENROUTER_API_KEY",
+                    "llamacpp": "RAG_LLAMACPP_API_KEY",
                 }.get(self.provider, "the provider's API key")
                 raise RAGProviderAuthError(
                     f"{self.provider.title()} authentication failed. "
@@ -1045,12 +1060,25 @@ class RAGService:
     def _get_collection_suffix(self) -> str:
         """Generate a short suffix based on the active embedding model and dimension.
 
-        This ensures Qdrant collections are versioned by embedding config,
-        preventing dimension mismatch when switching models.
+        This ensures Qdrant collections are versioned by embedding
+        config, preventing dimension mismatch when switching models.
+
+        **Idempotency contract**: every call MUST return the same
+        hash for the same configured model. ``PhytoQueryEmbeddings``
+        initializes ``model_dim`` to a placeholder (2560 — Qwen3-4B's
+        dim) and only updates it to the real value once
+        ``_load_model`` actually loads the SentenceTransformer. If
+        ``_get_collection_suffix`` was called before that load, it
+        produced a hash over ``"<name>:2560"`` rather than
+        ``"<name>:<real_dim>"`` — a different hash for the same
+        model, depending on call order. Forcing the load here makes
+        the hash a pure function of the configured model: idempotent
+        and order-independent. After the first call
+        ``_ensure_model_loaded`` is a no-op, so the cost is one-time.
         """
+        self.embeddings._ensure_model_loaded()
         model_key = f"{self.embeddings.model_name}:{self.embeddings.model_dim}"
-        short_hash = hashlib.md5(model_key.encode()).hexdigest()[:8]
-        return short_hash
+        return hashlib.md5(model_key.encode()).hexdigest()[:8]
 
     def _get_qdrant_client(self):
         """Lazy-init the shared local QdrantClient.
@@ -1168,19 +1196,23 @@ class RAGService:
     def _ensure_qdrant_collection(self, client, collection_name: str) -> None:
         """Create the per-user Qdrant collection if it doesn't exist.
 
-        Note on payload indexes: an earlier revision attempted to
-        ``create_payload_index`` on ``metadata.source`` here, on the
-        reasoning that filtered queries (``_hybrid_search`` with
-        ``filter_files``, ``_delete_existing_sources`` on re-upload,
-        BM25 build's filtered ``scroll``) would benefit from
-        O(log n) lookups. **Embedded Qdrant (the local
-        ``QdrantClient(path=...)`` mode we use) ignores payload
-        indexes** — it prints a UserWarning ("Payload indexes have
-        no effect in the local Qdrant") and stores nothing. Filtered
-        queries still work, just via linear scan. The optimization
-        only applies if Qdrant is deployed as a separate server
-        process. Skipping it here to avoid the warning and the
-        misleading impression of an active index.
+        Uses the native hybrid schema: named ``dense`` field (Qwen3/
+        bge embeddings) plus a named ``sparse`` field with
+        ``Modifier.IDF`` for BM25-style retrieval. A single
+        ``query_points`` call with ``FusionQuery(Fusion.RRF)`` runs
+        the hybrid merge server-side at query time — sparse vectors
+        live alongside dense vectors per point, no separate Python
+        BM25 cache needed.
+
+        ``Modifier.IDF`` is what gives the sparse field BM25-style
+        scoring (inverse document frequency weighting on the sparse
+        term values). Without it, the sparse field would store raw
+        term frequencies and produce naive TF scoring rather than
+        BM25.
+
+        Note on payload indexes: embedded Qdrant ignores them silently
+        (we tested), so they're not used here. Filter queries still
+        work via linear scan.
         """
         from qdrant_client.http import models as qmodels
 
@@ -1191,19 +1223,27 @@ class RAGService:
             pass  # collection doesn't exist; fall through to create
 
         # Embedder must be loaded so model_dim is known. Cosine distance
-        # matches Chroma's default and the metric the Qdrant LangChain
-        # integration assumes for normalized vectors.
+        # matches the metric the LangChain Qdrant integration assumes
+        # for normalized vectors.
         self.embeddings._ensure_model_loaded()
         vec_dim = config.embedding_dim or self.embeddings.model_dim
+
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=qmodels.VectorParams(
-                size=vec_dim,
-                distance=qmodels.Distance.COSINE,
-            ),
+            vectors_config={
+                "dense": qmodels.VectorParams(
+                    size=vec_dim, distance=qmodels.Distance.COSINE,
+                ),
+            },
+            sparse_vectors_config={
+                "sparse": qmodels.SparseVectorParams(
+                    modifier=qmodels.Modifier.IDF,
+                ),
+            },
         )
         logger.info(
-            f"Created Qdrant collection {collection_name} (size={vec_dim}, distance=COSINE)"
+            f"Created Qdrant collection {collection_name} (HYBRID: "
+            f"dense size={vec_dim}, sparse IDF-BM25, distance=COSINE)"
         )
 
     def _get_user_collection(self, user_id: str):
@@ -1213,8 +1253,19 @@ class RAGService:
         rest of the pipeline (``add_documents``, ``similarity_search_with_score``)
         keeps working unchanged. The collection name encodes the
         embedding-model+dim hash so switching models cannot collide.
+
+        Always uses native hybrid retrieval:
+          * ``retrieval_mode=RetrievalMode.HYBRID`` so
+            ``add_documents`` writes both dense and sparse vectors
+            per point and ``similarity_search`` runs RRF fusion
+            server-side via Qdrant's ``Prefetch + FusionQuery``
+            API.
+          * Sparse vectors are produced by FastEmbed's
+            ``Qdrant/bm25`` model (lazy-init via ``_sparse_embeddings``
+            so we only download/load the model when a real query
+            arrives, not on service construction).
         """
-        from langchain_qdrant import QdrantVectorStore
+        from langchain_qdrant import QdrantVectorStore, RetrievalMode
 
         if user_id in self._vectorstore_cache:
             return self._vectorstore_cache[user_id]
@@ -1230,10 +1281,37 @@ class RAGService:
             client=client,
             collection_name=collection_name,
             embedding=self.embeddings,
+            sparse_embedding=self._get_sparse_embeddings(),
+            retrieval_mode=RetrievalMode.HYBRID,
+            vector_name="dense",
+            sparse_vector_name="sparse",
+        )
+        logger.info(
+            f"Created Qdrant HYBRID vectorstore for user: {user_id} "
+            f"(collection={collection_name}, fusion=RRF)"
         )
         self._vectorstore_cache[user_id] = vectorstore
-        logger.info(f"Created Qdrant vectorstore wrapper for user: {user_id} (collection={collection_name})")
         return vectorstore
+
+    def _get_sparse_embeddings(self):
+        """Lazy-init FastEmbed's ``Qdrant/bm25`` sparse encoder.
+
+        Cached on the service instance so the model is loaded once
+        per process. First call downloads ~50MB of BM25 tokenizer
+        assets to FastEmbed's cache dir (typically
+        ``~/.cache/fastembed/`` on Linux/Mac, ``%LOCALAPPDATA%/fastembed/``
+        on Windows). Subsequent calls return the cached instance.
+
+        Kept lazy so service construction stays cheap and the
+        download cost is only paid the first time a user actually
+        triggers a hybrid ingest or query.
+        """
+        if not hasattr(self, "_sparse_embeddings_cache") or self._sparse_embeddings_cache is None:
+            from langchain_qdrant import FastEmbedSparse
+            logger.info("Loading FastEmbed Qdrant/bm25 sparse encoder…")
+            self._sparse_embeddings_cache = FastEmbedSparse(model_name="Qdrant/bm25")
+            logger.info("FastEmbed Qdrant/bm25 loaded.")
+        return self._sparse_embeddings_cache
 
     def _get_user_collection_name(self, user_id: str) -> str:
         """Return the Qdrant collection name for a user (without instantiating the vectorstore)."""
@@ -1269,12 +1347,6 @@ class RAGService:
                 )
         finally:
             self._invalidate_user_collection(user_id)
-            try:
-                self._invalidate_bm25(user_id)
-            except Exception as e:
-                logger.warning(
-                    f"BM25 cache invalidation after collection reset failed for {user_id}: {e}"
-                )
 
     # --- Parent-Child Chunking: Parent Store ---
 
@@ -1316,178 +1388,6 @@ class RAGService:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    # --- BM25 sparse-index cache --------------------------------
-    # Hybrid retrieval combines dense vectors + BM25 keyword
-    # ranking. The dense side scales fine to 100K+ chunks via
-    # Qdrant HNSW; the BM25 side does not — naively rebuilding
-    # ``BM25Okapi`` on every query means scrolling all chunks out
-    # of Qdrant, tokenizing, and indexing them per-call (5-30s on
-    # 1000 papers). We instead build BM25 ONCE after each upload
-    # and cache it on disk + in memory. The cache is invalidated
-    # on every add/delete so it can never be stale.
-
-    def _get_bm25_cache_path(self, user_id: str) -> str:
-        safe_user_id = re.sub(r"[^a-zA-Z0-9_]", "_", user_id)
-        suffix = self._get_collection_suffix()
-        return os.path.join(
-            config.qdrant_dir, f"{safe_user_id}_{suffix}_bm25.pkl"
-        )
-
-    def _invalidate_bm25(self, user_id: str) -> None:
-        """Drop the BM25 cache (in-memory + on-disk) for ``user_id``.
-        Called after every upload commit and every source delete."""
-        if not hasattr(self, "_bm25_cache"):
-            self._bm25_cache: Dict[str, Any] = {}
-        self._bm25_cache.pop(user_id, None)
-        path = self._get_bm25_cache_path(user_id)
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception as e:
-            logger.warning(f"BM25 cache file delete failed for {user_id}: {e}")
-
-    def _build_bm25_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Scroll the user's Qdrant collection, tokenize every
-        chunk's ``page_content``, build a ``BM25Okapi`` index, and
-        persist the (texts, metas, tokenized) trio to disk so we
-        never have to re-scroll for keyword search.
-
-        Returns the in-memory cache entry on success or ``None`` if
-        the collection is empty / unavailable.
-        """
-        try:
-            from rank_bm25 import BM25Okapi
-        except ImportError:
-            logger.warning("rank-bm25 not installed; BM25 disabled")
-            return None
-        try:
-            from qdrant_client.http import models as qmodels  # noqa: F401
-        except ImportError:
-            return None
-
-        client = self._get_qdrant_client()
-        collection_name = self._get_user_collection_name(user_id)
-
-        all_texts: List[str] = []
-        all_metas: List[Dict[str, Any]] = []
-        offset = None
-        try:
-            while True:
-                points, offset = client.scroll(
-                    collection_name=collection_name,
-                    limit=1000,
-                    with_payload=True,
-                    with_vectors=False,
-                    offset=offset,
-                )
-                for point in points:
-                    payload = point.payload or {}
-                    all_texts.append(payload.get("page_content", "") or "")
-                    all_metas.append(payload.get("metadata", {}) or {})
-                if offset is None:
-                    break
-        except Exception as e:
-            logger.warning(f"BM25 scroll failed for {user_id}: {e}")
-            return None
-
-        if not all_texts:
-            return None
-
-        tokenized = [t.lower().split() for t in all_texts]
-        bm25 = BM25Okapi(tokenized)
-
-        entry = {
-            "bm25": bm25,
-            "tokenized": tokenized,
-            "texts": all_texts,
-            "metas": all_metas,
-            "size": len(all_texts),
-        }
-
-        # Persist tokenized + texts + metas (NOT the BM25Okapi
-        # object itself — pickling rank_bm25's internals is not
-        # version-stable across releases). Reload rebuilds BM25Okapi
-        # from tokenized in O(N).
-        path = self._get_bm25_cache_path(user_id)
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd, temp_path = tempfile.mkstemp(
-                dir=os.path.dirname(path),
-                prefix=os.path.basename(path),
-                suffix=".tmp",
-            )
-            try:
-                with os.fdopen(fd, "wb") as f:
-                    pickle.dump(
-                        {
-                            "tokenized": tokenized,
-                            "texts": all_texts,
-                            "metas": all_metas,
-                        },
-                        f,
-                        protocol=pickle.HIGHEST_PROTOCOL,
-                    )
-                os.replace(temp_path, path)
-            finally:
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.warning(f"BM25 cache persist failed for {user_id}: {e}")
-
-        if not hasattr(self, "_bm25_cache"):
-            self._bm25_cache = {}
-        self._bm25_cache[user_id] = entry
-        logger.info(
-            f"Built BM25 index for {user_id}: {len(all_texts)} chunks (cached on disk)"
-        )
-        return entry
-
-    def _load_bm25_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Return the cached BM25 entry for ``user_id``.
-
-        Layered lookup:
-          1. In-memory cache (process lifetime).
-          2. On-disk pickle (persists across restarts).
-          3. Build from Qdrant scroll (slow, only on first query
-             after upload or after a process restart with no pickle).
-        """
-        if not hasattr(self, "_bm25_cache"):
-            self._bm25_cache = {}
-        if user_id in self._bm25_cache:
-            return self._bm25_cache[user_id]
-
-        path = self._get_bm25_cache_path(user_id)
-        if os.path.exists(path):
-            try:
-                with open(path, "rb") as f:
-                    raw = pickle.load(f)
-                from rank_bm25 import BM25Okapi
-                tokenized = raw.get("tokenized") or []
-                if tokenized:
-                    entry = {
-                        "bm25": BM25Okapi(tokenized),
-                        "tokenized": tokenized,
-                        "texts": raw.get("texts") or [],
-                        "metas": raw.get("metas") or [],
-                        "size": len(tokenized),
-                    }
-                    self._bm25_cache[user_id] = entry
-                    return entry
-            except Exception as e:
-                logger.warning(
-                    f"BM25 cache load failed for {user_id}: {e}; rebuilding"
-                )
-                # Fall through to build path
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-
-        return self._build_bm25_for_user(user_id)
-
     def _delete_existing_sources(self, user_id: str, source_names: List[str]) -> None:
         """Delete existing chunks for sources that are being re-uploaded."""
         if not source_names:
@@ -1522,17 +1422,6 @@ class RAGService:
                 f"Replaced existing indexed chunks for {unique_sources} from user {user_id}'s Qdrant collection"
             )
             self._cleanup_parent_store(user_id)
-            # Any source deletion makes the cached BM25 stale —
-            # drop it. Next query rebuilds + re-persists. The
-            # post-upload path also invalidates, but covering both
-            # entry points means one-off deletes (without a
-            # follow-on upload) can't leave stale BM25 state.
-            try:
-                self._invalidate_bm25(user_id)
-            except Exception as e:
-                logger.warning(
-                    f"BM25 cache invalidation after delete failed for {user_id}: {e}"
-                )
         except Exception as exc:
             # Common when the collection has zero matching points; treat as
             # a no-op rather than failing the whole upload.
@@ -1565,11 +1454,11 @@ class RAGService:
           4. **Single delete pass** — all source names are pre-
              deleted up front so the per-batch ``add_documents``
              calls can be straight inserts.
-          5. **BM25 cache rebuild** — once the upload commits, the
-             persistent BM25 index is invalidated so the next
-             query rebuilds it from the fresh Qdrant state. Cached
-             on disk after first build so subsequent queries skip
-             the scroll+tokenize cost.
+          5. **Native sparse vectors** — ``add_documents`` writes
+             both dense and BM25 sparse vectors per point (via
+             langchain-qdrant's ``RetrievalMode.HYBRID``). No
+             post-upload index build step; sparse vectors are
+             ready for query immediately.
 
         Returns ``(source_names, extracted_texts)``. Sources that
         failed to parse are still listed in ``source_names`` (they
@@ -1754,13 +1643,6 @@ class RAGService:
 
         # Final flush — anything still in buffers.
         _flush()
-
-        # BM25 cache: drop the stale persisted index now that
-        # Qdrant has new content. Next query will rebuild + persist.
-        try:
-            self._invalidate_bm25(user_id)
-        except Exception as e:
-            logger.warning(f"BM25 cache invalidation failed for {user_id}: {e}")
 
         store_overhead_ms = max(index_total_ms - embed_ms, 0.0)
         total_elapsed_ms = (time.perf_counter() - total_started) * 1000
@@ -2053,21 +1935,25 @@ class RAGService:
         k: int = None,
         user_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Hybrid search combining vector similarity + BM25 keyword matching.
+        """Hybrid search via Qdrant's native dense + BM25 sparse fusion.
 
-        Uses Reciprocal Rank Fusion (RRF) to merge results from both methods.
-        Returns list of dicts with 'doc', 'score' keys.
+        The ``vectorstore`` is configured with
+        ``RetrievalMode.HYBRID``, so ``similarity_search_with_score``
+        delegates to Qdrant's ``query_points(prefetch=[dense, sparse],
+        query=FusionQuery(Fusion.RRF))`` — server-side scoring, no
+        Python BM25 cache, no manual RRF merge.
+
+        Returns list of dicts with ``doc``, ``rrf``, ``vector_score``,
+        and ``normalized_score`` keys (the rest of the pipeline reads
+        these names; renaming would ripple).
         """
         from qdrant_client.http import models as qmodels
 
         if k is None:
             k = config.top_k
-        rrf_k = 60  # RRF constant
 
-        # --- 1. Vector similarity search ---
-        # langchain-qdrant accepts a qdrant_client Filter directly; no
-        # Chroma-style ``$in`` dict syntax. Build a "should" filter
-        # (any-of) over selected sources.
+        # Build optional source filter (any-of over selected files).
+        # langchain-qdrant accepts a qdrant_client Filter directly.
         search_kwargs: Dict[str, Any] = {"k": k}
         if filter_files:
             search_kwargs["filter"] = qmodels.Filter(
@@ -2081,97 +1967,36 @@ class RAGService:
             )
 
         try:
-            vector_results = vectorstore.similarity_search_with_score(
+            fused = vectorstore.similarity_search_with_score(
                 question, **search_kwargs
             )
-        except Exception:
-            # Fallback to regular search if scores not supported
-            docs = vectorstore.similarity_search(question, **search_kwargs)
-            vector_results = [(doc, 0.5) for doc in docs]
-
-        # --- 2. BM25 keyword search (cached) ---
-        # The BM25 index is built once after each upload and cached
-        # on disk + in memory; per-query cost is just ``get_scores``
-        # over the pre-tokenized corpus, no Qdrant scroll. The cache
-        # is invalidated by ``_invalidate_bm25`` whenever sources
-        # are added or removed (see process_and_index_pdfs_with_texts
-        # and _delete_existing_sources), so it can never be stale.
-        # ``filter_files`` is applied as a post-filter on the
-        # pre-built corpus rather than re-scrolling — at scale this
-        # is the difference between sub-millisecond and many-second
-        # query latency.
-        bm25_results = []
-        try:
-            from langchain_core.documents import Document
-            entry = self._load_bm25_for_user(user_id) if user_id else None
-            if entry is not None:
-                bm25 = entry["bm25"]
-                texts = entry["texts"]
-                metas = entry["metas"]
-                query_tokens = question.lower().split()
-                bm25_scores = bm25.get_scores(query_tokens)
-
-                # Apply optional source filter as a post-filter mask.
-                allow_idx: Optional[set] = None
-                if filter_files:
-                    allowed = set(filter_files)
-                    allow_idx = {
-                        i for i, m in enumerate(metas)
-                        if (m or {}).get("source") in allowed
-                    }
-
-                # Top-k by BM25 score, dropping zero-score chunks.
-                if allow_idx is not None:
-                    candidate_indices = [i for i in allow_idx if bm25_scores[i] > 0]
-                else:
-                    candidate_indices = [
-                        i for i in range(len(bm25_scores)) if bm25_scores[i] > 0
-                    ]
-                candidate_indices.sort(
-                    key=lambda i: bm25_scores[i], reverse=True
-                )
-                top_indices = candidate_indices[:k]
-
-                for idx in top_indices:
-                    doc = Document(
-                        page_content=texts[idx],
-                        metadata=metas[idx] if idx < len(metas) else {},
-                    )
-                    bm25_results.append((doc, float(bm25_scores[idx])))
         except Exception as e:
-            logger.warning(f"BM25 cached search failed, using vector-only: {e}")
+            logger.warning(
+                f"Hybrid search failed ({e}); returning empty result list"
+            )
+            fused = []
 
-        # --- 3. Reciprocal Rank Fusion ---
-        chunk_scores: Dict[str, Dict[str, Any]] = {}
+        # Wrap (doc, score) tuples in the dict shape downstream
+        # callers read. The score IS the fused RRF score from Qdrant
+        # — we keep both ``rrf`` and ``vector_score`` so existing
+        # call sites that reference either name keep working.
+        result_dicts: List[Dict[str, Any]] = []
+        for doc, score in fused:
+            result_dicts.append({
+                "doc": doc,
+                "rrf": float(score),
+                "vector_score": float(score),
+            })
 
-        for rank, (doc, score) in enumerate(vector_results):
-            chunk_id = doc.metadata.get("chunk_id", doc.page_content[:50])
-            rrf_score = 1.0 / (rrf_k + rank + 1)
-            if chunk_id not in chunk_scores:
-                chunk_scores[chunk_id] = {"doc": doc, "rrf": 0.0, "vector_score": score}
-            chunk_scores[chunk_id]["rrf"] += rrf_score
-
-        for rank, (doc, score) in enumerate(bm25_results):
-            chunk_id = doc.metadata.get("chunk_id", doc.page_content[:50])
-            rrf_score = 1.0 / (rrf_k + rank + 1)
-            if chunk_id not in chunk_scores:
-                chunk_scores[chunk_id] = {"doc": doc, "rrf": 0.0, "vector_score": 0.0}
-            chunk_scores[chunk_id]["rrf"] += rrf_score
-
-        # Sort by fused score and return top-k
-        sorted_results = sorted(
-            chunk_scores.values(), key=lambda x: x["rrf"], reverse=True
-        )[:k]
-
-        # Normalize scores to 0-100 range for display
-        if sorted_results:
-            max_score = sorted_results[0]["rrf"]
-            for r in sorted_results:
+        # Normalize scores to 0-100 range for display in the UI.
+        if result_dicts:
+            max_score = result_dicts[0]["rrf"]
+            for r in result_dicts:
                 r["normalized_score"] = (
                     round((r["rrf"] / max_score) * 100) if max_score > 0 else 0
                 )
 
-        return sorted_results
+        return result_dicts
 
     def _get_reranker_max_tokens(self) -> int:
         """Return the loaded reranker model's *actual* max input

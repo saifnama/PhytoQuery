@@ -33,7 +33,6 @@ langchain-text-splitters==1.1.2
 qdrant-client==1.18.0
 sentence-transformers==5.4.1
 transformers==4.57.1  # Keep in lockstep with zerank-2 + sentence-transformers integration
-rank-bm25==0.2.2
 # Permissive JSON parser used by the structured-output citation pass.
 # Production LLMs (especially smaller models in JSON mode) emit common
 # malformations: trailing commas, code-fenced output, single quotes,

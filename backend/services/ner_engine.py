@@ -24,10 +24,14 @@ from backend.config import (
     NER_OPENROUTER_MODEL,
     NER_GROQ_API_KEY,
     NER_GROQ_MODEL,
+    NER_LLAMACPP_URL,
+    NER_LLAMACPP_API_KEY,
+    NER_LLAMACPP_MODEL,
     NER_CONFIDENCE_THRESHOLD,
     NER_CHUNK_SIZE_WORDS,
     GROQ_URL,
     OPENROUTER_URL,
+    _normalize_openai_compat_url,
     get_ner_provider,
 )
 
@@ -35,10 +39,13 @@ from backend.config import (
 def get_active_provider():
     """Determine which LLM provider to use as the primary for NER.
 
-    Priority: Ollama (local, fast for bulk) > Groq (cloud-fast) > OpenRouter
-    (cloud-diverse). The other configured providers are still available as
-    fall-throughs in ``call_llm``.
+    Priority: llama.cpp/OpenAI-compat (explicit opt-in) > Ollama (local,
+    fast for bulk) > Groq (cloud-fast) > OpenRouter (cloud-diverse).
+    Other configured providers remain available as fall-throughs in
+    ``call_llm``.
     """
+    if NER_LLAMACPP_URL:
+        return "llamacpp"
     if NER_OLLAMA_URL:
         return "ollama"
     if NER_GROQ_API_KEY:
@@ -46,7 +53,8 @@ def get_active_provider():
     if NER_OPENROUTER_API_KEY:
         return "openrouter"
     raise ValueError(
-        "No LLM provider configured. Set NER_OLLAMA_URL, NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
+        "No LLM provider configured. Set NER_LLAMACPP_URL, NER_OLLAMA_URL, "
+        "NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
     )
 
 
@@ -697,6 +705,24 @@ class NERService:
         else:
             user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
 
+        # Try self-hosted OpenAI-compatible (llama.cpp / vLLM / LM
+        # Studio) first when configured — same wire format as
+        # Groq/OpenRouter so we delegate to ``_call_openai_compatible``
+        # with the normalized endpoint URL.
+        if provider == "llamacpp" and NER_LLAMACPP_URL:
+            content = await self._call_openai_compatible(
+                provider_name="llamacpp",
+                url=_normalize_openai_compat_url(NER_LLAMACPP_URL),
+                api_key=NER_LLAMACPP_API_KEY or "",
+                model=NER_LLAMACPP_MODEL,
+                text_chunk=text_chunk,
+                error_hint=error_hint,
+            )
+            if content:
+                return content
+            # If llama.cpp didn't return content (server down, model
+            # crashed, etc.), fall through to the cloud fallbacks.
+
         # Try Ollama first (primary)
         if provider == "ollama":
             payload = {
@@ -932,7 +958,13 @@ class NERService:
         else:
             user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
 
-        headers = {"Authorization": f"Bearer {api_key}"}
+        # Only include Authorization when an API key is set. Self-
+        # hosted servers (llama.cpp, vLLM) usually run without one —
+        # ``Bearer `` with empty token is malformed and some HTTP
+        # stacks reject it before reaching the server.
+        headers: Dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         payload = {
             "model": model,
             "messages": [

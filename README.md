@@ -24,7 +24,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 - **Structured-output citations** — schema-enforced JSON-mode follow-up call selects which retrieved chunks were used; the cross-encoder reranker then attaches `[cN]` markers to the sentence each chunk best supports. Replaces inline marker prompting (which silently dropped on list-style answers) with a guarantee: the schema rejects empty citation lists, so an answer can never be uncited.
 - **Click-to-highlight**: clicking a citation chip opens the source paper at the cited passage, with the exact sentence flash-highlighted via byte-precise `body_start`/`body_end` offsets recorded at index time
 - **Dual parser**: PyMuPDF (fast) or Docling (detailed, structure-preserving)
-- **Hybrid retrieval**: dense vectors (Qdrant HNSW) + BM25 keyword matching with Reciprocal Rank Fusion. The BM25 sparse index is built once after each upload and persisted to disk — query-time BM25 is sub-millisecond regardless of corpus size (1000+ PDFs)
+- **Hybrid retrieval**: dense vectors (Qdrant HNSW) + BM25 keyword matching with server-side Reciprocal Rank Fusion. Sparse vectors stored alongside dense vectors per point via Qdrant's native named-vectors schema (`Modifier.IDF` for BM25 scoring); a single `query_points(prefetch=[dense, sparse], FusionQuery(RRF))` call runs the hybrid merge in Qdrant rather than Python. Tokenization uses FastEmbed's `Qdrant/bm25` (stemming + stop-word removal + IDF weighting) — measurable retrieval quality improvement on scientific text vs naive whitespace split.
 - **Parallel ingestion**: per-user upload jobs parse PDFs concurrently via `ThreadPoolExecutor` (PyMuPDF and Docling both release the GIL); per-file `try/except` so one bad PDF can't kill a 1000-PDF batch; flushes to Qdrant every 50 files so peak RAM is bounded and partial progress survives a crash
 - **Chunked upload**: the frontend slices large multi-file uploads into 20-PDF batches so reverse-proxy body limits (nginx, Cloudflare 100 MB) don't trip on multi-GB selections
 - **Instruction-Aware Architecture**: Custom domain prompts for both embedding (Qwen3) and reranking (zerank-2)
@@ -55,7 +55,7 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | NLP | spaCy PhraseMatcher (dictionary-backed) |
 | Embeddings | Qwen3-Embedding-4B (primary), BAAI/bge-m3 (fallback) |
 | Reranker | zeroentropy/zerank-2 (CrossEncoder) |
-| RAG | LangChain, Qdrant (embedded), sentence-transformers, rank-bm25, json-repair |
+| RAG | LangChain, Qdrant (embedded, native hybrid), sentence-transformers, FastEmbed (Qdrant/bm25 sparse), json-repair |
 | PDF Parsing | Docling (detailed), PyMuPDF/fitz (fast) |
 | Graph | vis-network |
 | Sanitization | nh3 (server), DOMPurify (client) |
@@ -101,7 +101,7 @@ PhytoQuery/
 │   └── dist/        # Built output
 ├── data/             # Runtime data
 │   ├── cache/       # Paper & NER cache
-│   ├── qdrant/      # Vector store + per-user parent JSON + per-user BM25 cache (.pkl)
+│   ├── qdrant/      # Embedded Qdrant storage: per-user collections with named dense + sparse vectors, plus per-user parent JSON
 │   └── uploads/     # Uploaded PDFs (per-user folders)
 └── README.md
 ```
@@ -131,7 +131,7 @@ python -m spacy download en_core_web_sm
 
 # Run backend
 
-# Option 1: Via uvicorn (recommended)
+# Option 1: Via uvicorn (recommended for dev)
 # From PhytoQuery directory:
 cd C:\Users\saif\saifnama_lab\PhytoQuery
 uvicorn backend.app:app --host 0.0.0.0 --port 8000
@@ -140,6 +140,44 @@ uvicorn backend.app:app --host 0.0.0.0 --port 8000
 cd C:\Users\saif\saifnama_lab\PhytoQuery
 python -m backend.app --host 0.0.0.0 --port 8000
 ```
+
+#### Multi-worker production deployment (Linux/macOS only)
+
+`uvicorn --workers N` lets a single FastAPI instance handle requests in
+parallel across N OS processes. It's a real throughput win for
+concurrent users — but it has prerequisites that the default setup
+doesn't meet:
+
+**`--workers N > 1` requires Qdrant server mode.** The default
+embedded Qdrant (`QdrantClient(path="data/qdrant/")`) holds an
+exclusive file lock on its storage directory. Only one worker can
+hold that lock — the rest fail with "database is locked" within
+seconds of the first request. You must run Qdrant as a separate
+process and point the backend at it via `RAG_QDRANT_URL`. See
+[docs/qdrant-server-deployment.md](docs/qdrant-server-deployment.md)
+for the wget + systemd setup.
+
+**Memory scales linearly with worker count.** Each worker loads its
+own copy of the embedding model and FastEmbed BM25 tokenizer. With
+the small `bge-small-en-v1.5` (~130MB) the cost is modest; with
+`Qwen3-Embedding-4B` (~8GB) it's `8GB × N` workers — plan accordingly
+on the A100.
+
+**Windows is not supported by `--workers`.** Uvicorn's multi-process
+mode targets Linux/macOS only (`fork`-based). On Windows, stay with
+the single-worker default; use a reverse proxy + multiple `uvicorn`
+instances behind it if you need horizontal scaling.
+
+Once those three boxes are checked, the deployment line is:
+
+```bash
+# After starting a Qdrant server and setting RAG_QDRANT_URL in .env:
+uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+Each worker is a separate process with its own PID, so independent CPU
+cores can each serve a request without blocking; if one worker dies the
+process manager restarts it while the others keep serving traffic.
 
 ### 2. Frontend Setup
 
@@ -313,9 +351,10 @@ three things to recover without manual intervention:
   collection on first access (`_ensure_qdrant_collection` is idempotent),
   and re-runs `add_documents`. The user sees the upload finish
   successfully on a transparent retry.
-- The BM25 sparse cache is invalidated alongside any collection
-  reset/delete so a stale pickle can never serve search results from a
-  dropped corpus.
+- Sparse vectors live alongside dense vectors on each point, so any
+  collection reset/delete removes both atomically — no separate cache
+  to invalidate and no possibility of stale BM25 serving results from
+  a dropped corpus.
 
 **Why this is simpler than the old Chroma path.** Earlier versions used
 embedded ChromaDB (SQLite under the hood), which had a class of
@@ -335,9 +374,9 @@ Remove-Item -Recurse -Force data\qdrant
 # Restart the backend; the directory is recreated cleanly on next upload.
 ```
 
-Only vector indexes, parent stores, and BM25 caches are dropped —
-uploaded PDFs in `data/uploads/` and the paper cache in `data/cache/`
-are untouched.
+Only Qdrant collection storage (dense + sparse vectors) and parent
+stores are dropped — uploaded PDFs in `data/uploads/` and the paper
+cache in `data/cache/` are untouched.
 
 ### `Reranking failed: cannot reshape tensor of 0 elements into shape [...]`
 

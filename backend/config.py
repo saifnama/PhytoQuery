@@ -83,6 +83,22 @@ RAG_GROQ_MODEL = env("RAG_GROQ_MODEL", "llama-3.3-70b-versatile")
 RAG_OLLAMA_URL = env("RAG_OLLAMA_URL")
 RAG_OLLAMA_MODEL = env("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
+# Self-hosted OpenAI-compatible LLM (llama.cpp ``server``, vLLM,
+# LM Studio, LocalAI, Text Generation WebUI). Set the URL to the
+# server's base, with or without the ``/v1/chat/completions`` suffix
+# — we normalize it. ``RAG_LLAMACPP_API_KEY`` is optional (only set
+# if you started the server with an ``--api-key`` flag).
+#
+# Example (llama.cpp on Colab + Cloudflare tunnel):
+#   RAG_LLAMACPP_URL=https://your-name.trycloudflare.com
+#   RAG_LLAMACPP_MODEL=qwen2.5-7b-instruct
+#
+# Higher priority than Groq/OpenRouter/Ollama in the provider
+# chain — setting this URL is an explicit opt-in, so it wins.
+RAG_LLAMACPP_URL = env("RAG_LLAMACPP_URL")
+RAG_LLAMACPP_API_KEY = env("RAG_LLAMACPP_API_KEY")
+RAG_LLAMACPP_MODEL = env("RAG_LLAMACPP_MODEL", "default")
+
 # Optional remote Qdrant server (the Rust binary at qdrant/qdrant).
 # Leave empty (the default) to keep using embedded local-mode Qdrant
 # at ``data/qdrant/`` — zero deployment dependency, works on every
@@ -116,6 +132,13 @@ NER_OPENROUTER_API_KEY = env("NER_OPENROUTER_API_KEY")
 NER_OPENROUTER_MODEL = env("NER_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
 NER_GROQ_API_KEY = env("NER_GROQ_API_KEY")
 NER_GROQ_MODEL = env("NER_GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# Self-hosted OpenAI-compatible LLM for NER (mirrors RAG side —
+# llama.cpp ``server``, vLLM, etc.). Optional ``--api-key`` flag.
+# See the RAG_LLAMACPP_* block above for a full description.
+NER_LLAMACPP_URL = env("NER_LLAMACPP_URL")
+NER_LLAMACPP_API_KEY = env("NER_LLAMACPP_API_KEY")
+NER_LLAMACPP_MODEL = env("NER_LLAMACPP_MODEL", "default")
 NER_CONFIDENCE_THRESHOLD = env_float("NER_CONFIDENCE_THRESHOLD", 0.7)
 NER_CHUNK_SIZE_WORDS = env_int("NER_CHUNK_SIZE_WORDS", 250)
 NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
@@ -129,18 +152,47 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
+def _normalize_openai_compat_url(url: str) -> str:
+    """Accept a base URL pointing at an OpenAI-compatible server
+    (llama.cpp ``server``, vLLM, LM Studio, ...) in any of these
+    forms and return the full chat-completions endpoint:
+
+        https://x.trycloudflare.com              → adds /v1/chat/completions
+        https://x.trycloudflare.com/v1           → adds /chat/completions
+        https://x.trycloudflare.com/v1/chat/completions  → unchanged
+
+    Users hand us "the URL of my server" without thinking about
+    paths — this normalizes so they don't have to.
+    """
+    url = url.rstrip("/")
+    if url.endswith("/v1/chat/completions"):
+        return url
+    if url.endswith("/v1"):
+        return url + "/chat/completions"
+    return url + "/v1/chat/completions"
+
+
 def _has_real_key(key: str, sentinels: set) -> bool:
     """True if the key looks valid (non-empty, non-placeholder)."""
     return bool(key) and key not in sentinels
 
 
 def get_rag_provider() -> dict:
-    """RAG provider priority: Groq > OpenRouter > Ollama.
+    """RAG provider priority: llama.cpp/OpenAI-compat > Groq > OpenRouter > Ollama.
 
-    Groq goes first because it's the fastest cloud option (free tier, sub-second
-    latency on Llama 3.3 70b). OpenRouter is the diverse-model fallback;
-    Ollama is the local fallback.
+    Self-hosted OpenAI-compatible (llama.cpp, vLLM, LM Studio, ...)
+    goes first because setting ``RAG_LLAMACPP_URL`` is an explicit
+    opt-in — if the user pointed at their server, that's what they
+    want to use. Groq follows as the fastest cloud option, then
+    OpenRouter (diverse models), then Ollama (local-mode fallback).
     """
+    if RAG_LLAMACPP_URL:
+        return {
+            "provider": "llamacpp",
+            "url": _normalize_openai_compat_url(RAG_LLAMACPP_URL),
+            "model": RAG_LLAMACPP_MODEL,
+            "api_key": RAG_LLAMACPP_API_KEY or "",
+        }
     if _has_real_key(RAG_GROQ_API_KEY, {"gsk_", "gsk"}):
         return {
             "provider": "groq",
@@ -170,12 +222,20 @@ def get_rag_provider() -> dict:
 
 
 def get_ner_provider() -> dict:
-    """NER provider priority: Ollama > Groq > OpenRouter.
+    """NER provider priority: llama.cpp/OpenAI-compat > Ollama > Groq > OpenRouter.
 
-    Local Ollama wins for NER because the workload is bulk per-paper extraction
-    where local-GPU latency beats cloud round-trips. Groq is the cloud-fast
-    fallback, OpenRouter the diverse-model fallback.
+    Self-hosted OpenAI-compatible (llama.cpp, vLLM, ...) goes first
+    when explicitly configured — bulk NER on a controlled local
+    model is typically faster and cheaper than cloud round-trips.
+    Local Ollama follows, then Groq/OpenRouter as cloud fallbacks.
     """
+    if NER_LLAMACPP_URL:
+        return {
+            "provider": "llamacpp",
+            "url": _normalize_openai_compat_url(NER_LLAMACPP_URL),
+            "model": NER_LLAMACPP_MODEL,
+            "api_key": NER_LLAMACPP_API_KEY or "",
+        }
     if NER_OLLAMA_URL:
         return {
             "provider": "ollama",

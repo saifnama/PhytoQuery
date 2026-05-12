@@ -167,6 +167,11 @@ def make_service(rag_engine):
     service.embeddings = SimpleNamespace(
         begin_timing_session=lambda: None,
         consume_timing_session=lambda: {"calls": 0, "total_ms": 0.0, "texts": 0},
+        # ``_get_collection_suffix`` now calls ``_ensure_model_loaded``
+        # before reading model_name/model_dim, so the test stub needs
+        # a no-op for it. (Real ``PhytoQueryEmbeddings`` lazy-loads
+        # on first call; fakes have nothing to load.)
+        _ensure_model_loaded=lambda: None,
         model_name="stub-model",
         model_dim=8,
     )
