@@ -58,12 +58,6 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
         )
         papers_by_year = [{"name": str(row[0]), "value": row[1]} for row in papers_by_year_result.all()]
 
-        oa_result = await db.execute(
-            select(Paper.is_open_access, func.count(Paper.id).label("count"))
-            .group_by(Paper.is_open_access)
-        )
-        oa_distribution = [{"name": "Open Access" if row[0] else "Restricted", "value": row[1]} for row in oa_result.all()]
-
         geo_result = await db.execute(
             select(
                 func.json_extract(PaperEntity.metadata_json, '$.country').label("country"),
@@ -86,7 +80,6 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
                 "papers_by_journal": papers_by_journal,
                 "entity_distribution": entity_distribution,
                 "papers_by_year": papers_by_year,
-                "oa_distribution": oa_distribution,
                 "geo_distribution": geo_distribution
             }
         }

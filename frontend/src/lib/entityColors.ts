@@ -1,7 +1,7 @@
 /**
  * Central entity color map.
  * Mirrors CSS --entity-*-rgb variables from index.css.
- * Used by KnowledgeGraph, ForceGraph3D, and SunburstChart.
+ * Used by KnowledgeGraph and ForceGraph3D.
  */
 
 export interface EntityColorEntry {

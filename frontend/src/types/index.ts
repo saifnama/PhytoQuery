@@ -207,9 +207,3 @@ export interface Graph3DData {
   nodes: GraphNode[];
   links: GraphLink[];
 }
-
-export interface SunburstNode {
-  name: string;
-  value?: number;
-  children?: SunburstNode[];
-}

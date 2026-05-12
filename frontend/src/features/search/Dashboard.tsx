@@ -26,7 +26,6 @@ interface DashboardMetrics {
     papers_by_journal: { name: string; value: number }[];
     entity_distribution: { name: string; value: number }[];
     papers_by_year: { name: string; value: number }[];
-    oa_distribution: { name: string; value: number }[];
     geo_distribution: { name: string; value: number }[];
   };
 }
@@ -179,26 +178,6 @@ const Dashboard: React.FC = () => {
     ],
   };
 
-  const oaOption: EChartsOption = {
-    tooltip: { trigger: 'item' },
-    legend: { show: false },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '65%'],
-        center: ['50%', '50%'],
-        padAngle: 5,
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-        label: { show: false },
-        data: metrics.charts.oa_distribution.map((d) => ({
-          name: d.name,
-          value: d.value,
-          itemStyle: { color: d.name === 'Open Access' ? '#10b981' : '#f43f5e' },
-        })),
-      },
-    ],
-  };
-
   const timelineOption: EChartsOption = {
     tooltip: { trigger: 'axis' },
     grid: { left: 50, right: 20, top: 10, bottom: 30 },
@@ -330,32 +309,12 @@ const Dashboard: React.FC = () => {
           </ChartCard>
         </div>
 
-        {/* Row 2: Open Access + Publication Timeline */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <ChartCard title="Open Access">
-            <div className="h-64 w-full">
-              <ReactECharts option={oaOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-            </div>
-            <div className="flex justify-center gap-6 mt-4">
-              <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                <div className="w-3 h-3 rounded-full bg-emerald-500" />
-                Open Access
-              </div>
-              <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                <div className="w-3 h-3 rounded-full bg-red-500" />
-                Restricted
-              </div>
-            </div>
-          </ChartCard>
-
-          <div className="lg:col-span-2">
-            <ChartCard title="Publication Timeline">
-              <div className="h-64 w-full">
-                <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-              </div>
-            </ChartCard>
+        {/* Row 2: Publication Timeline (full-width) */}
+        <ChartCard title="Publication Timeline">
+          <div className="h-64 w-full">
+            <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
           </div>
-        </div>
+        </ChartCard>
 
         {/* Row 3: Geographic Heatmap */}
         <div className="mt-6">
