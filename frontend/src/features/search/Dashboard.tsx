@@ -14,6 +14,7 @@ import { ENTITY_COLORS } from '../../lib/entityColors';
 import { PHYTOQUERY_THEME_NAME } from '../../lib/echartsTheme';
 import { useTheme } from '../../lib/theme';
 import JournalDistributionWidget from './JournalDistributionWidget';
+import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,14 +71,34 @@ function StatCard({
   label,
   value,
   footer,
+  onClick,
 }: {
   accent: StatAccent;
   label: string;
   value: number;
   footer: React.ReactNode;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick;
   return (
-    <div className="stat-card" data-accent={accent}>
+    <div
+      className="stat-card"
+      data-accent={accent}
+      onClick={onClick}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onClick!();
+              }
+            }
+          : undefined
+      }
+      style={clickable ? { cursor: 'pointer' } : undefined}
+    >
       <div className="stat-label">{label}</div>
       <div className="stat-number">{value.toLocaleString()}</div>
       <div className="stat-divider" />
@@ -256,6 +277,17 @@ const Dashboard: React.FC = () => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const [timelineHover, setTimelineHover] = useState(false);
+
+  // ── DB Explorer drawer state ───────────────────────────────────────────────
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('papers');
+  const [drawerFilter, setDrawerFilter] = useState<DrawerFilter | null>(null);
+
+  const openDrawer = (opts?: { tab?: DrawerTab; filter?: DrawerFilter | null }) => {
+    if (opts?.tab) setDrawerTab(opts.tab);
+    setDrawerFilter(opts?.filter ?? null);
+    setDrawerOpen(true);
+  };
 
   // Fetch world map geoJSON once (served from /public — no CDN at runtime)
   useEffect(() => {
@@ -579,6 +611,7 @@ const Dashboard: React.FC = () => {
               'No year data'
             )
           }
+          onClick={() => openDrawer({ tab: 'papers', filter: null })}
         />
         <StatCard
           accent="lavender"
@@ -589,6 +622,7 @@ const Dashboard: React.FC = () => {
               {entitiesPerPaper} entities <span className="stat-accent">·</span> per paper
             </>
           }
+          onClick={() => openDrawer({ tab: 'entities', filter: null })}
         />
         <StatCard
           accent="sage"
@@ -599,6 +633,7 @@ const Dashboard: React.FC = () => {
               1 journal <span className="stat-accent">·</span> {dominantPct}% of corpus
             </>
           }
+          onClick={() => openDrawer({ tab: 'journals', filter: null })}
         />
       </div>
 
@@ -608,6 +643,12 @@ const Dashboard: React.FC = () => {
           <JournalDistributionWidget
             journals={metrics.charts.papers_by_journal}
             totalPapers={metrics.kpis.total_papers}
+            onJournalClick={(name) =>
+              openDrawer({
+                tab: 'journals',
+                filter: { kind: 'journal', label: `Journal: ${name}`, value: name },
+              })
+            }
           />
         </ChartCard>
 
@@ -615,7 +656,22 @@ const Dashboard: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
           <ChartCard title="Entity Distribution">
             <div className="h-80 w-full">
-              <ReactECharts option={entityDistOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
+              <ReactECharts
+                option={entityDistOption}
+                theme={PHYTOQUERY_THEME_NAME}
+                style={{ width: '100%', height: '100%' }}
+                opts={{ renderer: 'canvas' }}
+                onEvents={{
+                  click: (params: any) => {
+                    if (typeof params?.name === 'string') {
+                      openDrawer({
+                        tab: 'entities',
+                        filter: { kind: 'entity', label: `Type: ${params.name}`, value: params.name },
+                      });
+                    }
+                  },
+                }}
+              />
             </div>
           </ChartCard>
 
@@ -637,11 +693,39 @@ const Dashboard: React.FC = () => {
               className="h-[520px] w-full rounded-2xl overflow-hidden"
               style={{ background: '#EDF5F8' }}
             >
-              <ReactECharts option={geoOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
+              <ReactECharts
+                option={geoOption}
+                theme={PHYTOQUERY_THEME_NAME}
+                style={{ width: '100%', height: '100%' }}
+                opts={{ renderer: 'canvas' }}
+                onEvents={{
+                  click: (params: any) => {
+                    // effectScatter dots emit seriesType: 'effectScatter' with a name (country).
+                    // Geo-region clicks (the country fill itself) also pass params.name.
+                    if (typeof params?.name === 'string' && params.name) {
+                      openDrawer({
+                        tab: 'papers',
+                        filter: { kind: 'country', label: `Origin: ${params.name}`, value: params.name },
+                      });
+                    }
+                  },
+                }}
+              />
             </div>
           </ChartCard>
         </div>
       </div>
+
+      <DbExplorerDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        tab={drawerTab}
+        onTabChange={setDrawerTab}
+        filter={drawerFilter}
+        onClearFilter={() => setDrawerFilter(null)}
+        entities={metrics.charts.entity_distribution}
+        journals={metrics.charts.papers_by_journal}
+      />
     </div>
   );
 };

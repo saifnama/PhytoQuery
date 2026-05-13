@@ -22,12 +22,13 @@ interface Props {
   journals: JournalEntry[];   // sorted desc by paper count, dominant first
   totalPapers: number;        // for percentage calc
   height?: number;            // pane height in px (default 260)
+  onJournalClick?: (name: string) => void;  // fires on right-pane bar click
 }
 
 const LEFT_PADDING = 28;
 const PROGRESS_BAR_WIDTH = 280;
 
-const JournalDistributionWidget: React.FC<Props> = ({ journals, totalPapers, height = 260 }) => {
+const JournalDistributionWidget: React.FC<Props> = ({ journals, totalPapers, height = 260, onJournalClick }) => {
   if (!journals.length) {
     return (
       <div
@@ -193,6 +194,11 @@ const JournalDistributionWidget: React.FC<Props> = ({ journals, totalPapers, hei
         style={{ width: '100%', height: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge
+        onEvents={onJournalClick ? {
+          click: (params: any) => {
+            if (typeof params?.name === 'string') onJournalClick(params.name);
+          },
+        } : undefined}
       />
     </div>
   );
