@@ -95,12 +95,163 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
   );
 }
 
+// ─── Country centroid helpers (geo_light_prompt.md spec) ────────────────────
+
+type Lnglat = [number, number];
+
+// Aliases map NER variants to the EXACT canonical names used in /public/world.json
+// (which uses short English names: "Russia", "Turkey", "Iran", "Vietnam", "Korea",
+// "Czech Rep.", "Lao PDR", "Dem. Rep. Korea", "Dem. Rep. Congo").
+const COUNTRY_ALIASES: Record<string, string> = {
+  'usa': 'United States',
+  'u.s.a.': 'United States',
+  'u.s.': 'United States',
+  'us': 'United States',
+  'united states of america': 'United States',
+  'america': 'United States',
+  'uk': 'United Kingdom',
+  'u.k.': 'United Kingdom',
+  'britain': 'United Kingdom',
+  'great britain': 'United Kingdom',
+  'russian federation': 'Russia',
+  'türkiye': 'Turkey',
+  'turkiye': 'Turkey',
+  'iran (islamic republic of)': 'Iran',
+  'syrian arab republic': 'Syria',
+  'viet nam': 'Vietnam',
+  'venezuela (bolivarian republic of)': 'Venezuela',
+  'bolivia (plurinational state of)': 'Bolivia',
+  'united republic of tanzania': 'Tanzania',
+  'republic of moldova': 'Moldova',
+  'north macedonia': 'Macedonia',
+  'south korea': 'Korea',
+  'republic of korea': 'Korea',
+  'north korea': 'Dem. Rep. Korea',
+  "korea, democratic people's republic of": 'Dem. Rep. Korea',
+  'czech republic': 'Czech Rep.',
+  'czechia': 'Czech Rep.',
+  'laos': 'Lao PDR',
+  "lao people's democratic republic": 'Lao PDR',
+  'drc': 'Dem. Rep. Congo',
+  'democratic republic of congo': 'Dem. Rep. Congo',
+  'democratic republic of the congo': 'Dem. Rep. Congo',
+  'ivory coast': "Côte d'Ivoire",
+  "cote d'ivoire": "Côte d'Ivoire",
+  'cote d ivoire': "Côte d'Ivoire",
+};
+
+// GeoJSON in the wild is messy — empty rings, NaN coords, GeometryCollection,
+// missing properties. Every helper below treats malformed input as "skip,
+// don't throw" so one bad feature can never poison the centroid map.
+
+function isLnglatPoint(p: unknown): p is [number, number] {
+  return (
+    Array.isArray(p) &&
+    p.length >= 2 &&
+    typeof p[0] === 'number' && Number.isFinite(p[0]) &&
+    typeof p[1] === 'number' && Number.isFinite(p[1])
+  );
+}
+
+function isRing(r: unknown): r is [number, number][] {
+  return Array.isArray(r) && r.length > 0 && r.every(isLnglatPoint);
+}
+
+function ringArea(ring: [number, number][]): number {
+  if (ring.length < 3) return 0;
+  let a = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+  }
+  return Math.abs(a / 2);
+}
+
+function ringBboxCenter(ring: [number, number][]): Lnglat | null {
+  let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < xMin) xMin = x;
+    if (x > xMax) xMax = x;
+    if (y < yMin) yMin = y;
+    if (y > yMax) yMax = y;
+  }
+  if (!Number.isFinite(xMin) || !Number.isFinite(yMin)) return null;
+  const cx = (xMin + xMax) / 2;
+  const cy = (yMin + yMax) / 2;
+  return Number.isFinite(cx) && Number.isFinite(cy) ? [cx, cy] : null;
+}
+
+// Walks any GeoJSON geometry — Polygon, MultiPolygon, or GeometryCollection —
+// and returns every valid outer ring it can find.
+function collectOuterRings(geom: any): [number, number][][] {
+  const rings: [number, number][][] = [];
+  if (!geom || typeof geom !== 'object') return rings;
+  const t = geom.type;
+  if (t === 'Polygon') {
+    const ring = geom.coordinates?.[0];
+    if (isRing(ring)) rings.push(ring);
+  } else if (t === 'MultiPolygon') {
+    for (const poly of geom.coordinates ?? []) {
+      const ring = poly?.[0];
+      if (isRing(ring)) rings.push(ring);
+    }
+  } else if (t === 'GeometryCollection') {
+    for (const sub of geom.geometries ?? []) {
+      rings.push(...collectOuterRings(sub));
+    }
+  }
+  return rings;
+}
+
+function featureCentroid(feature: any): Lnglat | null {
+  const rings = collectOuterRings(feature?.geometry);
+  if (rings.length === 0) return null;
+  // Largest polygon (by area) wins — keeps centroids on the main landmass
+  // for multi-island countries instead of drifting offshore.
+  let largest = rings[0];
+  let maxArea = ringArea(largest);
+  for (let i = 1; i < rings.length; i++) {
+    const a = ringArea(rings[i]);
+    if (a > maxArea) { maxArea = a; largest = rings[i]; }
+  }
+  return ringBboxCenter(largest);
+}
+
+function buildCentroidMap(world: any): Map<string, Lnglat> {
+  const map = new Map<string, Lnglat>();
+  const features = Array.isArray(world?.features) ? world.features : [];
+  let failed = 0;
+  for (const f of features) {
+    try {
+      const name = f?.properties?.name;
+      if (typeof name !== 'string' || !name.trim()) continue;
+      const c = featureCentroid(f);
+      if (c) map.set(name.toLowerCase(), c);
+    } catch (err) {
+      failed += 1;
+      // One bad feature must not break the rest of the map.
+    }
+  }
+  if (failed > 0) {
+    console.warn(`[Dashboard] centroid map skipped ${failed} malformed feature(s)`);
+  }
+  return map;
+}
+
+function lookupCentroid(rawName: string, centroids: Map<string, Lnglat>): Lnglat | null {
+  const key = rawName.trim().toLowerCase();
+  const direct = centroids.get(key);
+  if (direct) return direct;
+  const aliased = COUNTRY_ALIASES[key];
+  return aliased ? centroids.get(aliased.toLowerCase()) ?? null : null;
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 const Dashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [worldGeo, setWorldGeo] = useState<unknown>(null);
+  const [centroids, setCentroids] = useState<Map<string, Lnglat>>(() => new Map());
   const navigate = useNavigate();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -112,6 +263,7 @@ const Dashboard: React.FC = () => {
       .then((r) => r.json())
       .then((data) => {
         (echarts as any).registerMap('world', data);
+        setCentroids(buildCentroidMap(data));
         setWorldGeo(data);
       })
       .catch(() => {
@@ -332,34 +484,65 @@ const Dashboard: React.FC = () => {
     ],
   };
 
+  // ── Plant Origin Heatmap (geo_light_prompt.md — Ghost Map effectScatter) ──
+  const geoPoints = metrics.charts.geo_distribution
+    .map((d) => {
+      const c = lookupCentroid(d.name, centroids);
+      if (!c) return null;
+      return { name: d.name, value: [c[0], c[1], d.value] as [number, number, number] };
+    })
+    .filter((p): p is { name: string; value: [number, number, number] } => p !== null);
+
+  const geoMax = geoPoints.reduce((m, p) => Math.max(m, p.value[2]), 1);
+
   const geoOption: EChartsOption = {
+    backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
-      formatter: (params: any) =>
-        params.name
-          ? `<b>${params.name}</b><br/><span style="color:#64748b">Papers:</span> ${params.value ?? 0}`
-          : '',
+      backgroundColor: 'rgba(255,255,255,0.97)',
+      borderColor: '#E2E8F0',
+      borderWidth: 1,
+      extraCssText:
+        'border-radius:8px;padding:8px 12px;font-family:Inter,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.08)',
+      formatter: (p: any) => {
+        const v = Array.isArray(p.value) ? p.value[2] : p.value;
+        return `<b style="color:#0E7490;font-size:11px">${p.name}</b><br/><span style="color:#8A95B0;font-size:10px">${v} papers</span>`;
+      },
     },
     geo: {
       map: 'world',
       roam: true,
-      zoom: 1.2,
       itemStyle: {
-        areaColor: '#F5F7FA',
-        borderColor: '#E2E8F0',
-        borderWidth: 0.5,
+        areaColor: '#FFFFFF',
+        borderColor: '#D8E8EE',
+        borderWidth: 0.6,
       },
       emphasis: {
-        itemStyle: { areaColor: '#3b82f6' },
+        itemStyle: {
+          areaColor: '#EBF8FB',
+          borderColor: '#9DE4EF',
+          borderWidth: 0.8,
+        },
         label: { show: false },
       },
     },
     series: [
       {
-        type: 'map',
-        map: 'world',
-        geoIndex: 0,
-        data: metrics.charts.geo_distribution.map((d) => ({ name: d.name, value: d.value })),
+        type: 'effectScatter',
+        coordinateSystem: 'geo',
+        data: geoPoints,
+        encode: { value: 2 },
+        symbolSize: (d: number[]) => Math.max(5, Math.sqrt(d[2] / geoMax) * 33),
+        rippleEffect: { brushType: 'stroke', scale: 3.3, period: 3.3 },
+        itemStyle: { color: '#06B6D4', opacity: 0.92 },
+        emphasis: {
+          itemStyle: {
+            opacity: 1,
+            shadowBlur: 14,
+            shadowColor: 'rgba(6,182,212,0.35)',
+          },
+        },
+        label: { show: false },
       },
     ],
   };
@@ -368,8 +551,7 @@ const Dashboard: React.FC = () => {
     <div className="w-full max-w-6xl mx-auto px-4 py-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 title-font tracking-tight">Database Insights</h2>
-          <p className="text-sm text-slate-500 mt-1">Real-time metrics from the gold-standard entity corpus</p>
+          <h2 className="text-2xl font-bold text-slate-900 title-font tracking-tight">Database metrics</h2>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -448,21 +630,13 @@ const Dashboard: React.FC = () => {
           </ChartCard>
         </div>
 
-        {/* Row 3: Geographic Heatmap */}
+        {/* Row 3: Geographic Heatmap — Ghost Map (geo_light_prompt.md) */}
         <div className="mt-6">
-          <ChartCard title="Plant Origin Heatmap">
-            <div className="flex items-center justify-between mb-4">
-              <p className="text-xs text-slate-500">Geographic distribution of bioactive species collection sites</p>
-              <div className="flex gap-4">
-                {metrics.charts.geo_distribution.slice(0, 3).map((item) => (
-                  <div key={item.name} className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-blue-600" />
-                    <span className="text-xs font-bold text-slate-700">{item.name}: {item.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="h-[400px] w-full bg-slate-50/50 rounded-xl overflow-hidden border border-slate-100">
+          <ChartCard title="Geographic distribution of bioactive species collection sites">
+            <div
+              className="h-[520px] w-full rounded-2xl overflow-hidden"
+              style={{ background: '#EDF5F8' }}
+            >
               <ReactECharts option={geoOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
             </div>
           </ChartCard>
