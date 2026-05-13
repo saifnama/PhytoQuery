@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Header from './layout/Header';
 import { ErrorBoundary } from './ui/ErrorBoundary';
@@ -8,9 +8,6 @@ import RagPage from './features/chat/RagPage';
 import PaperPage from './features/reader/PaperPage';
 import { ragApi } from './lib/api';
 import { UploadStatusListener } from './components/UploadStatusListener';
-
-// Lazy-load heavy 3D graph — only loaded when user navigates to /dashboard/3d
-const Dashboard3D = lazy(() => import('./features/search/Dashboard3D').then(m => ({ default: m.default })));
 
 function App() {
   useEffect(() => {
@@ -44,13 +41,6 @@ function App() {
                 <Route path="/mypapers" element={<MyPapersPage />} />
                 <Route path="/chat" element={<RagPage />} />
                 <Route path="/paper/:doi" element={<PaperPage />} />
-                <Route path="/dashboard/3d"
-                  element={
-                    <Suspense fallback={<div className="flex items-center justify-center h-full"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
-                      <Dashboard3D />
-                    </Suspense>
-                  }
-                />
               </Routes>
             </ErrorBoundary>
           </div>

@@ -7,8 +7,6 @@ import React, { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import type { EChartsOption } from 'echarts';
-import { CubeTransparent } from '@phosphor-icons/react';
-import { useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../../lib/api';
 import { ENTITY_COLORS } from '../../lib/entityColors';
 import { PHYTOQUERY_THEME_NAME } from '../../lib/echartsTheme';
@@ -273,7 +271,6 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [worldGeo, setWorldGeo] = useState<unknown>(null);
   const [centroids, setCentroids] = useState<Map<string, Lnglat>>(() => new Map());
-  const navigate = useNavigate();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const [timelineHover, setTimelineHover] = useState(false);
@@ -584,15 +581,6 @@ const Dashboard: React.FC = () => {
       <div className="flex items-center justify-between mb-8">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 title-font tracking-tight">Database metrics</h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigate('/dashboard/3d')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors shadow-sm"
-          >
-            <CubeTransparent weight="duotone" size={18} className="text-purple-500" />
-            3D View
-          </button>
         </div>
       </div>
 
