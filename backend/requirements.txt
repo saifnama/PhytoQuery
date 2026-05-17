@@ -31,6 +31,16 @@ langchain-qdrant==1.1.0
 langchain-experimental==0.4.1
 langchain-text-splitters==1.1.2
 qdrant-client==1.18.0
+# Sparse BM25 encoder for hybrid retrieval. Loaded via
+# langchain_qdrant.FastEmbedSparse(model_name="Qdrant/bm25") at first
+# query — produces sparse vectors stored alongside dense vectors in
+# the per-user collection. langchain-qdrant 1.1.0 only ships fastembed
+# as an *extras* dependency (`langchain-qdrant[fastembed]`), so a plain
+# `langchain-qdrant==1.1.0` install does NOT pull it in. Declaring it
+# explicitly here keeps hybrid retrieval working on a clean
+# `pip install -r requirements.txt` from any machine. Version range
+# allowed by langchain-qdrant: <1.0.0, >=0.3.3.
+fastembed==0.8.0
 sentence-transformers==5.4.1
 transformers==4.57.1  # Keep in lockstep with zerank-2 + sentence-transformers integration
 # Permissive JSON parser used by the structured-output citation pass.
