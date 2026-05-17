@@ -42,7 +42,7 @@ const LABEL_NAMES: Record<string, string> = {
 const getEntityAccentVar = (label: string) => `--entity-${label.toLowerCase().replace(/_/g, '-')}`;
 const getEntityAccentColor = (label: string) => `var(${getEntityAccentVar(label)})`;
 
-const MyPapersPage = () => {
+const AnalysePage = () => {
   const [papers, setPapers] = useState<UploadedPaper[]>([]);
   const [selectedPaper, setSelectedPaper] = useState<UploadedPaper | null>(null);
   const [viewerPaper, setViewerPaper] = useState<UploadedPaper | null>(null);
@@ -372,7 +372,7 @@ const MyPapersPage = () => {
         <div className="p-3 border-b border-slate-100">
           <h2 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
             <FlowerLotus size={18} className="text-pink-600" />
-            My Papers
+            Analyse
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">Upload PDFs · Extract entities</p>
         </div>
@@ -762,4 +762,4 @@ const MyPapersPage = () => {
   );
 };
 
-export default MyPapersPage;
+export default AnalysePage;

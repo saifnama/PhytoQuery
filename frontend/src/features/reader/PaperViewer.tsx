@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { ChartBar, ChatDots, Download, PencilSimple, Table } from '@phosphor-icons/react';
+import { ListMagnifyingGlass, Chats, Download, PencilSimple, Table } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -250,12 +250,12 @@ interface PaperViewerProps {
   canUsePdfActions?: boolean;
   isDownloadingPdf?: boolean;
   isUploadingToRag?: boolean;
-  isAddingToMyPapers?: boolean;
+  isAddingToAnalyse?: boolean;
   pdfActionError?: string | null;
-  myPapersActionError?: string | null;
+  analyseActionError?: string | null;
   onDownloadPdf?: () => void;
   onSendPdfToRag?: () => void;
-  onAddToMyPapers?: () => void;
+  onAddToAnalyse?: () => void;
   onExtract?: () => void;
 }
 
@@ -295,16 +295,16 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   canUsePdfActions = false,
   isDownloadingPdf = false,
   isUploadingToRag = false,
-  isAddingToMyPapers = false,
+  isAddingToAnalyse = false,
   pdfActionError = null,
-  myPapersActionError = null,
+  analyseActionError = null,
   onDownloadPdf,
   onSendPdfToRag,
-  onAddToMyPapers,
+  onAddToAnalyse,
   onExtract,
 }) => {
   const identifierValue = paperIdentifier?.value || 'paper';
-  const pdfToolbarError = myPapersActionError || pdfActionError;
+  const pdfToolbarError = analyseActionError || pdfActionError;
 
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
@@ -1245,41 +1245,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 <div className="mt-4 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={onAddToMyPapers}
-                    disabled={isAddingToMyPapers}
-                    title="Add to My Papers"
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
-                      isAddingToMyPapers ? 'cursor-wait opacity-60' : ''
-                    }`}
-                  >
-                    {isAddingToMyPapers ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <ChartBar size={18} weight="bold" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={onSendPdfToRag}
-                    disabled={isUploadingToRag}
-                    title="Upload to RAG"
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
-                      isUploadingToRag ? 'cursor-wait opacity-60' : ''
-                    }`}
-                  >
-                    {isUploadingToRag ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <ChatDots size={18} weight="bold" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={onDownloadPdf}
                     disabled={isDownloadingPdf}
-                    title="Download PDF"
+                    title="Download"
                     className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
                       isDownloadingPdf ? 'cursor-wait opacity-60' : ''
                     }`}
@@ -1288,6 +1256,38 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                       <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
                     ) : (
                       <Download size={18} weight="bold" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onAddToAnalyse}
+                    disabled={isAddingToAnalyse}
+                    title="Analyse"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
+                      isAddingToAnalyse ? 'cursor-wait opacity-60' : ''
+                    }`}
+                  >
+                    {isAddingToAnalyse ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                    ) : (
+                      <ListMagnifyingGlass size={18} weight="bold" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onSendPdfToRag}
+                    disabled={isUploadingToRag}
+                    title="Chat"
+                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
+                      isUploadingToRag ? 'cursor-wait opacity-60' : ''
+                    }`}
+                  >
+                    {isUploadingToRag ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                    ) : (
+                      <Chats size={18} weight="bold" />
                     )}
                   </button>
                 </div>

@@ -44,7 +44,7 @@ export function UploadStatusListener() {
         { description: 'Ready to query in chat.' },
       );
       // Tell the indexed-files cache it's stale so any active
-      // observer (RagPage, MyPapers) refetches and shows the new
+      // observer (RagPage, AnalysePage) refetches and shows the new
       // chunk counts.
       void queryClient.invalidateQueries({ queryKey: indexedFilesKey });
       // Stop polling. The terminal data stays in the upload-status

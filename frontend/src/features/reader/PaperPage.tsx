@@ -24,8 +24,8 @@ const PaperPage: React.FC = () => {
   const [pdfActionError, setPdfActionError] = useState<string | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isUploadingToRag, setIsUploadingToRag] = useState(false);
-  const [isAddingToMyPapers, setIsAddingToMyPapers] = useState(false);
-  const [myPapersActionError, setMyPapersActionError] = useState<string | null>(null);
+  const [isAddingToAnalyse, setIsAddingToAnalyse] = useState(false);
+  const [analyseActionError, setAnalyseActionError] = useState<string | null>(null);
 
   const isExplicitDoi = (value: string) => {
     const trimmed = value.trim();
@@ -286,10 +286,10 @@ const PaperPage: React.FC = () => {
     }
   };
 
-  const handleAddToMyPapers = async () => {
-    if (!pdfIdentifier || isAddingToMyPapers) return;
-    setMyPapersActionError(null);
-    setIsAddingToMyPapers(true);
+  const handleAddToAnalyse = async () => {
+    if (!pdfIdentifier || isAddingToAnalyse) return;
+    setAnalyseActionError(null);
+    setIsAddingToAnalyse(true);
 
     try {
       const { blob, filename } = paperData?.pdfUrl
@@ -309,12 +309,12 @@ const PaperPage: React.FC = () => {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to process paper for My Papers');
+        throw new Error(errData.detail || 'Failed to save paper');
       }
 
       const data = await res.json();
 
-      // Save to localStorage queue so MyPapersPage can pick it up
+      // Save to localStorage queue so AnalysePage can pick it up
       const queueKey = 'phytoquery_mypapers_queue';
       const existing = JSON.parse(localStorage.getItem(queueKey) || '[]');
       const paperEntry = {
@@ -328,10 +328,10 @@ const PaperPage: React.FC = () => {
       };
       localStorage.setItem(queueKey, JSON.stringify([paperEntry, ...existing]));
     } catch (err: any) {
-      console.error('Add to My Papers failed:', err);
-      setMyPapersActionError(err?.message || 'Failed to add paper to My Papers');
+      console.error('Save paper failed:', err);
+      setAnalyseActionError(err?.message || 'Failed to save paper');
     } finally {
-      setIsAddingToMyPapers(false);
+      setIsAddingToAnalyse(false);
     }
   };
 
@@ -401,12 +401,12 @@ const PaperPage: React.FC = () => {
       canUsePdfActions={canUsePdfActions}
       isDownloadingPdf={isDownloadingPdf}
       isUploadingToRag={isUploadingToRag}
-      isAddingToMyPapers={isAddingToMyPapers}
+      isAddingToAnalyse={isAddingToAnalyse}
       pdfActionError={pdfActionError}
-      myPapersActionError={myPapersActionError}
+      analyseActionError={analyseActionError}
       onDownloadPdf={handleDownloadPdf}
       onSendPdfToRag={handleSendPdfToRag}
-      onAddToMyPapers={handleAddToMyPapers}
+      onAddToAnalyse={handleAddToAnalyse}
       onExtract={handleExtract}
     />
   );

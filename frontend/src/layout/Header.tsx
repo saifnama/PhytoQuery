@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from '@tanstack/react-router';
-import { MagnifyingGlass, Chats, Folder, FlowerTulip } from '@phosphor-icons/react';
+import { Compass, ListMagnifyingGlass, Chats, FlowerTulip } from '@phosphor-icons/react';
 import { useTheme } from '../lib/theme';
 
 interface HeaderProps {
@@ -47,16 +47,16 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
             className={`${NAV_BASE} ${NAV_INACTIVE}`}
             activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
           >
-            <MagnifyingGlass size={18} weight="bold" />
-            <span>Search</span>
+            <Compass size={18} weight="bold" />
+            <span>Explore</span>
           </Link>
           <Link
-            to="/mypapers"
+            to="/analyse"
             className={`${NAV_BASE} ${NAV_INACTIVE}`}
             activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
           >
-            <Folder size={18} weight="bold" />
-            <span>My PDFs</span>
+            <ListMagnifyingGlass size={18} weight="bold" />
+            <span>Analyse</span>
           </Link>
           <Link
             to="/chat"
