@@ -50,14 +50,18 @@ A research paper reader with Named Entity Recognition (NER) for phytochemical an
 | Layer | Technology |
 |-------|------------|
 | Backend | FastAPI (Python), uvicorn (dev server) |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS, React Router 7 |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4 |
+| Frontend routing | TanStack Router (file-based routes, typed search params via Zod, scroll restoration, route-level error/404 fallbacks) |
+| Frontend UI | shadcn/ui (Radix primitives + class-variance-authority), Phosphor Icons, `tw-animate-css`, Sonner toasts |
 | Frontend state | Zustand (client UI), TanStack Query (server data + polling cache) |
 | NLP | spaCy PhraseMatcher (dictionary-backed) |
 | Embeddings | Qwen3-Embedding-4B (primary), BAAI/bge-m3 (fallback) |
 | Reranker | zeroentropy/zerank-2 (CrossEncoder) |
 | RAG | LangChain, Qdrant (embedded, native hybrid), sentence-transformers, FastEmbed (Qdrant/bm25 sparse), json-repair |
 | PDF Parsing | Docling (detailed), PyMuPDF/fitz (fast) |
-| Graph | vis-network |
+| Charts | ECharts (dashboard: journal distribution widget, entity doughnut, publication timeline, plant-origin geo heatmap with `effectScatter`) |
+| Graph | vis-network (per-paper knowledge graph, lazy-loaded) |
+| Molecules | smiles-drawer (chemical structure rendering from SMILES strings) |
 | Sanitization | nh3 (server), DOMPurify (client) |
 | Paper Sources | Europe PMC API, OpenAlex API |
 | LLM | Groq / OpenRouter / Ollama (provider-agnostic dispatch) |
