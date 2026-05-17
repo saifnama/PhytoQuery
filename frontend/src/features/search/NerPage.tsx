@@ -1,7 +1,9 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import SearchForm from './SearchForm';
 import { nerApi } from '../../lib/api';
+
+const route = getRouteApi('/');
 
 const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.default })));
 import { formatTextWithFormatting } from '../../utils/sanitize';
@@ -16,18 +18,18 @@ const NerPage: React.FC = () => {
   const [lastQuery, setLastQuery] = useState('');
   const [lastFilters, setLastFilters] = useState<SearchFilters | null>(null);
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const search = route.useSearch();
 
   // Restore search from URL params on mount (back navigation)
   useEffect(() => {
-    const q = searchParams.get('q');
+    const q = search.q;
     if (q && results.length === 0 && !isLoading) {
       const filters: SearchFilters = {
-        open_access: searchParams.get('oa') === '1',
-        has_full_text: searchParams.get('ft') === '1',
-        article_type: searchParams.get('type') || '',
-        sort: searchParams.get('sort') || '',
-        source: searchParams.get('src') || 'europepmc',
+        open_access: search.oa === '1',
+        has_full_text: search.ft === '1',
+        article_type: search.type ?? '',
+        sort: search.sort ?? '',
+        source: search.src ?? 'europepmc',
       };
       doSearch(q, filters, 1);
     }
@@ -53,15 +55,20 @@ const NerPage: React.FC = () => {
       setLastQuery(query);
       setLastFilters(filters);
 
-      // Persist search query in URL for back navigation
-      const params = new URLSearchParams();
-      params.set('q', query);
-      if (filters.open_access) params.set('oa', '1');
-      if (filters.has_full_text) params.set('ft', '1');
-      if (filters.article_type) params.set('type', filters.article_type);
-      if (filters.sort) params.set('sort', filters.sort);
-      if (filters.source && filters.source !== 'europepmc') params.set('src', filters.source);
-      navigate(`/?${params.toString()}`, { replace: true });
+      // Persist search query in URL for back navigation.
+      // TanStack `search` is a typed object; omitted keys disappear from URL.
+      navigate({
+        to: '/',
+        search: {
+          q: query,
+          oa: filters.open_access ? '1' : undefined,
+          ft: filters.has_full_text ? '1' : undefined,
+          type: filters.article_type || undefined,
+          sort: filters.sort || undefined,
+          src: filters.source && filters.source !== 'europepmc' ? filters.source : undefined,
+        },
+        replace: true,
+      });
     } catch (err: any) {
       console.error('Search failed:', err);
       setError(err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Search failed. Please try again.');
@@ -112,7 +119,8 @@ const NerPage: React.FC = () => {
         const m = cleanID.match(/MED\/(\d+)/i);
         if (m) cleanID = m[1];
       }
-      navigate(`/paper/${encodeURIComponent(cleanID)}`);
+      // TanStack params are encoded automatically — don't double-encode.
+      navigate({ to: '/paper/$doi', params: { doi: cleanID } });
       return;
     }
 
@@ -138,13 +146,13 @@ const NerPage: React.FC = () => {
       <SearchForm
         onSearch={handleSearch}
         isLoading={isLoading}
-        defaultQuery={searchParams.get('q') || ''}
+        defaultQuery={search.q ?? ''}
         defaultFilters={{
-          open_access: searchParams.get('oa') === '1',
-          has_full_text: searchParams.get('ft') === '1',
-          article_type: searchParams.get('type') || '',
-          sort: searchParams.get('sort') || '',
-          source: searchParams.get('src') || 'europepmc',
+          open_access: search.oa === '1',
+          has_full_text: search.ft === '1',
+          article_type: search.type ?? '',
+          sort: search.sort ?? '',
+          source: search.src ?? 'europepmc',
         }}
       />
 
@@ -192,9 +200,11 @@ const NerPage: React.FC = () => {
                       if (paperId) {
                         // Always pass source in URL - convert to lowercase
                         const src = (result.source || 'Europe PMC').toLowerCase();
-                        const params = new URLSearchParams();
-                        params.set('src', src);
-                        navigate(`/paper/${encodeURIComponent(paperId)}?${params.toString()}`);
+                        navigate({
+                          to: '/paper/$doi',
+                          params: { doi: paperId },
+                          search: { src },
+                        });
                       }
                     }}
                   className="saas-card p-6 hover:shadow-md transition-shadow cursor-pointer"

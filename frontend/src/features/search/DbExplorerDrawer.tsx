@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X as CloseIcon, Database } from '@phosphor-icons/react';
 import { dbApi } from '../../lib/api';
 import { sanitizeHtml } from '../../utils/sanitize';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const XP_WIDTH_KEY = 'phytoquery-xp-width';
 const MIN_W = 280;
@@ -209,8 +210,17 @@ function PapersList({ papers, error }: { papers: PaperRow[] | null; error: boole
   }
   if (papers === null) {
     return (
-      <div className="p-7 flex justify-center">
-        <div className="w-6 h-6 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+      <div className="px-4 py-2 space-y-3" aria-label="Loading papers">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="space-y-1.5 py-1.5">
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-4/5" />
+            <div className="flex gap-2 pt-0.5">
+              <Skeleton className="h-2 w-24" />
+              <Skeleton className="h-2 w-10" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }

@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { ArrowLeft } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
 import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api';
 import type { PaperData, Entity } from '../../types';
 
+const route = getRouteApi('/paper/$doi');
+
 const PaperPage: React.FC = () => {
-  const { doi } = useParams<{ doi: string }>();
+  const { doi } = route.useParams();
+  const { src } = route.useSearch();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const searchSource = searchParams.get('src') || '';
+  const searchSource = src ?? '';
   const [paperData, setPaperData] = useState<PaperData | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
   const [isExtracted, setIsExtracted] = useState(false);
@@ -361,7 +363,7 @@ const PaperPage: React.FC = () => {
         <div className="text-center p-8 bg-red-50 rounded-xl">
           <p className="text-sm text-red-600 mb-4" dangerouslySetInnerHTML={{ __html: error || 'Paper not found' }} />
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate({ to: '/' })}
             className="text-blue-600 hover:underline flex items-center gap-2 mx-auto"
           >
             <ArrowLeft size={16} /> Back to search

@@ -18,6 +18,7 @@
  */
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useUploadStore } from '../stores/uploadStore';
 import { useUploadJobStatus } from '../hooks/useUploadJobStatus';
 import { indexedFilesKey } from '../hooks/useIndexedFiles';
@@ -38,6 +39,10 @@ export function UploadStatusListener() {
       const count = jobStatus.files.length;
       setStatus(`Indexed ${count} file${count === 1 ? '' : 's'}.`);
       setIsUploading(false);
+      toast.success(
+        `Indexed ${count} paper${count === 1 ? '' : 's'}`,
+        { description: 'Ready to query in chat.' },
+      );
       // Tell the indexed-files cache it's stale so any active
       // observer (RagPage, MyPapers) refetches and shows the new
       // chunk counts.
@@ -47,8 +52,10 @@ export function UploadStatusListener() {
       // re-fetches.
       setCurrentJobId(null);
     } else if (jobStatus.status === 'failed') {
-      setStatus(`Upload failed: ${jobStatus.error || 'Unknown error'}`);
+      const reason = jobStatus.error || 'Unknown error';
+      setStatus(`Upload failed: ${reason}`);
       setIsUploading(false);
+      toast.error('Upload failed', { description: reason });
       setCurrentJobId(null);
     } else if (jobStatus.status === 'processing') {
       // Keep the user informed about which file the background job

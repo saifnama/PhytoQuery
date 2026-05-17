@@ -1,5 +1,5 @@
 import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import { MagnifyingGlass, Chats, Folder, FlowerTulip } from '@phosphor-icons/react';
 import { useTheme } from '../lib/theme';
 
@@ -7,15 +7,16 @@ interface HeaderProps {
   isLoading?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({
-  isLoading = false,
-}) => {
-  const location = useLocation();
-  const navigate = useNavigate();
+// Tailwind utility groups for the nav links. `Link.activeProps.className`
+// is appended when the link's `to` matches the current pathname, so we get
+// type-safe active-state styling without a manual `pathname === '/...'` check.
+const NAV_BASE =
+  'flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all';
+const NAV_INACTIVE = 'text-slate-500 hover:text-slate-700';
+const NAV_ACTIVE = 'bg-white text-blue-600 shadow-sm';
+
+const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   const { theme, toggleTheme } = useTheme();
-  const isSearch = location.pathname === '/';
-  const isMyPapers = location.pathname === '/mypapers';
-  const isChat = location.pathname === '/chat';
 
   return (
     <header className="h-16 flex items-center px-8 bg-white border-b border-slate-100 sticky top-0 z-30 justify-between">
@@ -28,12 +29,9 @@ const Header: React.FC<HeaderProps> = ({
         >
           <FlowerTulip size={32} color="#db1f83" weight={theme === 'dark' ? 'fill' : 'regular'} />
         </button>
-        <button
-          onClick={() => navigate('/')}
-          className="hover:opacity-80 transition-opacity"
-        >
+        <Link to="/" className="hover:opacity-80 transition-opacity">
           <span className="text-xl font-bold text-slate-900 title-font">PhytoQuery</span>
-        </button>
+        </Link>
       </div>
 
       <div className="flex items-center space-x-4">
@@ -42,39 +40,32 @@ const Header: React.FC<HeaderProps> = ({
         )}
 
         <nav className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            onClick={() => navigate('/')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              isSearch
-                ? 'bg-white text-blue-600 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
+          <Link
+            to="/"
+            // `activeOptions.exact` so /paper/* doesn't keep Search highlighted.
+            activeOptions={{ exact: true }}
+            className={`${NAV_BASE} ${NAV_INACTIVE}`}
+            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
           >
             <MagnifyingGlass size={18} weight="bold" />
             <span>Search</span>
-          </button>
-          <button
-            onClick={() => navigate('/mypapers')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              isMyPapers
-                ? 'bg-white text-blue-600 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
+          </Link>
+          <Link
+            to="/mypapers"
+            className={`${NAV_BASE} ${NAV_INACTIVE}`}
+            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
           >
             <Folder size={18} weight="bold" />
             <span>My PDFs</span>
-          </button>
-          <button
-            onClick={() => navigate('/chat')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              isChat
-                ? 'bg-white text-blue-600 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
+          </Link>
+          <Link
+            to="/chat"
+            className={`${NAV_BASE} ${NAV_INACTIVE}`}
+            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
           >
             <Chats size={18} weight="bold" />
             <span>Chat</span>
-          </button>
+          </Link>
         </nav>
       </div>
     </header>

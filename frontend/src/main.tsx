@@ -3,10 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import App from './App.tsx'
-import { ensurePhytoQueryTheme, ensureCoastalTheme } from './lib/echartsTheme'
-
-ensurePhytoQueryTheme()
-ensureCoastalTheme()
+// ECharts theme registration lives in the chart-using components (Dashboard
+// and JournalDistributionWidget). Eagerly importing echartsTheme here would
+// drag the entire echarts library into the initial bundle for users who only
+// visit `/` and never open the dashboard.
 
 // One QueryClient for the whole app. Defaults are tuned for our
 // usage: data is considered fresh for 30s (so quick page hops don't

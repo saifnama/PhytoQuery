@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import {
   Plus,
@@ -116,9 +116,10 @@ const SESSION_KEYS = {
 };
 
 const RagPage: React.FC = () => {
-  const location = useLocation();
   const navigate = useNavigate();
-  const locationState = location.state as RagLocationState | null;
+  const locationState = useRouterState({
+    select: (s) => s.location.state as unknown as RagLocationState | null,
+  });
   // Upload status + isUploading live in the shared Zustand store so
   // RagPage and the layout Sidebar always agree on whether an upload
   // is in flight (see frontend/src/stores/uploadStore.ts). The store
@@ -343,12 +344,12 @@ const RagPage: React.FC = () => {
         setUploadStatus('Paper PDF import failed. Please try downloading it manually.');
         setIsUploading(false);
       } finally {
-        navigate(location.pathname, { replace: true, state: null });
+        navigate({ to: '/chat', replace: true, state: {} });
       }
     };
 
     importPaperPdf();
-  }, [applyUploadResult, loadIndexedFiles, location.pathname, locationState, navigate, parserType]);
+  }, [applyUploadResult, loadIndexedFiles, locationState, navigate, parserType]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;

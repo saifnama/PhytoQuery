@@ -1,5 +1,5 @@
 /**
- * assistant-ui chat thread for the PhytoQuery RAG page — daisyUI build.
+ * assistant-ui chat thread for the PhytoQuery RAG page — shadcn/ui build.
  *
  * Citation rendering pipeline (industry-standard two-pass design):
  *   - Backend streams the answer with inline ``[<chunk_id>]`` markers
@@ -12,10 +12,6 @@
  *   - The custom markdown ``a`` component (CitationLink) renders any
  *     ``#cite-…`` link as a clickable pink badge that calls back into
  *     RagPage to open the markdown-preview panel.
- *
- * No source-pill row anymore — superscripts are the only citation
- * affordance. Click a badge to view the cited chunk in the paper's
- * extracted markdown.
  */
 
 import {
@@ -54,17 +50,21 @@ import {
   X,
   FilePdf,
 } from '@phosphor-icons/react';
+import { Button } from '@/components/ui/button';
+import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardTitle,
+} from '@/components/ui/card';
 import type { Citation, RagMessageCustomData, RagSource } from './runtime';
 import { exportThreadAsPdf, type ThreadTurn } from './exportPdf';
 
 const PINK_ACCENT = '#ff6dba';
 const PINK_USER_BG = '#ffecf6';
 
-/** Payload delivered to RagPage when the user clicks a citation
- * superscript. ``source`` is set when the chunk_id resolves to a
- * known retrieved chunk; ``citation`` is set when Pass 2 produced a
- * verbatim quote for that chunk. Either may be undefined if the LLM
- * cited an id we no longer have (rare; we ignore those visually). */
 export interface CitationClickPayload {
   chunkId: string;
   source?: RagSource;
@@ -72,27 +72,23 @@ export interface CitationClickPayload {
 }
 
 interface ThreadProps {
-  /** Invoked when the user clicks a citation superscript in an
-   * assistant answer. Parent (RagPage) opens the markdown preview
-   * panel and highlights the cited chunk + verbatim quote. */
   onCitationClick?: (payload: CitationClickPayload) => void;
-  /** Welcome card content shown when the thread is empty. */
   emptyContent?: ReactNode;
 }
 
-/** Context that exposes the citation click handler to the static,
- * memoized markdown ``a`` override without re-creating the component
- * map per render. */
 const CitationClickContext = createContext<
   ((chunkId: string) => void) | undefined
 >(undefined);
 
 export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   return (
-    <ThreadPrimitive.Root className="flex h-full flex-col bg-base-100">
-      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-6">
+    <ThreadPrimitive.Root
+      className="flex h-full flex-col bg-card"
+      style={{ ['--thread-max-width' as string]: '44rem' }}
+    >
+      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-6 flex flex-col gap-y-6">
         <ThreadPrimitive.Empty>
-          <div className="flex h-full items-center justify-center text-base-content/60">
+          <div className="flex h-full items-center justify-center text-muted-foreground">
             {emptyContent ?? <DefaultEmpty />}
           </div>
         </ThreadPrimitive.Empty>
@@ -115,10 +111,6 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   );
 };
 
-/** Whole-chat PDF export button — sits inside the assistant
- * ActionBar so users can export the conversation without scrolling
- * to a header. Each assistant turn renders one of these; clicking
- * any of them produces the same full-chat PDF. */
 const ExportChatPdfButton: FC = () => {
   const thread = useThread();
 
@@ -140,66 +132,67 @@ const ExportChatPdfButton: FC = () => {
   };
 
   return (
-    <button
+    <TooltipIconButton
       type="button"
+      variant="ghost"
+      size="icon-xs"
       onClick={handleExportChat}
-      className="btn btn-ghost btn-xs btn-square"
-      title="Export entire chat as PDF"
-      aria-label="Export entire chat as PDF"
+      tooltip="Export entire chat as PDF"
     >
       <FilePdf size={14} weight="regular" />
-    </button>
+    </TooltipIconButton>
   );
 };
 
-/** daisyUI loading-dots indicator shown while the assistant is still
- * streaming/computing a response. */
+/** Typing indicator — three staggered-delay bouncing dots inside a
+ * muted bubble. The `animate-typing-dot` keyframe is defined in index.css. */
 const TypingIndicator: FC = () => {
   const thread = useThread();
   if (!thread.isRunning) return null;
   return (
-    <div className="chat chat-start">
-      <div className="chat-bubble chat-bubble-neutral bg-base-200 text-base-content">
-        <span className="loading loading-dots loading-md" />
+    <div className="flex justify-start">
+      <div className="inline-flex items-center gap-1 rounded-2xl bg-muted px-4 py-3">
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot" />
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot"
+          style={{ animationDelay: '0.2s' }}
+        />
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot"
+          style={{ animationDelay: '0.4s' }}
+        />
       </div>
     </div>
   );
 };
 
-/** Floating "scroll to latest" button. Auto-disabled when already at
- * the bottom — clicking it smooth-scrolls the viewport. */
 const ScrollToBottomButton: FC = () => (
   <ThreadPrimitive.ScrollToBottom asChild>
-    <button
+    <TooltipIconButton
       type="button"
-      className="btn btn-circle btn-sm absolute bottom-4 right-4 shadow-md disabled:hidden"
-      aria-label="Scroll to latest message"
-      title="Scroll to latest"
+      variant="default"
+      size="icon-sm"
+      side="left"
+      tooltip="Scroll to latest"
+      className="absolute bottom-4 right-4 rounded-full shadow-md disabled:hidden"
     >
       <ArrowDown size={16} weight="bold" />
-    </button>
+    </TooltipIconButton>
   </ThreadPrimitive.ScrollToBottom>
 );
 
-/** Empty state — a quiet welcome card. No starter prompts; users
- * type their own question in the composer. */
 const DefaultEmpty: FC = () => (
-  <div className="card max-w-md bg-base-100 shadow-none">
-    <div className="card-body items-center text-center">
-      <h2 className="card-title text-base-content">Ask about your papers</h2>
-      <p className="text-sm text-base-content/70">
+  <Card size="sm" className="max-w-md ring-0 shadow-none">
+    <CardContent className="flex flex-col items-center gap-2 text-center">
+      <CardTitle className="text-base">Ask about your papers</CardTitle>
+      <CardDescription className="text-center">
         Upload PDFs in the sidebar, then ask questions. Click a citation
         superscript to see the exact passage in the paper.
-      </p>
-    </div>
-  </div>
+      </CardDescription>
+    </CardContent>
+  </Card>
 );
 
-/** Custom ``a`` component that intercepts ``#cite-<chunkId>`` links
- * (produced by ``MarkdownText``'s preprocess) and renders them as a
- * clickable pink badge. Click handler is read from
- * ``CitationClickContext`` so the memoized component map doesn't
- * need to be rebuilt per message. */
 const CitationLink: FC<{
   href?: string;
   children?: ReactNode;
@@ -230,22 +223,10 @@ const CitationLink: FC<{
   );
 };
 
-/** Memoized markdown components — react-markdown re-renders every
- * node on each text update; memoizing each tag means only changed
- * nodes re-render. Citation links are routed through CitationLink. */
 const markdownComponents = memoizeMarkdownComponents({
   a: CitationLink,
 });
 
-/** Markdown renderer with citation preprocessing.
- *
- * The preprocess hook runs on every text update (smooth streaming)
- * and replaces ``[<chunk_id>]`` markers with markdown links of the
- * form ``[<sup>N</sup>](#cite-<chunk_id>)``. The numbering is built
- * deterministically from the order chunk_ids first appear in the
- * answer, so the same id always gets the same number for a given
- * answer text. Unknown ids (not in the message's ``sources``) are
- * left as-is so they don't crash — they just render as plain text. */
 const MarkdownText: FC = () => {
   const message = useMessage();
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
@@ -259,23 +240,8 @@ const MarkdownText: FC = () => {
 
   const preprocess = useCallback(
     (text: string) => {
-      // Marker format is per-turn positional id. We accept both the
-      // canonical ``[cN]`` and bare ``[N]`` because most LLMs drop
-      // the ``c`` prefix — bare numeric brackets dominate their
-      // training data and the LLM happily emits ``[1]`` even when
-      // the prompt asks for ``[c1]``. Both forms normalize to
-      // ``cN`` internally. ``validChunkIds`` bounds-checks against
-      // the message's sources, so any bare ``[N]`` that doesn't map
-      // to a real chunk (e.g. reference numbers from quoted paper
-      // text) is left as plain prose — never rendered as a
-      // clickable badge.
       const numbering = new Map<string, number>();
       let next = 1;
-      // Whitespace inside the brackets is tolerated because real
-      // LLMs emit padded forms like ``[ c1]`` or ``[ 1 ]`` in
-      // practice (observed in production diagnostics). Without
-      // this allowance, the marker stays as plain text and never
-      // becomes a clickable badge.
       return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, (match, num: string) => {
         const id = `c${num}`;
         if (!validChunkIds.has(id)) return match;
@@ -301,14 +267,14 @@ const MarkdownText: FC = () => {
 };
 
 const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="chat chat-end group">
+  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group animate-in fade-in slide-in-from-bottom-1 duration-150">
     <ComposerPrimitive.If editing>
       <UserEditComposer />
     </ComposerPrimitive.If>
 
     <ComposerPrimitive.If editing={false}>
       <div
-        className="chat-bubble shadow-sm"
+        className="inline-block max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm"
         style={{ backgroundColor: PINK_USER_BG, color: '#1f2937' }}
       >
         <MessagePrimitive.Content
@@ -325,52 +291,52 @@ const UserMessage: FC = () => (
   </MessagePrimitive.Root>
 );
 
-/** Inline composer rendered inside a user message when it's in edit
- * mode. Submitting forks a new branch + re-runs the assistant. */
 const UserEditComposer: FC = () => (
   <ComposerPrimitive.Root className="w-full max-w-2xl">
-    <div className="flex flex-col gap-2 rounded-2xl border border-base-300 bg-base-100 p-2 shadow-sm">
-      <ComposerPrimitive.Input
-        className="textarea textarea-ghost min-h-[60px] resize-none bg-transparent text-sm focus:outline-none"
-        autoFocus
-      />
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-2 shadow-sm">
+      <ComposerPrimitive.Input asChild>
+        <Textarea
+          className="min-h-[60px] resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          autoFocus
+        />
+      </ComposerPrimitive.Input>
       <div className="flex justify-end gap-2">
         <ComposerPrimitive.Cancel asChild>
-          <button type="button" className="btn btn-ghost btn-sm gap-1">
+          <Button type="button" variant="ghost" size="sm">
             <X size={14} weight="bold" />
             Cancel
-          </button>
+          </Button>
         </ComposerPrimitive.Cancel>
         <ComposerPrimitive.Send asChild>
-          <button
+          <Button
             type="submit"
-            className="btn btn-sm gap-1 border-none text-white"
+            size="sm"
+            className="text-white"
             style={{ backgroundColor: PINK_ACCENT }}
           >
             <Check size={14} weight="bold" />
             Update
-          </button>
+          </Button>
         </ComposerPrimitive.Send>
       </div>
     </div>
   </ComposerPrimitive.Root>
 );
 
-/** Action bar for user messages — just Edit, hover-only. */
 const UserActionBar: FC = () => (
   <ActionBarPrimitive.Root
     autohide="not-last"
-    className="chat-footer mt-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100"
+    className="mt-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100"
   >
     <ActionBarPrimitive.Edit asChild>
-      <button
+      <TooltipIconButton
         type="button"
-        className="btn btn-ghost btn-xs btn-square"
-        title="Edit this question"
-        aria-label="Edit question"
+        variant="ghost"
+        size="icon-xs"
+        tooltip="Edit this question"
       >
         <PencilSimple size={12} weight="regular" />
-      </button>
+      </TooltipIconButton>
     </ActionBarPrimitive.Edit>
   </ActionBarPrimitive.Root>
 );
@@ -379,7 +345,6 @@ interface AssistantMessageProps {
   onCitationClick?: (payload: CitationClickPayload) => void;
 }
 
-/** Extract the plain-text body of a ThreadMessage. */
 function readMessageText(message: { content: readonly { type: string; text?: string }[] | undefined }): string {
   if (!message?.content) return '';
   return message.content
@@ -394,9 +359,6 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   const sources = customData.sources ?? [];
   const citations = customData.citations ?? [];
 
-  // Resolve the chunk_id → {source, citation} payload at click time
-  // so the lookup is fresh even after the message is re-loaded from
-  // sessionStorage on reload.
   const handleCitationClick = useCallback(
     (chunkId: string) => {
       const source = sources.find((s) => s.chunk_id === chunkId);
@@ -408,8 +370,8 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
 
   return (
     <CitationClickContext.Provider value={handleCitationClick}>
-      <MessagePrimitive.Root className="chat chat-start group">
-        <div className="chat-bubble bg-base-100 border border-base-200 text-base-content shadow-sm">
+      <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group animate-in fade-in slide-in-from-bottom-1 duration-150">
+        <div className="inline-block max-w-[85%] rounded-2xl border border-border bg-card px-4 py-3 text-foreground shadow-sm">
           <MessagePrimitive.Content components={{ Text: MarkdownText }} />
         </div>
 
@@ -421,140 +383,142 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   );
 };
 
-/** Action bar for assistant messages — Copy, Reload (regenerate),
- * PDF export, Speak (TTS via WebSpeechSynthesisAdapter wired in
- * runtime.ts). Hidden while the thread is running so it doesn't
- * flicker. */
 const AssistantActionBar: FC = () => (
   <ActionBarPrimitive.Root
     hideWhenRunning
     autohide="not-last"
     autohideFloat="single-branch"
-    className="chat-footer mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
+    className="mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
   >
     <ActionBarPrimitive.Copy asChild>
-      <button
+      <TooltipIconButton
         type="button"
-        className="btn btn-ghost btn-xs btn-square"
-        title="Copy answer"
-        aria-label="Copy answer"
+        variant="ghost"
+        size="icon-xs"
+        tooltip="Copy answer"
       >
         <MessagePrimitive.If copied>
-          <Check size={14} weight="bold" className="text-success" />
+          <Check size={14} weight="bold" className="text-emerald-600" />
         </MessagePrimitive.If>
         <MessagePrimitive.If copied={false}>
           <CopySimple size={14} weight="regular" />
         </MessagePrimitive.If>
-      </button>
+      </TooltipIconButton>
     </ActionBarPrimitive.Copy>
 
     <ActionBarPrimitive.Reload asChild>
-      <button
+      <TooltipIconButton
         type="button"
-        className="btn btn-ghost btn-xs btn-square"
-        title="Regenerate this answer"
-        aria-label="Regenerate"
+        variant="ghost"
+        size="icon-xs"
+        tooltip="Regenerate this answer"
       >
         <ArrowClockwise size={14} weight="regular" />
-      </button>
+      </TooltipIconButton>
     </ActionBarPrimitive.Reload>
 
     <ExportChatPdfButton />
 
     <MessagePrimitive.If speaking={false}>
       <ActionBarPrimitive.Speak asChild>
-        <button
+        <TooltipIconButton
           type="button"
-          className="btn btn-ghost btn-xs btn-square"
-          title="Read this answer aloud"
-          aria-label="Read aloud"
+          variant="ghost"
+          size="icon-xs"
+          tooltip="Read this answer aloud"
         >
           <SpeakerHigh size={14} weight="regular" />
-        </button>
+        </TooltipIconButton>
       </ActionBarPrimitive.Speak>
     </MessagePrimitive.If>
     <MessagePrimitive.If speaking>
       <ActionBarPrimitive.StopSpeaking asChild>
-        <button
+        <TooltipIconButton
           type="button"
-          className="btn btn-ghost btn-xs btn-square"
-          title="Stop reading"
-          aria-label="Stop reading"
+          variant="ghost"
+          size="icon-xs"
+          tooltip="Stop reading"
         >
           <SpeakerSlash size={14} weight="regular" />
-        </button>
+        </TooltipIconButton>
       </ActionBarPrimitive.StopSpeaking>
     </MessagePrimitive.If>
   </ActionBarPrimitive.Root>
 );
 
-/** Branch navigator — appears below a message that has alternative
- * branches (created when user edits or regenerates). */
 const BranchPicker: FC = () => (
   <MessagePrimitive.If hasBranches>
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch
-      className="chat-footer mt-1 inline-flex items-center gap-0.5 text-xs text-base-content/60"
+      className="mt-1 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
     >
       <BranchPickerPrimitive.Previous asChild>
-        <button
+        <TooltipIconButton
           type="button"
-          className="btn btn-ghost btn-xs px-1"
-          aria-label="Previous branch"
-          title="Previous branch"
+          variant="ghost"
+          size="icon-xs"
+          className="px-1"
+          tooltip="Previous branch"
         >
           <CaretLeft size={12} weight="bold" />
-        </button>
+        </TooltipIconButton>
       </BranchPickerPrimitive.Previous>
       <span className="tabular-nums px-1">
         <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
       </span>
       <BranchPickerPrimitive.Next asChild>
-        <button
+        <TooltipIconButton
           type="button"
-          className="btn btn-ghost btn-xs px-1"
-          aria-label="Next branch"
-          title="Next branch"
+          variant="ghost"
+          size="icon-xs"
+          className="px-1"
+          tooltip="Next branch"
         >
           <CaretRight size={12} weight="bold" />
-        </button>
+        </TooltipIconButton>
       </BranchPickerPrimitive.Next>
     </BranchPickerPrimitive.Root>
   </MessagePrimitive.If>
 );
 
 const Composer: FC = () => (
-  <ComposerPrimitive.Root className="border-t border-base-200 bg-base-100 p-4">
-    <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-base-200 bg-base-100 px-2 py-1.5 shadow-2xl shadow-base-300/40 focus-within:border-base-300">
-      <ComposerPrimitive.Input
-        rows={1}
-        autoFocus
-        placeholder="Ask anything..."
-        className="textarea textarea-ghost min-h-[44px] flex-1 resize-none bg-transparent text-base focus:outline-none focus:bg-transparent"
-      />
+  <ComposerPrimitive.Root className="border-t border-border bg-card p-4">
+    <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-border bg-card px-2 py-1.5 shadow-2xl shadow-black/5 focus-within:border-muted-foreground/40">
+      <ComposerPrimitive.Input asChild>
+        <Textarea
+          rows={1}
+          autoFocus
+          placeholder="Ask anything..."
+          className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+        />
+      </ComposerPrimitive.Input>
       <div className="pb-1">
         <ThreadPrimitive.If running>
           <ComposerPrimitive.Cancel asChild>
-            <button
+            <TooltipIconButton
               type="button"
-              className="btn btn-circle btn-md border-none bg-base-300 text-base-content shadow-md transition-all hover:bg-base-content/20 active:scale-95"
-              aria-label="Stop generating"
-              title="Stop"
+              variant="secondary"
+              size="icon"
+              side="top"
+              tooltip="Stop generating"
+              className="rounded-full shadow-md active:scale-95"
             >
               <Stop size={18} weight="fill" />
-            </button>
+            </TooltipIconButton>
           </ComposerPrimitive.Cancel>
         </ThreadPrimitive.If>
         <ThreadPrimitive.If running={false}>
           <ComposerPrimitive.Send asChild>
-            <button
+            <TooltipIconButton
               type="submit"
-              className="btn btn-circle btn-md border-none text-white shadow-md transition-all hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
+              size="icon"
+              side="top"
+              tooltip="Send message"
+              className="rounded-full text-white shadow-md hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
               style={{ backgroundColor: PINK_ACCENT }}
-              aria-label="Send message"
             >
               <ArrowUp size={18} weight="bold" />
-            </button>
+            </TooltipIconButton>
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>
       </div>

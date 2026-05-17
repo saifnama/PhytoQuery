@@ -9,10 +9,18 @@ import * as echarts from 'echarts';
 import type { EChartsOption } from 'echarts';
 import { dashboardApi } from '../../lib/api';
 import { ENTITY_COLORS } from '../../lib/entityColors';
-import { PHYTOQUERY_THEME_NAME } from '../../lib/echartsTheme';
+import { PHYTOQUERY_THEME_NAME, ensurePhytoQueryTheme, ensureCoastalTheme } from '../../lib/echartsTheme';
+
+// Register both themes when this lazy-loaded module first evaluates. Both
+// `ensure*` calls are idempotent — internal flag in echartsTheme.ts guards
+// against double-registration. Doing this here (instead of in main.tsx) keeps
+// echarts out of the initial bundle.
+ensurePhytoQueryTheme();
+ensureCoastalTheme();
 import { useTheme } from '../../lib/theme';
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
+import { Skeleton } from '@/components/ui/skeleton';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -313,8 +321,24 @@ const Dashboard: React.FC = () => {
   // ── Loading / not-ready guard ──────────────────────────────────────────────
   if (isLoading || !isReady) {
     return (
-      <div className="w-full flex justify-center py-12">
-        <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+      <div className="w-full max-w-6xl mx-auto px-4 py-8 space-y-6" aria-label="Loading dashboard">
+        {/* Title row */}
+        <Skeleton className="h-8 w-48" />
+        {/* Stat-card strip — 3 cards */}
+        <div className="grid grid-cols-3 gap-3">
+          <Skeleton className="h-32 rounded-2xl" />
+          <Skeleton className="h-32 rounded-2xl" />
+          <Skeleton className="h-32 rounded-2xl" />
+        </div>
+        {/* Journal Distribution widget */}
+        <Skeleton className="h-72 rounded-2xl" />
+        {/* Two-up: Entity Distribution + Publication Timeline */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Skeleton className="h-80 rounded-2xl" />
+          <Skeleton className="h-80 rounded-2xl" />
+        </div>
+        {/* Plant Origin Heatmap */}
+        <Skeleton className="h-[520px] rounded-2xl" />
       </div>
     );
   }

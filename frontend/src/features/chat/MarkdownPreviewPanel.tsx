@@ -20,6 +20,9 @@ import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import { X } from '@phosphor-icons/react';
+import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
 import type { Citation, RagSource } from './assistant/runtime';
 
 // react-markdown@10 ignores inline HTML in the source by default. We
@@ -355,15 +358,15 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
             </p>
           )}
         </div>
-        <button
+        <TooltipIconButton
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={onClose}
-          className="btn btn-ghost btn-sm btn-square"
-          title="Close preview"
-          aria-label="Close preview"
+          tooltip="Close preview"
         >
           <X size={16} weight="bold" />
-        </button>
+        </TooltipIconButton>
       </div>
 
       <div
@@ -371,15 +374,21 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
         className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed"
       >
         {loading && (
-          <div className="flex items-center gap-2 text-base-content/60">
-            <span className="loading loading-spinner loading-sm" />
-            <span>Loading paper…</span>
+          <div className="space-y-3" aria-label="Loading paper">
+            <Skeleton className="h-6 w-3/4" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-4/6" />
+            <Skeleton className="h-32 w-full mt-4" />
+            <Skeleton className="h-4 w-full mt-4" />
+            <Skeleton className="h-4 w-3/4" />
           </div>
         )}
         {error && (
-          <div className="alert alert-error text-sm">
-            <span>{error}</span>
-          </div>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         {!loading && !error && markdown && (
           // ``key`` includes triggerKey so each citation click force-
