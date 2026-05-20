@@ -2,7 +2,7 @@ term,synonyms
 anti neuralgic, 
 muscle relaxant,myorelaxant
 anti mutagen,anti mutagenic 
-anti oxidant,anti radical 
+anti oxidant,anti radical|antioxidant
 insect repellent,insectifuge
 hepatotoxic,hepatotoxicant|hepatotoxin
 expectorant,mucokinetic|expectorant
@@ -38,7 +38,7 @@ acetylcholinesterase inhibitor,anti acetylcholinesterase
 antacid, 
 anti diarrheic,anti diarrhoeal 
 anti septic, 
-anti cancer,anti neoplastic|anti tumor 
+anti cancer,anti neoplastic|anti tumor|anticancer
 anti prostaglandin, 
 anti pruritic, 
 anti histaminic, histamine antagonist|histamine inhibitor 
@@ -55,7 +55,7 @@ anti diabetic,anti hyperglycemic
 anti fibrinolytic, 
 anti hypertensive, 
 anti convulsant, 
-anti fungal,anti mycotic|fungistat
+anti fungal,anti mycotic|fungistat|antifungal 
 anti parasitic, 
 anti inflammatory, 
 anti protozoal, 
@@ -64,7 +64,7 @@ anti tussive,
 anti hyperkeratinization, 
 anti microbial, 
 anti mitotic,mitotic inhibitor 
-anti bacteria,anti bacterial|anti pertussic|anti pertussive|bactericidal|bactericide|anti-bacterial
+anti bacteria,anti bacterial|anti pertussic|anti pertussive|bactericidal|bactericide|anti-bacterial|antibacterial 
 anti viral, 
 anti leukotriene,leukotriene inhibitor 
 anti acne, 
@@ -75,3 +75,4 @@ phytotoxic,
 prooxidant,
 anti plasmodial,
 anti cytotoxic,
+antimicrobial,
