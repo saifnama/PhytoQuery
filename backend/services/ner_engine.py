@@ -470,35 +470,62 @@ class NERService:
         if not sections:
             return {}, []
 
-        # Run dictionary matching on full text (no section tracking for dict)
-        all_dict_entities = []
+        # Filter empty sections once so the parallel LLM batch isn't
+        # padded with no-op coroutines and the dictionary loop skips
+        # them too.
+        valid_sections = [
+            s for s in sections
+            if (s.get("content", "") or "").strip()
+        ]
+        if not valid_sections:
+            return {}, []
 
-        # Run LLM per section for better context
-        all_llm_entities = []
-        for section in sections:
+        # Dictionary matching stays sequential — it's sync CPU work and
+        # already fast at typical paper sizes; thread-offload would add
+        # more orchestration than it saves here.
+        all_dict_entities: List[Dict[str, Any]] = []
+        for section in valid_sections:
             section_title = section.get("title", "Unknown")
             section_text = section.get("content", "")
-
-            if not section_text or not section_text.strip():
-                continue
-
-            # Dictionary matching on this section
             for ent in self._match_dictionary_in_text(section_text):
                 ent["section"] = section_title
                 all_dict_entities.append(ent)
 
-            # LLM extraction on this section — uses validation-retry
-            # so semantic LLM failures (wrong type labels, empty
-            # arrays, object-wrapped responses) get re-prompted
-            # instead of silently dropping all entities for the
-            # section.
-            try:
-                parsed = await self._extract_entities_with_retry(section_text)
-                for e in parsed:
-                    e["section"] = section_title
-                    all_llm_entities.append(e)
-            except Exception as e:
-                logger.warning(f"LLM extraction failed for section '{section_title}': {e}")
+        # LLM extraction in parallel across sections, bounded by a
+        # semaphore so we don't trip free-tier concurrency limits on
+        # the provider (OpenRouter free models, Groq free tier, etc).
+        # Each call still goes through ``_extract_entities_with_retry``
+        # so the validation-retry safety net is intact.
+        sem = asyncio.Semaphore(3)
+
+        async def _llm_for_section(section: Dict[str, str]) -> List[Dict[str, Any]]:
+            section_title = section.get("title", "Unknown")
+            section_text = section.get("content", "")
+            async with sem:
+                try:
+                    parsed = await self._extract_entities_with_retry(section_text)
+                except Exception as exc:
+                    logger.warning(
+                        f"LLM extraction failed for section '{section_title}': {exc}"
+                    )
+                    return []
+            return [{**e, "section": section_title} for e in parsed]
+
+        # return_exceptions=True keeps one section's hard failure from
+        # cancelling the rest of the batch — default gather() would
+        # propagate the first exception and cancel siblings mid-flight,
+        # losing their results.
+        section_results = await asyncio.gather(
+            *[_llm_for_section(s) for s in valid_sections],
+            return_exceptions=True,
+        )
+
+        all_llm_entities: List[Dict[str, Any]] = []
+        for result in section_results:
+            if isinstance(result, BaseException):
+                logger.warning(f"LLM section task raised: {result}")
+                continue
+            all_llm_entities.extend(result)
 
         # Normalize entities
         normalized = self._normalize_entities(all_dict_entities + all_llm_entities)
