@@ -99,6 +99,16 @@ RAG_LLAMACPP_URL = env("RAG_LLAMACPP_URL")
 RAG_LLAMACPP_API_KEY = env("RAG_LLAMACPP_API_KEY")
 RAG_LLAMACPP_MODEL = env("RAG_LLAMACPP_MODEL", "default")
 
+# Where the embedded Qdrant client stores its data. Leave empty for the
+# default (``<repo>/data/qdrant/``). Set to a writable LOCAL-DISK path on
+# systems where the default lives on a filesystem with broken ``flock()``
+# support (e.g. Lustre on HPC clusters): qdrant-client uses portalocker
+# to coordinate access to the storage directory and requires working
+# POSIX file locks. ``~`` is expanded; relative paths are resolved to
+# absolute at startup so the value you see in logs is always the real
+# on-disk location.
+RAG_QDRANT_DIR = env("RAG_QDRANT_DIR")
+
 RAG_TEMPERATURE = env_float("RAG_TEMPERATURE", 0.1)
 RAG_CONTEXT_WINDOW = env_int("RAG_CONTEXT_WINDOW", 8192)
 RAG_EMBEDDING_MODEL = env("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")

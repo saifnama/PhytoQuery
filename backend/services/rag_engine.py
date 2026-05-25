@@ -58,6 +58,7 @@ from backend.config import (
     RAG_RERANKER_MODEL,
     RAG_MULTI_GPU,
     RAG_USE_FLASH_ATTENTION,
+    RAG_QDRANT_DIR,
     get_rag_provider,
 )
 
@@ -302,10 +303,20 @@ class RAGConfig:
     # collection naming (``user_<safe_user_id>_<8-char-hash>``) inside
     # this one directory, not via separate folders. Replaces the old
     # ``chroma_dir`` per-user-folder layout.
-    qdrant_dir: str = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "data",
-        "qdrant",
+    #
+    # Path resolution order:
+    #   1. ``$RAG_QDRANT_DIR`` env var if set (with ``~`` expansion and
+    #      resolution to an absolute path) — required on filesystems
+    #      without working flock support (Lustre, some NFS configs).
+    #   2. Default: ``<repo>/data/qdrant/`` relative to this source file.
+    qdrant_dir: str = (
+        os.path.abspath(os.path.expanduser(RAG_QDRANT_DIR))
+        if RAG_QDRANT_DIR
+        else os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "data",
+            "qdrant",
+        )
     )
 
 

@@ -145,43 +145,23 @@ cd C:\Users\saif\saifnama_lab\PhytoQuery
 python -m backend.app --host 0.0.0.0 --port 8000
 ```
 
-#### Multi-worker production deployment (Linux/macOS only)
+#### Production deployment (single-worker only)
 
-`uvicorn --workers N` lets a single FastAPI instance handle requests in
-parallel across N OS processes. It's a real throughput win for
-concurrent users — but it has prerequisites that the default setup
-doesn't meet:
-
-**`--workers N > 1` requires Qdrant server mode.** The default
-embedded Qdrant (`QdrantClient(path="data/qdrant/")`) holds an
-exclusive file lock on its storage directory. Only one worker can
-hold that lock — the rest fail with "database is locked" within
-seconds of the first request. You must run Qdrant as a separate
-process and point the backend at it via `RAG_QDRANT_URL`. See
-[docs/qdrant-server-deployment.md](docs/qdrant-server-deployment.md)
-for the wget + systemd setup.
-
-**Memory scales linearly with worker count.** Each worker loads its
-own copy of the embedding model and FastEmbed BM25 tokenizer. With
-the small `bge-small-en-v1.5` (~130MB) the cost is modest; with
-`Qwen3-Embedding-4B` (~8GB) it's `8GB × N` workers — plan accordingly
-on the A100.
-
-**Windows is not supported by `--workers`.** Uvicorn's multi-process
-mode targets Linux/macOS only (`fork`-based). On Windows, stay with
-the single-worker default; use a reverse proxy + multiple `uvicorn`
-instances behind it if you need horizontal scaling.
-
-Once those three boxes are checked, the deployment line is:
+The embedded Qdrant client (`QdrantClient(path="data/qdrant/")`) holds
+an exclusive file lock on its storage directory, so the backend MUST
+run with `--workers 1`:
 
 ```bash
-# After starting a Qdrant server and setting RAG_QDRANT_URL in .env:
-uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-Each worker is a separate process with its own PID, so independent CPU
-cores can each serve a request without blocking; if one worker dies the
-process manager restarts it while the others keep serving traffic.
+Multi-worker mode (`--workers N > 1`) is not supported with the current
+setup — every worker would fight for the same Qdrant lock and all but
+one would fail with "database is locked". If you need horizontal
+scaling, either run multiple FastAPI instances behind a reverse proxy
+(each pointing at its own `data/qdrant/` directory), or re-introduce a
+server-mode branch in `backend/services/rag_engine.py` that connects
+multiple workers to one remote Qdrant via HTTP.
 
 ### 2. Frontend Setup
 
