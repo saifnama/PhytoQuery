@@ -59,6 +59,7 @@ from backend.config import (
     RAG_MULTI_GPU,
     RAG_USE_FLASH_ATTENTION,
     RAG_QDRANT_URL,
+    RAG_QDRANT_API_KEY,
     RAG_QDRANT_DIR,
     get_rag_provider,
 )
@@ -1135,9 +1136,17 @@ class RAGService:
             # care which mode produced it. The Qdrant Python client
             # exposes the same interface for both.
             if RAG_QDRANT_URL:
-                self._qdrant_client = QdrantClient(url=RAG_QDRANT_URL)
+                # ``api_key`` is optional — qdrant-client accepts None
+                # gracefully (no Authorization header sent). Qdrant Cloud
+                # and any server started with ``--service.api_key=...``
+                # require it; plain Docker/local server doesn't.
+                self._qdrant_client = QdrantClient(
+                    url=RAG_QDRANT_URL,
+                    api_key=RAG_QDRANT_API_KEY or None,
+                )
+                _auth_note = " (authenticated)" if RAG_QDRANT_API_KEY else ""
                 logger.info(
-                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}"
+                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}{_auth_note}"
                 )
             else:
                 os.makedirs(config.qdrant_dir, exist_ok=True)
@@ -1245,7 +1254,29 @@ class RAGService:
         # matches the metric the LangChain Qdrant integration assumes
         # for normalized vectors.
         self.embeddings._ensure_model_loaded()
-        vec_dim = config.embedding_dim or self.embeddings.model_dim
+        model_dim = self.embeddings.model_dim
+        requested_dim = config.embedding_dim
+        # ``RAG_EMBEDDING_DIM`` is MRL truncation — it can shrink the
+        # output dim, never expand it. If the user configured a dim
+        # LARGER than the loaded model can produce (e.g. requested=1024
+        # but loaded model is bge-small-en-v1.5 at 384, because the
+        # preferred larger model failed to load), we'd otherwise create
+        # a collection the model can never fill — langchain-qdrant then
+        # rejects every upload with a "dimensions mismatch" error.
+        # Clamp + log a clear warning so the misconfig is visible.
+        if requested_dim and requested_dim > model_dim:
+            logger.warning(
+                f"RAG_EMBEDDING_DIM={requested_dim} exceeds the loaded "
+                f"model's native output dim {model_dim} "
+                f"({self.embeddings.model_name!r}). MRL truncation can "
+                f"shrink but never expand — clamping vec_dim to {model_dim}. "
+                f"If you want {requested_dim}-dim vectors, load a model "
+                f"with model_dim >= {requested_dim} (e.g. BAAI/bge-m3 = 1024, "
+                f"Qwen/Qwen3-Embedding-4B = 2560)."
+            )
+            vec_dim = model_dim
+        else:
+            vec_dim = requested_dim or model_dim
 
         client.create_collection(
             collection_name=collection_name,

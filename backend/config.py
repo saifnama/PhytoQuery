@@ -106,12 +106,22 @@ RAG_LLAMACPP_MODEL = env("RAG_LLAMACPP_MODEL", "default")
 # filesystem ``flock()`` is unreliable (Lustre, some NFS configs). Server
 # mode supports concurrent clients and ``uvicorn --workers N > 1``.
 #
-# Spin one up next to the backend with:
+# Spin one up next to the backend with the bundled helper:
+#   ./scripts/qdrant.sh start        # Linux / macOS
+#   .\scripts\qdrant.ps1 start       # Windows
+#
+# Or directly via Docker:
 #   docker run -d --name phytoquery-qdrant \
 #     -p 6333:6333 -p 6334:6334 \
-#     -v /tmp/qdrant_storage:/qdrant/storage \
-#     qdrant/qdrant:latest
+#     -v "$HOME/.local/share/phytoquery/qdrant_storage:/qdrant/storage" \
+#     --restart unless-stopped \
+#     qdrant/qdrant:v1.18.0
 RAG_QDRANT_URL = env("RAG_QDRANT_URL")
+
+# RAG_QDRANT_API_KEY: optional bearer token for Qdrant Cloud or any
+# server started with ``--service.api_key=...``. Only consulted when
+# RAG_QDRANT_URL is set (server mode).
+RAG_QDRANT_API_KEY = env("RAG_QDRANT_API_KEY")
 
 # RAG_QDRANT_DIR: storage path for the *embedded* local client. Only used
 # when RAG_QDRANT_URL is empty. Leave empty for the default
