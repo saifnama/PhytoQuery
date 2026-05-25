@@ -58,6 +58,7 @@ from backend.config import (
     RAG_RERANKER_MODEL,
     RAG_MULTI_GPU,
     RAG_USE_FLASH_ATTENTION,
+    RAG_QDRANT_URL,
     RAG_QDRANT_DIR,
     get_rag_provider,
 )
@@ -1118,26 +1119,32 @@ class RAGService:
                 return self._qdrant_client
             from qdrant_client import QdrantClient
 
-            # Embedded Qdrant client backed by ``data/qdrant/``. Only
-            # one process can hold the storage lock — the FastAPI app
-            # must run with ``--workers 1``. Server-mode (the previous
-            # ``RAG_QDRANT_URL`` branch that did ``QdrantClient(url=...)``)
-            # was removed in May 2026 for code-path simplicity. If you
-            # ever need concurrent multi-worker access, re-introduce
-            # a remote-URL branch alongside this one — the call sites
-            # (``self._qdrant_client``) don't care which mode produced it.
-            os.makedirs(config.qdrant_dir, exist_ok=True)
-            # DIAGNOSTIC: log the full stack so any second instantiation is
-            # visible — there should be exactly ONE of these per process.
-            import traceback as _tb
-            logger.info(
-                f"QdrantClient instantiation site for {config.qdrant_dir}:\n"
-                + "".join(_tb.format_stack())
-            )
-            self._qdrant_client = QdrantClient(path=config.qdrant_dir)
-            logger.info(
-                f"Initialized Qdrant local client at {config.qdrant_dir}"
-            )
+            # Two modes, env-toggled via ``RAG_QDRANT_URL``:
+            #
+            #   - SET (e.g. ``http://localhost:6333``) → connect to a
+            #     Qdrant Server (Docker, native binary, Qdrant Cloud).
+            #     Recommended for Linux/HPC and any environment where
+            #     filesystem flock() is unreliable (Lustre, some NFS).
+            #     Supports concurrent clients + ``uvicorn --workers N``.
+            #
+            #   - UNSET → embedded local-mode at ``config.qdrant_dir``.
+            #     Zero-dependency, works on every OS, but only one
+            #     process can hold the storage lock at a time.
+            #
+            # Call sites only see ``self._qdrant_client`` — they don't
+            # care which mode produced it. The Qdrant Python client
+            # exposes the same interface for both.
+            if RAG_QDRANT_URL:
+                self._qdrant_client = QdrantClient(url=RAG_QDRANT_URL)
+                logger.info(
+                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}"
+                )
+            else:
+                os.makedirs(config.qdrant_dir, exist_ok=True)
+                self._qdrant_client = QdrantClient(path=config.qdrant_dir)
+                logger.info(
+                    f"Initialized Qdrant local client at {config.qdrant_dir}"
+                )
 
             # Universal cleanup registration — fires on every exit
             # path that runs Python code (everything except SIGKILL
