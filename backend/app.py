@@ -1,3 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Native-extension threading & worker-pool safe defaults
+# ─────────────────────────────────────────────────────────────────────────────
+# Many ML libraries (fastembed, transformers, torch, numpy via MKL/OpenMP)
+# spawn worker processes or thread pools on import. On some Python versions
+# (notably 3.14) these pools occasionally crash native code (segfault +
+# leaked semaphores) when uvicorn forks workers, or just when many parallel
+# tokenization/embedding calls happen at once. The fix is to constrain the
+# pool sizes BEFORE the libraries are imported.
+#
+# Every line below uses ``setdefault`` — so a value you set in your shell
+# (``export OMP_NUM_THREADS=8``), ``.env``, or ``.env.<profile>`` ALWAYS
+# wins. These are floor-level safe defaults, not opinions.
+#
+# Defaults chosen for portability across:
+#   * any Python version (3.10 → 3.14+)
+#   * any machine (laptop, server, HPC)
+#   * any library version (fastembed 0.x, torch 2.x, transformers 4.x)
+#
+# Knobs:
+#   LOKY_MAX_CPU_COUNT       joblib/loky workers (fastembed BM25 uses this).
+#                            Setting to 1 avoids the multiprocessing.Process
+#                            spawn that's segfault-prone on Python 3.14.
+#   TOKENIZERS_PARALLELISM   HuggingFace tokenizers Rust thread pool. "false"
+#                            silences the fork-after-parallelism warning and
+#                            avoids segfaults when uvicorn forks workers.
+#   OMP_NUM_THREADS          OpenMP (torch, numpy). Cap to half CPU count to
+#                            leave headroom for FastAPI's event loop +
+#                            worker pools sharing the same node.
+#   MKL_NUM_THREADS          Intel MKL (numpy on Intel CPUs). Same cap.
+import os as _os
+_os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
+_os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+_cpu_count = _os.cpu_count() or 1
+_os.environ.setdefault("OMP_NUM_THREADS", str(max(1, _cpu_count // 2)))
+_os.environ.setdefault("MKL_NUM_THREADS", str(max(1, _cpu_count // 2)))
+del _cpu_count
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
