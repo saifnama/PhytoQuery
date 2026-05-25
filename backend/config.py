@@ -99,16 +99,6 @@ RAG_LLAMACPP_URL = env("RAG_LLAMACPP_URL")
 RAG_LLAMACPP_API_KEY = env("RAG_LLAMACPP_API_KEY")
 RAG_LLAMACPP_MODEL = env("RAG_LLAMACPP_MODEL", "default")
 
-# Optional remote Qdrant server (the Rust binary at qdrant/qdrant).
-# Leave empty (the default) to keep using embedded local-mode Qdrant
-# at ``data/qdrant/`` — zero deployment dependency, works on every
-# OS. Set to ``http://host:6333`` to point at a Qdrant server
-# instead (enables uvicorn --workers N, payload indexes,
-# quantization, real HNSW; requires running ``docker run -p
-# 6333:6333 -v ... qdrant/qdrant`` or equivalent). Single config
-# flip; no other code path changes.
-RAG_QDRANT_URL = env("RAG_QDRANT_URL")
-
 RAG_TEMPERATURE = env_float("RAG_TEMPERATURE", 0.1)
 RAG_CONTEXT_WINDOW = env_int("RAG_CONTEXT_WINDOW", 8192)
 RAG_EMBEDDING_MODEL = env("RAG_EMBEDDING_MODEL", "BAAI/bge-m3")

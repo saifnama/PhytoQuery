@@ -1,5 +1,6 @@
 """Paper Router — Fetch paper data by DOI with multi-source fallback."""
 
+import json
 import urllib.parse
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
 from fastapi.responses import Response
@@ -18,7 +19,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from backend.db.database import get_db
-from backend.db.models import Paper, PaperEntity
+from backend.db.models import Paper, Entity, PaperEntity
 
 router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger(__name__)
@@ -37,6 +38,86 @@ def _coerce_cached_ner_payload(cached):
     if isinstance(cached, dict):
         return cached.get("entities", []), cached.get("summary", {})
     return cached, {}
+
+
+def _maybe_json_load(value):
+    """JSON columns may surface as either parsed objects or raw strings depending
+    on the SQLite driver / type-affinity path. Normalize to Python objects."""
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value
+
+
+def _entity_row_to_dict(pe: PaperEntity, entity: Entity) -> dict:
+    """Convert a (PaperEntity, Entity) row pair into the API entity dict shape.
+
+    This is the single source of truth for the entity payload returned by both
+    the `/paper/json` DB-first fast path and `/paper/db/{doi}/entities`. The
+    frontend depends on the existing `{label, text, count, metadata}` keys; we
+    add `canonical` and `aliases` as a superset.
+    """
+    e = entity
+    metadata: dict = {}
+
+    # SPECIES
+    if e.family:
+        metadata["family"] = e.family
+    if e.common_name:
+        metadata["common_name"] = e.common_name
+    if e.accepted_scientific_name:
+        metadata["accepted_scientific_name"] = e.accepted_scientific_name
+    if e.taxon_id:
+        metadata["taxon_id"] = e.taxon_id
+    if e.name_type:
+        metadata["name_type"] = e.name_type
+
+    # CHEMICAL
+    if e.inchikey:
+        metadata["inchikey"] = e.inchikey
+    if e.smiles:
+        metadata["smiles"] = e.smiles
+    if e.molecular_formula:
+        metadata["molecular_formula"] = e.molecular_formula
+    if e.preferred_name:
+        metadata["preferred_name"] = e.preferred_name
+
+    # LOCATION
+    if e.country:
+        metadata["country"] = e.country
+    if e.state:
+        metadata["state"] = e.state
+
+    # Provenance
+    if e.source_db:
+        metadata["source_db"] = e.source_db
+    if e.source_url:
+        metadata["source_url"] = e.source_url
+
+    # Catch-all metadata blob — merge last so typed columns win on key collision
+    extra_meta = _maybe_json_load(e.metadata_json)
+    if isinstance(extra_meta, dict):
+        for k, v in extra_meta.items():
+            metadata.setdefault(k, v)
+
+    aliases = _maybe_json_load(e.aliases_json)
+    if not isinstance(aliases, list):
+        aliases = []
+
+    return {
+        "label": e.label,
+        "text": e.display_text or e.canonical_text,
+        "canonical": e.canonical_text,
+        "count": pe.mention_count,
+        "metadata": metadata,
+        "aliases": aliases,
+    }
 
 
 def get_ner_service() -> NERService:
@@ -500,36 +581,37 @@ async def list_papers(limit: int = Query(50, ge=1, le=500), offset: int = Query(
 
 @router.get("/db/{doi:path}/entities")
 async def get_paper_entities(doi: str, db: AsyncSession = Depends(get_db)):
-    """Fetch pre-extracted entities for a paper from the SQLite database using its DOI."""
+    """Fetch pre-extracted entities for a paper from the SQLite database using its DOI.
+
+    Joins the new 3-table star schema (papers ↔ paper_entities ↔ entities) and
+    returns the existing `{label, text, count, metadata}` shape the frontend
+    consumes — now augmented with `canonical` and `aliases` from the Entity row.
+    """
     try:
         clean_id = _normalize_identifier(doi)
-        
-        # 1. Find paper ID by DOI
+
+        # 1. Find paper ID by DOI (try normalized first, then raw).
         result = await db.execute(select(Paper.id).where(Paper.doi == clean_id))
         paper_id = result.scalar_one_or_none()
-        
-        if not paper_id:
-            # If not found by exact DOI, try exact match without normalization just in case
+
+        if not paper_id and clean_id != doi:
             result = await db.execute(select(Paper.id).where(Paper.doi == doi))
             paper_id = result.scalar_one_or_none()
-            
+
         if not paper_id:
             return {"entities": []}
-            
-        # 2. Get entities for this paper
-        ent_result = await db.execute(select(PaperEntity).where(PaperEntity.paper_id == paper_id))
-        entities = ent_result.scalars().all()
-        
-        formatted_entities = []
-        for e in entities:
-            # Convert to dictionary format expected by frontend
-            formatted_entities.append({
-                "label": e.label,
-                "text": e.canonical_text,
-                "count": e.mention_count,
-                "metadata": e.metadata_json if e.metadata_json else {}
-            })
-            
+
+        # 2. JOIN paper_entities ↔ entities to load full per-entity metadata
+        #    in a single round-trip.
+        join_result = await db.execute(
+            select(PaperEntity, Entity)
+            .join(Entity, PaperEntity.entity_id == Entity.id)
+            .where(PaperEntity.paper_id == paper_id)
+        )
+        rows = join_result.all()
+
+        formatted_entities = [_entity_row_to_dict(pe, entity) for pe, entity in rows]
+
         return {"paper_id": paper_id, "doi": clean_id, "entities": formatted_entities}
     except Exception as e:
         logger.error(f"Error fetching entities for {doi}: {e}")

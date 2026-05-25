@@ -1107,25 +1107,19 @@ class RAGService:
                 return self._qdrant_client
             from qdrant_client import QdrantClient
 
-            # ``RAG_QDRANT_URL`` env (read into ``RAG_QDRANT_URL``
-            # in backend/config.py): when set, connect to a remote
-            # Qdrant server (the real Rust binary, enables HNSW,
-            # payload indexes, multi-worker FastAPI). When empty,
-            # default behavior is unchanged: embedded local-mode
-            # client backed by ``data/qdrant/``. One config flip;
-            # the rest of the codebase doesn't care.
-            from backend.config import RAG_QDRANT_URL
-            if RAG_QDRANT_URL:
-                self._qdrant_client = QdrantClient(url=RAG_QDRANT_URL)
-                logger.info(
-                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}"
-                )
-            else:
-                os.makedirs(config.qdrant_dir, exist_ok=True)
-                self._qdrant_client = QdrantClient(path=config.qdrant_dir)
-                logger.info(
-                    f"Initialized Qdrant local client at {config.qdrant_dir}"
-                )
+            # Embedded Qdrant client backed by ``data/qdrant/``. Only
+            # one process can hold the storage lock — the FastAPI app
+            # must run with ``--workers 1``. Server-mode (the previous
+            # ``RAG_QDRANT_URL`` branch that did ``QdrantClient(url=...)``)
+            # was removed in May 2026 for code-path simplicity. If you
+            # ever need concurrent multi-worker access, re-introduce
+            # a remote-URL branch alongside this one — the call sites
+            # (``self._qdrant_client``) don't care which mode produced it.
+            os.makedirs(config.qdrant_dir, exist_ok=True)
+            self._qdrant_client = QdrantClient(path=config.qdrant_dir)
+            logger.info(
+                f"Initialized Qdrant local client at {config.qdrant_dir}"
+            )
 
             # Universal cleanup registration — fires on every exit
             # path that runs Python code (everything except SIGKILL

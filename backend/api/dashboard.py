@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Any
 
 from backend.db.database import get_db
-from backend.db.models import Paper, PaperEntity
+from backend.db.models import Paper, Entity, PaperEntity
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -17,7 +17,7 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
         total_papers_result = await db.execute(select(func.count(Paper.id)))
         total_papers = total_papers_result.scalar() or 0
 
-        total_entities_result = await db.execute(select(func.count(PaperEntity.id)))
+        total_entities_result = await db.execute(select(func.count()).select_from(PaperEntity))
         total_entities = total_entities_result.scalar() or 0
 
         total_journals_result = await db.execute(
@@ -44,8 +44,9 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
         papers_by_journal = [{"name": row[0], "value": row[1]} for row in papers_by_journal_result.all()]
 
         entity_distribution_result = await db.execute(
-            select(PaperEntity.label, func.count(PaperEntity.id).label("count"))
-            .group_by(PaperEntity.label)
+            select(Entity.label, func.count().label("count"))
+            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
+            .group_by(Entity.label)
             .order_by(desc("count"))
         )
         entity_distribution = [{"name": row[0].title(), "value": row[1]} for row in entity_distribution_result.all()]
@@ -60,11 +61,12 @@ async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
 
         geo_result = await db.execute(
             select(
-                func.json_extract(PaperEntity.metadata_json, '$.country').label("country"),
-                func.count(func.distinct(PaperEntity.paper_id)).label("count")
+                Entity.country.label("country"),
+                func.count(func.distinct(PaperEntity.paper_id)).label("count"),
             )
-            .where(PaperEntity.label == 'LOCATION')
-            .group_by("country")
+            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
+            .where(Entity.label == 'LOCATION', Entity.country.is_not(None))
+            .group_by(Entity.country)
             .order_by(desc("count"))
         )
         geo_distribution = [{"name": row[0], "value": row[1]} for row in geo_result.all() if row[0]]
@@ -97,12 +99,13 @@ async def get_sunburst_data(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(
             select(
-                PaperEntity.label,
-                PaperEntity.canonical_text,
-                func.sum(PaperEntity.mention_count).label("value")
+                Entity.label,
+                Entity.display_text.label("name"),
+                func.sum(PaperEntity.mention_count).label("value"),
             )
-            .group_by(PaperEntity.label, PaperEntity.canonical_text)
-            .order_by(PaperEntity.label, desc("value"))
+            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
+            .group_by(Entity.id, Entity.label, Entity.display_text)
+            .order_by(Entity.label, desc("value"))
         )
         rows = result.all()
 
@@ -145,62 +148,62 @@ async def get_graph3d_data(db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(
                 PaperEntity.paper_id,
-                PaperEntity.label,
-                PaperEntity.canonical_text,
+                Entity.label,
+                Entity.display_text.label("canonical"),
+                Entity.id.label("entity_id"),
                 PaperEntity.mention_count,
             )
-            .where(PaperEntity.label.in_(INCLUDED_LABELS))
+            .join(Entity, PaperEntity.entity_id == Entity.id)
+            .where(Entity.label.in_(INCLUDED_LABELS))
         )
         rows = result.all()
 
         if not rows:
             return {"nodes": [], "links": []}
 
-        # Build entity nodes
-        node_map: dict[str, dict] = {}
-        for paper_id, label, canonical, count in rows:
-            key = f"{label}::{canonical}"
-            if key not in node_map:
-                node_map[key] = {
-                    "id": key,
+        # Build entity nodes keyed by entity_id (stable integer PK)
+        node_map: dict[int, dict] = {}
+        for paper_id, label, canonical, entity_id, count in rows:
+            if entity_id not in node_map:
+                node_map[entity_id] = {
+                    "id": f"e{entity_id}",
                     "name": canonical,
                     "label": label,  # CHEMICAL | SPECIES | LOCATION
                     "count": 0,
                     "paper_ids": set(),
                 }
-            node_map[key]["count"] += (count or 0)
-            node_map[key]["paper_ids"].add(paper_id)
+            node_map[entity_id]["count"] += (count or 0)
+            node_map[entity_id]["paper_ids"].add(paper_id)
 
         # Build co-occurrence: entities in same paper
-        # Group entities by paper_id first
-        paper_entity_keys: dict[int, list[str]] = defaultdict(list)
-        for paper_id, label, canonical, _ in rows:
-            key = f"{label}::{canonical}"
-            if key not in paper_entity_keys[paper_id]:
-                paper_entity_keys[paper_id].append(key)
+        # Group entity_ids by paper_id first
+        paper_entity_ids: dict[int, list[int]] = defaultdict(list)
+        for paper_id, _label, _canonical, entity_id, _count in rows:
+            if entity_id not in paper_entity_ids[paper_id]:
+                paper_entity_ids[paper_id].append(entity_id)
 
         # Link every pair of entities in the same paper
         link_map: dict[tuple, int] = defaultdict(int)
-        for paper_id, keys in paper_entity_keys.items():
-            keys_sorted = sorted(keys)
-            for i in range(len(keys_sorted)):
-                for j in range(i + 1, len(keys_sorted)):
-                    link_map[(keys_sorted[i], keys_sorted[j])] += 1
+        for paper_id, ids in paper_entity_ids.items():
+            ids_sorted = sorted(ids)
+            for i in range(len(ids_sorted)):
+                for j in range(i + 1, len(ids_sorted)):
+                    link_map[(ids_sorted[i], ids_sorted[j])] += 1
 
         nodes = [
             {
-                "id": k,
+                "id": v["id"],
                 "name": v["name"],
                 "label": v["label"],
                 "count": v["count"],
                 "paper_count": len(v["paper_ids"]),
             }
-            for k, v in sorted(node_map.items(), key=lambda x: -x[1]["count"])
+            for _eid, v in sorted(node_map.items(), key=lambda x: -x[1]["count"])
         ]
 
         # Filter: only keep links with weight >= 2 (entity appears in >= 2 papers together)
         links = [
-            {"source": k[0], "target": k[1], "weight": w}
+            {"source": f"e{k[0]}", "target": f"e{k[1]}", "weight": w}
             for k, w in sorted(link_map.items(), key=lambda x: -x[1])
             if w >= 2
         ]
