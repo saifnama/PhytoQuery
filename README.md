@@ -1,307 +1,467 @@
 # PhytoQuery
 
-A research paper reader with Named Entity Recognition (NER) for phytochemical and ethnobotanical research. Retrieves papers from Europe PMC, parses JATS XML, and renders content with dictionary-backed entity highlighting.
+A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and natural-product chemistry**. Fetches papers from Europe PMC / OpenAlex / PubMed, parses JATS XML, renders full-text inline with dictionary-backed entity highlighting, lets you upload PDFs for hybrid retrieval-augmented chat, and indexes extracted entities into a SQLite knowledge base that powers dashboards and graph views.
+
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                         React 19 + Vite (TS)                        │
+ │  Paper Reader | Search | Chat (RAG) | NER | Dashboard | Graph 3D    │
+ └─────────────────────────────────────────────────────────────────────┘
+                                  │
+                          REST / NDJSON streams
+                                  │
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                  FastAPI backend (async, uvicorn)                   │
+ │                                                                     │
+ │   ┌────────────┐  ┌────────────┐  ┌─────────────┐  ┌──────────────┐ │
+ │   │ Paper svc  │  │ NER engine │  │ RAG engine  │  │ Dashboard svc│ │
+ │   │ EuropePMC  │  │ spaCy +    │  │ Qwen3-Emb / │  │ SQLA per-    │ │
+ │   │ OpenAlex   │  │ LLM        │  │ bge-m3 +    │  │ type schema  │ │
+ │   │ PubMed     │  │ assist     │  │ zerank-2    │  │              │ │
+ │   └────────────┘  └────────────┘  └─────────────┘  └──────────────┘ │
+ │         │                │               │                  │      │
+ └─────────┼────────────────┼───────────────┼──────────────────┼──────┘
+           │                │               │                  │
+           ▼                ▼               ▼                  ▼
+   ┌──────────────┐ ┌────────────┐ ┌──────────────┐  ┌─────────────────┐
+   │ Europe PMC / │ │ Gazetteers │ │ Qdrant       │  │ SQLite (WAL)    │
+   │ OpenAlex /   │ │ (CSV →     │ │ Server       │  │ db_data/        │
+   │ PubMed APIs  │ │  pickled   │ │ (Docker, or  │  │ phytoquery.     │
+   │              │ │  Phrase-   │ │ embedded     │  │ sqlite          │
+   │              │ │  Matcher)  │ │ fallback)    │  │                 │
+   └──────────────┘ └────────────┘ └──────────────┘  └─────────────────┘
+```
+
+---
 
 ## Features
 
 ### Paper Reader
-- Auto-generated Table of Contents with 2-level hierarchy (H2 → H3)
-- Continuous smooth scrolling — all sections rendered inline
-- Scroll-spy highlighting — active section reflected in the sidebar
-- Chemical entity popups with client-side molecule rendering from SMILES strings
-- PDF download directly from paper page
+- Auto-generated 2-level TOC (H2 → H3) with scroll-spy highlighting
+- Continuous smooth scroll — every section rendered inline
+- Chemical-entity popups with client-side molecule rendering from SMILES (smiles-drawer)
+- Inline PDF download
+- Source fallback chain — DOI → Europe PMC (full text) → OpenAlex (abstract + direct PDF) → PubMed
 
 ### Search
-- Search **Europe PMC** or **OpenAlex** (select source in UI)
+- Search **Europe PMC** or **OpenAlex** (source selectable in the UI)
 - Filter by Open Access, Full Text, Article Type
 - Sort by Relevance, Citations, or Date
-- Page size: fixed at 25 results
+- Page size fixed at 25
 
 ### Chat / RAG
-- Upload PDFs and query with AI
-- Inline PDF viewer with side-by-side citation preview panel
-- Upload to RAG directly from paper (stays on page, no navigation)
-- **Structured-output citations** — schema-enforced JSON-mode follow-up call selects which retrieved chunks were used; the cross-encoder reranker then attaches `[cN]` markers to the sentence each chunk best supports. Replaces inline marker prompting (which silently dropped on list-style answers) with a guarantee: the schema rejects empty citation lists, so an answer can never be uncited.
-- **Click-to-highlight**: clicking a citation chip opens the source paper at the cited passage, with the exact sentence flash-highlighted via byte-precise `body_start`/`body_end` offsets recorded at index time
-- **Dual parser**: PyMuPDF (fast) or Docling (detailed, structure-preserving)
-- **Hybrid retrieval**: dense vectors (Qdrant HNSW) + BM25 keyword matching with server-side Reciprocal Rank Fusion. Sparse vectors stored alongside dense vectors per point via Qdrant's native named-vectors schema (`Modifier.IDF` for BM25 scoring); a single `query_points(prefetch=[dense, sparse], FusionQuery(RRF))` call runs the hybrid merge in Qdrant rather than Python. Tokenization uses FastEmbed's `Qdrant/bm25` (stemming + stop-word removal + IDF weighting) — measurable retrieval quality improvement on scientific text vs naive whitespace split.
-- **Parallel ingestion**: per-user upload jobs parse PDFs concurrently via `ThreadPoolExecutor` (PyMuPDF and Docling both release the GIL); per-file `try/except` so one bad PDF can't kill a 1000-PDF batch; flushes to Qdrant every 50 files so peak RAM is bounded and partial progress survives a crash
-- **Chunked upload**: the frontend slices large multi-file uploads into 20-PDF batches so reverse-proxy body limits (nginx, Cloudflare 100 MB) don't trip on multi-GB selections
-- **Instruction-Aware Architecture**: Custom domain prompts for both embedding (Qwen3) and reranking (zerank-2)
-- **MRL Truncation**: Storage-efficient vectors (1024 dims) using Matryoshka Representation Learning
-- **Lazy model loading**: RAG models only load on first use (~200MB startup)
-- **Permissive JSON parsing**: `json-repair` recovers from trailing commas, code fences, single quotes, and unclosed braces in LLM JSON-mode output — no extra LLM call needed
+- Upload PDFs, ask questions, get cited answers
+- **Hybrid retrieval** — Qdrant runs the dense + sparse fusion natively. Dense vectors (Qwen3-Embedding-4B at 1024 dims via MRL truncation, or bge-m3 fallback at 1024 native) and sparse BM25 vectors (FastEmbed's `Qdrant/bm25`, IDF-weighted with stemming + stop-word removal) live on the same point under named-vector slots. A single `query_points(prefetch=[dense, sparse], FusionQuery(RRF))` call runs the Reciprocal Rank Fusion server-side — no Python-side merge.
+- **Cross-encoder rerank** — `zeroentropy/zerank-2` reranks the fused top-N
+- **Structured-output citations** — schema-enforced JSON-mode follow-up selects which retrieved chunks were used; the reranker attaches `[cN]` markers to the sentence each chunk best supports. The schema rejects empty citation lists, so answers cannot be uncited.
+- **Click-to-highlight** — clicking a `[cN]` chip jumps to the source paper and flash-highlights the exact sentence via byte-precise `body_start`/`body_end` offsets recorded at index time
+- **Dual parsers** — PyMuPDF (fast) or Docling (detailed, table/structure-preserving)
+- **Parallel ingestion** — per-user upload jobs run PDFs concurrently in a `ThreadPoolExecutor` (PyMuPDF and Docling both release the GIL); per-file `try/except` so one bad PDF can't kill a 1000-PDF batch; flush to Qdrant every 50 files so peak RAM stays bounded and partial progress survives a crash
+- **Chunked uploads** — the frontend slices large multi-file uploads into 20-PDF batches so reverse-proxy body limits (nginx, Cloudflare 100 MB) don't trip on multi-GB selections
+- **Embedding-dim safety** — `_ensure_qdrant_collection` clamps `RAG_EMBEDDING_DIM` to the loaded model's native dim. MRL truncation can shrink but never expand; configuring 1024 with a 384-dim fallback model now warns and creates the collection at 384, instead of failing every upload after the fact.
+- **Permissive JSON parsing** — `json-repair` recovers the structured citation object from common LLM JSON-mode malformations (trailing commas, code fences, single quotes, unclosed braces) with no extra LLM round-trip
+- **Lazy model loading** — RAG models load on first use, ~200 MB startup footprint
 
 ### Named Entity Recognition (NER)
-- **Dictionary-backed**: PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
-- **LLM-assisted** (requires OpenRouter/Ollama config)
-- Click "Find Key Terms" to run extraction
-- Entities highlighted inline and grouped in sidebar
-- **Graph View**: Interactive, physics-based knowledge graph linking DOI to extracted entities
-- Export to CSV
+- **Dictionary-backed** matchers (spaCy PhraseMatcher with stemmed surface forms): PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
+- **LLM-assisted** path (requires Ollama / Groq / OpenRouter / llama.cpp config)
+- Entities highlighted inline and grouped in a sidebar; CSV export
+- **Graph View** — physics-based knowledge graph linking the paper's DOI to its extracted entities (vis-network)
 
-### Source Fallbacks
-- DOI → Europe PMC (full text) → OpenAlex (abstract + direct PDF)
-- PMID → Europe PMC → PubMed
-- PMCID → Europe PMC → NCBI PMC
+### Dashboards (over the SQLite knowledge base)
+- Per-entity-type counts and timelines
+- Journal-distribution widget, entity doughnut, publication timeline
+- Plant-origin geo heatmap (ECharts `effectScatter`)
+- 3D entity-co-occurrence graph
+
+---
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Backend | FastAPI (Python), uvicorn (dev server) |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4 |
-| Frontend routing | TanStack Router (file-based routes, typed search params via Zod, scroll restoration, route-level error/404 fallbacks) |
-| Frontend UI | shadcn/ui (Radix primitives + class-variance-authority), Phosphor Icons, `tw-animate-css`, Sonner toasts |
-| Frontend state | Zustand (client UI), TanStack Query (server data + polling cache) |
-| NLP | spaCy PhraseMatcher (dictionary-backed) |
-| Embeddings | Qwen3-Embedding-4B (primary), BAAI/bge-m3 (fallback) |
-| Reranker | zeroentropy/zerank-2 (CrossEncoder) |
-| RAG | LangChain, Qdrant (embedded, native hybrid), sentence-transformers, FastEmbed (Qdrant/bm25 sparse), json-repair |
-| PDF Parsing | Docling (detailed), PyMuPDF/fitz (fast) |
-| Charts | ECharts (dashboard: journal distribution widget, entity doughnut, publication timeline, plant-origin geo heatmap with `effectScatter`) |
-| Graph | vis-network (per-paper knowledge graph, lazy-loaded) |
-| Molecules | smiles-drawer (chemical structure rendering from SMILES strings) |
-| Sanitization | nh3 (server), DOMPurify (client) |
-| Paper Sources | Europe PMC API, OpenAlex API |
-| LLM | Groq / OpenRouter / Ollama (provider-agnostic dispatch) |
-| Config | python-dotenv (.env files per environment) |
+| Layer | Tech |
+|-------|------|
+| Backend | FastAPI 0.136, uvicorn (uvloop on Linux/macOS), Python 3.10 → 3.14 |
+| Frontend | React 19.2, Vite 8, TypeScript 5.9, Tailwind CSS v4 |
+| Routing | TanStack Router (file-based, Zod-typed search params, scroll restoration, route-level error/404 fallbacks) |
+| UI | shadcn/ui (Radix primitives + CVA), Phosphor Icons, `tw-animate-css`, Sonner toasts |
+| Client state | Zustand (UI), TanStack Query (server data + polling) |
+| Dictionary NER | spaCy 3.8 PhraseMatcher |
+| Embeddings | Qwen/Qwen3-Embedding-4B (primary, 2560 native → 1024 via MRL), BAAI/bge-m3 (fallback, 1024 native) |
+| Reranker | zeroentropy/zerank-2 (CrossEncoder, ~1 GB) |
+| Vector DB | Qdrant 1.18 — Server (Docker) or embedded local, hybrid dense + sparse named vectors |
+| Sparse encoder | FastEmbed `Qdrant/bm25` (IDF-weighted, stemming, stop-words) |
+| RAG glue | LangChain 1.2, langchain-qdrant 1.1, json-repair |
+| PDF parsing | Docling 2.92 (detailed, structure-preserving), PyMuPDF / fitz 1.27 (fast) + pymupdf4llm |
+| Charts | ECharts |
+| Graph | vis-network (per-paper KG, lazy-loaded) |
+| Molecules | smiles-drawer (SMILES → 2D structure) |
+| Sanitization | nh3 (server, Rust-backed), DOMPurify (client) |
+| Paper sources | Europe PMC API, OpenAlex API, PubMed eutils |
+| RAG LLM | llama.cpp / vLLM / LM Studio (OpenAI-compatible) > Groq > OpenRouter > Ollama |
+| NER LLM | llama.cpp > Ollama > Groq > OpenRouter |
+| Knowledge base | SQLite (WAL, FK on, busy-timeout) + async SQLAlchemy (`sqlite+aiosqlite`) |
+| Config | python-dotenv + per-environment `.env.<profile>` switching |
 
-## Project Structure
+---
 
-```
-PhytoQuery/
-├── backend/
-│   ├── api/           # FastAPI endpoints
-│   │   ├── paper.py    # Paper fetching with fallback
-│   │   ├── search.py   # Europe PMC search
-│   │   ├── rag.py       # RAG chat endpoints
-│   │   ├── ner.py       # Standalone NER
-│   │   └── doi.py      # DOI abstract fallback
-│   ├── core/           # Utilities
-│   │   ├── caching.py   # Simple file-based cache
-│   │   ├── sanitizer.py # HTML sanitization
-│   │   ├── highlighter.py # Entity highlighting
-│   │   └── http_client.py # HTTP abstraction
-│   ├── services/       # Business logic
-│   │   ├── europe_pmc/ # Paper fetching/parsing
-│   │   ├── openalex/  # OpenAlex API integration
-│   │   ├── ner_engine.py # NER pipeline
-│   │   ├── rag_engine.py # RAG + chat
-│   │   └── doi_resolver.py # DOI fallback sources
-│   ├── gazetteer/      # Dictionary matchers
-│   │   ├── data/       # CSV dictionaries
-│   │   └── *_matcher.py # spaCy PhraseMatcher
-│   └── tests/         # pytest tests
-├── frontend/           # React app
-│   ├── src/
-│   │   ├── features/    # Page components
-│   │   ├── layout/      # Header, Sidebar
-│   │   ├── components/  # App-level shared components (UploadStatusListener, …)
-│   │   ├── stores/      # Zustand stores (uploadStore, …)
-│   │   ├── hooks/       # TanStack Query hooks (useIndexedFiles, useUploadJobStatus, …)
-│   │   ├── ui/          # Reusable UI primitives (ErrorBoundary, …)
-│   │   └── lib/         # API client (axios + ragApi/paperApi)
-│   └── dist/        # Built output
-├── data/             # Runtime data
-│   ├── cache/       # Paper & NER cache
-│   ├── qdrant/      # Embedded Qdrant storage: per-user collections with named dense + sparse vectors, plus per-user parent JSON
-│   └── uploads/     # Uploaded PDFs (per-user folders)
-└── README.md
-```
+## Quick start
 
-## Quick Start
+### Prerequisites
+- Python 3.10+ (3.12 recommended; 3.14 works with the threading guards in `backend/app.py`)
+- Node.js 18+ or [Bun](https://bun.sh/) for the frontend
+- Docker (for Qdrant Server — the recommended setup). Rootless Docker or membership in the `docker` group is enough; no `sudo` required.
 
-### 1. Backend Setup
+### 1. Start Qdrant
+
+The bundled helper handles container lifecycle, storage paths, and a health probe. Same subcommands on every OS:
 
 ```bash
-# Create and activate virtual environment
+# Linux / macOS
+./scripts/qdrant.sh start          # creates on first run; idempotent
+./scripts/qdrant.sh status         # state + health + collection count
+./scripts/qdrant.sh stop           # stops, keeps storage on disk
+./scripts/qdrant.sh restart
+./scripts/qdrant.sh logs           # tail -f
+./scripts/qdrant.sh remove         # delete container; storage preserved
+```
+
+```powershell
+# Windows
+.\scripts\qdrant.ps1 start
+.\scripts\qdrant.ps1 status
+.\scripts\qdrant.ps1 stop
+.\scripts\qdrant.ps1 restart
+.\scripts\qdrant.ps1 logs
+.\scripts\qdrant.ps1 remove
+```
+
+Defaults:
+
+| Setting | Linux/macOS | Windows |
+|---------|-------------|---------|
+| Container name | `phytoquery-qdrant` | `pq_qdrant` |
+| Storage | `~/.local/share/phytoquery/qdrant_storage` | `%LOCALAPPDATA%\phytoquery\qdrant_storage` |
+| Image | `qdrant/qdrant:v1.18.0` | same |
+| REST port | 6333 | same |
+| gRPC port | 6334 | same |
+
+Override any of them with env vars: `QDRANT_CONTAINER`, `QDRANT_STORAGE_DIR`, `QDRANT_VERSION`, `QDRANT_PORT_REST`, `QDRANT_PORT_GRPC`. Once it's up, the helper prints the REST URL (`http://localhost:6333`) and the Web UI URL (`http://localhost:6333/dashboard`).
+
+> **Don't have Docker?** You can fall back to embedded mode by leaving `RAG_QDRANT_URL` unset — the backend will use an in-process Qdrant client backed by `data/qdrant/`. See [Embedded mode caveats](#embedded-mode-caveats) below.
+
+### 2. Backend
+
+```bash
+# create a venv
 python -m venv phytovenv
 
-# Windows (CMD)
-phytovenv\Scripts\activate
+# activate
+phytovenv\Scripts\Activate.ps1       # Windows PowerShell
+phytovenv\Scripts\activate           # Windows CMD
+source phytovenv/bin/activate        # Linux / macOS
 
-# Windows (PowerShell)
-phytovenv\Scripts\Activate.ps1
-
-# Linux/Mac
-source phytovenv/bin/activate
-
-# Install dependencies
+# deps
 pip install -r backend/requirements.txt
-
-# Download spaCy model (for dictionary matchers)
 python -m spacy download en_core_web_sm
 
-# Run backend
+# point at Qdrant + configure providers (see "Configuration" below)
+cp .env.example .env
+# edit .env — at minimum set RAG_QDRANT_URL and one LLM provider
 
-# Option 1: Via uvicorn (recommended for dev)
-# From PhytoQuery directory:
-cd C:\Users\saif\saifnama_lab\PhytoQuery
+# run
 uvicorn backend.app:app --host 0.0.0.0 --port 8000
-
-# Option 2: Direct Python
-cd C:\Users\saif\saifnama_lab\PhytoQuery
-python -m backend.app --host 0.0.0.0 --port 8000
 ```
 
-#### Production deployment (single-worker only)
+`backend/app.py` sets a few env-var floors **before any ML library imports**, to keep fastembed / transformers / torch from spawning over-eager worker pools and segfaulting on Python 3.14:
 
-The embedded Qdrant client (`QdrantClient(path="data/qdrant/")`) holds
-an exclusive file lock on its storage directory, so the backend MUST
-run with `--workers 1`:
-
-```bash
-uvicorn backend.app:app --host 0.0.0.0 --port 8000 --workers 1
+```
+LOKY_MAX_CPU_COUNT=1
+TOKENIZERS_PARALLELISM=false
+OMP_NUM_THREADS=ceil(cpu_count / 2)
+MKL_NUM_THREADS=ceil(cpu_count / 2)
 ```
 
-Multi-worker mode (`--workers N > 1`) is not supported with the current
-setup — every worker would fight for the same Qdrant lock and all but
-one would fail with "database is locked". If you need horizontal
-scaling, either run multiple FastAPI instances behind a reverse proxy
-(each pointing at its own `data/qdrant/` directory), or re-introduce a
-server-mode branch in `backend/services/rag_engine.py` that connects
-multiple workers to one remote Qdrant via HTTP.
+All four use `setdefault`, so anything you `export` (or set in `.env` / Slurm batch) wins.
 
-### 2. Frontend Setup
+### 3. Frontend
 
 ```bash
 cd frontend
-bun install
-bun run dev
+bun install        # or: npm install / pnpm install
+bun run dev        # http://localhost:5173 (dev server, HMR)
+
+# OR — production build, served by the FastAPI process itself
+bun run build      # writes frontend/dist/
+# then visit http://localhost:8000 — FastAPI serves the SPA + API on one port
 ```
 
-### 3. Access
+### 4. Workers
 
-Open http://localhost:8000
+| Qdrant mode | `uvicorn --workers` | Notes |
+|-------------|---------------------|-------|
+| **Server (Docker)** | any N | All workers share one Qdrant Server over HTTP/gRPC. Recommended for production. |
+| **Embedded (local)** | **1 only** | The embedded client takes an exclusive `flock()` on its storage directory; multi-worker deadlocks immediately. |
+
+---
 
 ## Configuration
 
-### Environment Variables
+### Profiles — one-switch environment selection
 
-PhytoQuery uses `.env` files for per-environment configuration. Copy a preset:
+Set **one** env var and the matching `.env.<profile>` file loads automatically:
 
 ```bash
-# Institute server (A100 GPU):
-cp .env.server .env
-
-# MacBook M4 Pro (24GB):
-cp .env.macbook .env
+export PHYTOQUERY_PROFILE=macbook    # loads .env.macbook
+export PHYTOQUERY_PROFILE=server     # loads .env.server  (A100 / Slurm)
+export PHYTOQUERY_PROFILE=demo       # loads .env.demo  (if you create it)
 ```
 
-> **Priority**: Real env vars (e.g., Slurm's `CUDA_VISIBLE_DEVICES`) always override `.env` values.
+Precedence (highest → lowest):
 
-#### GPU Auto-Detection
+1. **Real OS env vars** — Slurm's `CUDA_VISIBLE_DEVICES`, `docker run -e`, systemd `Environment=` — always win
+2. **`.env.<PHYTOQUERY_PROFILE>`** — profile-specific overrides
+3. **`.env`** — base / shared defaults
+4. **Defaults in `backend/config.py`**
 
-| Environment | How It Works |
-|---|---|
-| Slurm A100 | Slurm sets `CUDA_VISIBLE_DEVICES` → PyTorch detects CUDA → uses GPU |
-| MacBook M4 | PyTorch detects `torch.backends.mps` → uses Apple Metal GPU |
-| Windows/CPU | No GPU detected → uses CPU |
+Set the profile **once per environment** (shell rc, systemd unit, Slurm batch script, `docker run -e`) and the right values load automatically. Replaces the old `cp .env.macbook .env` shuffle.
 
-#### RAG Settings
+The legacy workflow still works if you prefer it — just copy the right preset to `.env`:
+
 ```bash
-# Embedding model
-# Primary: BAAI/bge-m3 (great quality, ~2GB RAM, recommended for testing)
-# Fallback: BAAI/bge-small-en-v1.5 (~130MB, blazing fast)
-# Production: Qwen/Qwen3-Embedding-4B (~8GB VRAM, best quality)
-RAG_EMBEDDING_MODEL=BAAI/bge-m3
-RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+cp .env.server .env       # or cp .env.macbook .env
+```
 
-# MRL dimension truncation (None=full 2560, 1024=balanced, 512=fast)
+### LLM providers
+
+PhytoQuery dispatches across four providers per pipeline. The **first one with credentials wins**; the rest stand by as fallbacks.
+
+**RAG priority:** llama.cpp (or any OpenAI-compatible self-host) → Groq → OpenRouter → Ollama
+
+```bash
+# Self-hosted OpenAI-compatible (highest priority when URL is set —
+# explicit opt-in always wins). Works with llama.cpp `server`, vLLM,
+# LM Studio, LocalAI, Text Generation WebUI. URL accepts any of:
+#   https://name.trycloudflare.com
+#   https://name.trycloudflare.com/v1
+#   https://name.trycloudflare.com/v1/chat/completions
+# RAG_LLAMACPP_URL=https://your-name.trycloudflare.com
+# RAG_LLAMACPP_MODEL=qwen2.5-7b-instruct
+# RAG_LLAMACPP_API_KEY=               # optional; only if server uses --api-key
+
+# Groq (fastest cloud, generous free tier — https://console.groq.com/keys)
+RAG_GROQ_API_KEY=gsk_...
+RAG_GROQ_MODEL=llama-3.3-70b-versatile
+
+# OpenRouter (diverse model catalog)
+RAG_OPENROUTER_API_KEY=sk-or-v1-...
+RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+
+# Ollama (local fallback — uses /api/chat, NOT OpenAI-compatible)
+RAG_OLLAMA_URL=http://localhost:11434
+RAG_OLLAMA_MODEL=llama3.1:8b
+```
+
+**NER priority:** llama.cpp → Ollama → Groq → OpenRouter (local-first; bulk per-paper extraction is cheaper local)
+
+```bash
+# NER_LLAMACPP_URL=https://your-name.trycloudflare.com
+NER_OLLAMA_URL=http://localhost:11434
+NER_OLLAMA_MODEL=llama3.1:8b
+NER_GROQ_API_KEY=gsk_...
+NER_OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+### Qdrant — server vs embedded
+
+```bash
+# Server mode (recommended). Leave unset for embedded.
+RAG_QDRANT_URL=http://localhost:6333
+# Optional bearer (Qdrant Cloud, or any server started with --service.api_key=...)
+# RAG_QDRANT_API_KEY=
+
+# Embedded mode storage path. Only consulted when RAG_QDRANT_URL is empty.
+# Leave empty for default `<repo>/data/qdrant/`. ~ is expanded; relative
+# paths resolve to absolute at startup.
+# RAG_QDRANT_DIR=
+```
+
+### Embedding + reranker
+
+```bash
+RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
+RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-m3
+
+# MRL (Matryoshka) truncation. The new safety clamp means:
+#   * If RAG_EMBEDDING_DIM <= model_dim: used verbatim (truncates down)
+#   * If RAG_EMBEDDING_DIM >  model_dim: clamped to model_dim + warning
+# So setting 1024 here is safe regardless of which model actually loaded.
 RAG_EMBEDDING_DIM=1024
 
-# Domain-specific instruction for embedding (Qwen3 only)
-RAG_EMBEDDING_INSTRUCTION="Instruct: Given a scientific query about phytochemistry, biology, or natural products, retrieve relevant research passages."
+RAG_EMBEDDING_INSTRUCTION=Instruct: Given a scientific query about phytochemistry, biology, or natural products, retrieve relevant research passages.
 
-# Reranker
-# Testing: cross-encoder/ms-marco-MiniLM-L-6-v2 (~90MB)
-# Production: zeroentropy/zerank-2 (~1GB)
-RAG_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RAG_RERANKER_MODEL=zeroentropy/zerank-2     # commercial: zerank-1-small (Apache-2.0)
 
-# GPU acceleration (CUDA only)
+# GPU settings (CUDA only)
 RAG_USE_FLASH_ATTENTION=true
-RAG_MULTI_GPU=false
+RAG_MULTI_GPU=true
 
-# RAG Tuning
+# Retrieval tuning
 RAG_TEMPERATURE=0.1
 RAG_CONTEXT_WINDOW=8192
 RAG_TOP_K=10
 RAG_SIMILARITY_THRESHOLD=0.85
 ```
 
-#### LLM Providers
+### GPU auto-detection
 
-PhytoQuery supports three LLM backends. Configure as many as you want — the
-first configured one in the priority order is used, the rest are fallbacks
-if the primary errors out.
+| Environment | Behaviour |
+|-------------|-----------|
+| Slurm A100 / 4090 | Slurm sets `CUDA_VISIBLE_DEVICES` → PyTorch picks CUDA |
+| MacBook (M-series) | `torch.backends.mps` available → Apple Metal |
+| Windows / CPU box | No GPU detected → CPU |
 
-**RAG priority: Groq → OpenRouter → Ollama** (cloud-fast → cloud-diverse → local)
+Force a specific device with `RAG_DEVICE=cuda|mps|cpu` if auto-detection picks wrong.
 
-```bash
-# Groq (recommended — fastest cloud, generous free tier)
-# Get a key at https://console.groq.com/keys
-RAG_GROQ_API_KEY=gsk_...
-RAG_GROQ_MODEL=llama-3.3-70b-versatile
+---
 
-# OpenRouter (diverse model selection)
-RAG_OPENROUTER_API_KEY=sk-or-v1-...
-RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+## API endpoints
 
-# Ollama (local fallback)
-RAG_OLLAMA_URL=http://localhost:11434
-RAG_OLLAMA_MODEL=llama3.1:8b
-```
+### Paper
+| Endpoint | Method | What |
+|----------|--------|------|
+| `/paper/json` | POST | Fetch a paper by DOI/PMCID/PMID (`source: europepmc \| openalex`) |
+| `/paper/section/json` | POST | Switch the rendered section |
+| `/paper/pdf?identifier=…` | GET | Download the paper PDF |
+| `/paper/pdf-proxy?url=…` | GET | CORS-friendly PDF proxy |
+| `/paper/db/list` | GET | Paginated list of indexed papers (knowledge base) |
+| `/paper/db/{doi}/entities` | GET | All entities for a paper, grouped by type |
 
-**NER priority: Ollama → Groq → OpenRouter** (local-first for bulk extraction)
-
-```bash
-# Ollama (primary — local, fast for bulk per-paper extraction)
-NER_OLLAMA_URL=http://localhost:11434
-NER_OLLAMA_MODEL=llama3.1:8b
-
-# Groq (cloud-fast fallback)
-NER_GROQ_API_KEY=gsk_...
-NER_GROQ_MODEL=llama-3.3-70b-versatile
-
-# OpenRouter (cloud-diverse fallback)
-NER_OPENROUTER_API_KEY=sk-or-v1-...
-NER_OPENROUTER_MODEL=qwen/qwen3.6-plus:free
-```
-
-> Groq and OpenRouter both speak OpenAI-compatible chat completions, so
-> swapping between them is a one-line config change. Ollama uses its own
-> `/api/chat` schema, so the URL must include the host:port (no trailing
-> path).
-
-### Dictionary Matchers
-
-Gazetteer CSV files in `backend/gazetteer/data/`:
-- `chemical.csv` — 107K+ compounds
-- `species.csv` — 235K+ species
-- `plant_part.csv` — ~345 terms
-- `analytical_technique.csv` — ~184 techniques
-- `extraction_method.csv` — ~77 methods
-- `development_stage.csv` — ~45 stages
-- `season.csv` — ~55 terms
-- `bioactivity.csv` — ~124 activities
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/paper/json` | POST | Fetch paper by DOI/PMCID/PMID (source: europepmc or openalex) |
+### Search
+| Endpoint | Method | What |
+|----------|--------|------|
 | `/search/json` | POST | Search Europe PMC or OpenAlex |
-| `/api/chat/query/stream` | POST | RAG chat — NDJSON streaming (`text_delta`, `sources`, `answer_corrected`, `citations`, `done`) |
-| `/api/chat/query/json` | POST | RAG chat — non-streaming fallback |
-| `/api/chat/upload/json` | POST | Upload PDFs to RAG (returns `job_id`; processing runs in the background) |
-| `/api/chat/upload/status/{job_id}` | GET | Poll an upload job — `processing` / `completed` / `failed` |
-| `/api/chat/upload/jobs` | GET | List active upload jobs for the current session |
-| `/api/chat/files/json` | GET | List indexed files in the user's RAG corpus |
-| `/api/chat/files/{name}/markdown` | GET | Extracted markdown for the citation preview panel |
-| `/api/chat/files/{name}/content` | GET | Inline PDF viewer source |
-| `/ner/doi/json` | POST | Standalone NER |
-| `/paper/pdf` | GET | Download paper PDF |
+| `/search/types?source=openalex` | GET | Supported article-type filters per source |
+
+### NER
+| Endpoint | Method | What |
+|----------|--------|------|
+| `/ner/process` | POST | Run NER on raw text |
+| `/ner/doi/json` | POST | Run NER on a paper by DOI |
+| `/ner/cache/{doi}` | DELETE | Drop the cached NER result |
+| `/ner/upload/json` | POST | Upload a PDF for one-shot NER |
+| `/ner/uploaded/{stored_filename}` | GET / DELETE | View / delete an uploaded PDF |
+
+### RAG / Chat
+| Endpoint | Method | What |
+|----------|--------|------|
+| `/api/chat/upload/json` | POST | Upload PDFs; returns `job_id` (processing happens in the background) |
+| `/api/chat/upload/status/{job_id}` | GET | Poll a job — `processing` / `completed` / `failed` |
+| `/api/chat/upload/jobs` | GET | Active jobs for the current session |
+| `/api/chat/files/json` | GET | Indexed files in the user's corpus |
+| `/api/chat/files/{name}/markdown` | GET | Extracted markdown (for the citation preview panel) |
+| `/api/chat/files/{name}/content` | GET | Inline PDF stream for the viewer |
+| `/api/chat/files/{name}` | DELETE | Drop one source + its chunks |
+| `/api/chat/reset` | POST | Delete **all** chunks for this user |
+| `/api/chat/cleanup` | POST | Drop all user data — chunks, uploads, markdown, jobs |
+| `/api/chat/query/json` | POST | Non-streaming RAG query |
+| `/api/chat/query/stream` | POST | NDJSON streaming. Frame types: `text_delta` (token chunk), `sources` (retrieved chunk list), `answer_corrected` (final answer after the citation-attach pass), `citations` (the `[cN]` → chunk mapping), `done` (clean end), `error` (mid-stream fatal). |
+| `/api/chat/suggest` | POST | Follow-up question suggestions |
+
+### Dashboard / DOI / Health
+| Endpoint | Method | What |
+|----------|--------|------|
+| `/api/dashboard/metrics` | GET | Counts, timelines, distributions |
+| `/api/dashboard/sunburst` | GET | Hierarchical entity-type rollup |
+| `/api/dashboard/graph3d` | GET | 3D co-occurrence graph data |
+| `/doi/abstract` | GET | DOI abstract via Crossref / OpenAlex fallback |
+| `/health/ready` | GET | Readiness probe |
+
+---
+
+## Project structure
+
+```
+PhytoQuery/
+├── backend/
+│   ├── app.py                  # FastAPI app; sets ML-safe env defaults BEFORE imports
+│   ├── config.py               # env loader + provider selection
+│   ├── api/                    # FastAPI routers
+│   │   ├── paper.py            # Paper fetching + DB-backed paper endpoints
+│   │   ├── search.py           # Europe PMC / OpenAlex search
+│   │   ├── rag.py              # /api/chat/* — upload, query, stream, files, reset
+│   │   ├── ner.py              # Text/DOI NER
+│   │   ├── ner_pdf.py          # PDF-upload NER
+│   │   ├── dashboard.py        # Aggregates over the SQLite knowledge base
+│   │   ├── doi.py              # DOI abstract fallback
+│   │   └── health.py           # Readiness probe
+│   ├── core/                   # Cross-cutting utilities
+│   │   ├── caching.py          # File-based paper / NER cache
+│   │   ├── sanitizer.py        # nh3 HTML allowlist
+│   │   ├── highlighter.py      # Entity-aware HTML highlighting
+│   │   ├── http_client.py      # Shared httpx.AsyncClient lifecycle
+│   │   ├── session.py          # Signed session cookie
+│   │   ├── rag_storage.py      # Per-user upload / markdown paths
+│   │   ├── upload_jobs.py      # Background-job store (in-memory + JSON spill)
+│   │   └── user_locks.py       # Per-user asyncio.Lock for upload + reset races
+│   ├── services/
+│   │   ├── rag_engine.py       # The big one — embedder, reranker, Qdrant client,
+│   │   │                       #   collection lifecycle, dim clamp, hybrid query,
+│   │   │                       #   structured citation pass, NDJSON stream
+│   │   ├── ner_engine.py       # spaCy matchers + LLM-assist with validation/retry
+│   │   ├── search_service.py   # Europe PMC / OpenAlex search orchestration
+│   │   ├── doi_resolver.py     # DOI → full-text/abstract chain
+│   │   ├── europe_pmc/         # Europe PMC client + JATS parser
+│   │   └── openalex/           # OpenAlex client
+│   ├── gazetteer/              # spaCy PhraseMatcher dictionary backends
+│   │   ├── data/               # CSV dictionaries (see below)
+│   │   ├── build_matcher.py
+│   │   └── <type>_matcher.py
+│   ├── db/                     # SQLAlchemy models + migrations
+│   │   ├── database.py         # async engine, WAL pragmas
+│   │   ├── models.py           # Per-type schema (Paper + 7 entity tables + 7 junctions)
+│   │   ├── migrate_schema.py   # v1 → v2 migration (legacy)
+│   │   ├── migrate_schema_v2.py# One-shot per-type migration (Concrete Table Inheritance)
+│   │   └── import_entities.py  # Bulk import from Excel/CSV
+│   ├── schemas/schemas.py      # Pydantic request/response models
+│   └── tests/                  # pytest
+├── frontend/                   # React 19 + Vite 8 + TS 5.9
+│   └── src/
+│       ├── features/           # Page-level components (PaperPage, ChatPage, ...)
+│       ├── layout/             # Header, Sidebar
+│       ├── components/         # Cross-feature (UploadStatusListener, ...)
+│       ├── stores/             # Zustand (uploadStore, ...)
+│       ├── hooks/              # TanStack Query hooks
+│       ├── ui/                 # Reusable primitives (ErrorBoundary, ...)
+│       └── lib/                # API client (axios + ragApi / paperApi)
+├── scripts/
+│   ├── qdrant.sh               # Qdrant Server lifecycle helper (Linux / macOS)
+│   └── qdrant.ps1              # Same for Windows PowerShell
+├── db_data/                    # SQLite knowledge base (WAL + SHM files)
+│   └── phytoquery.sqlite
+├── data/                       # Runtime data (created lazily on first use)
+│   ├── cache/                  # Paper + NER file cache
+│   ├── qdrant/                 # Only used in embedded Qdrant mode (override with RAG_QDRANT_DIR)
+│   └── uploads/                # Per-user uploaded PDFs + extracted markdown
+├── .env.example                # Template — copy to .env or set PHYTOQUERY_PROFILE
+├── .env.macbook                # MacBook (M-series, MPS) preset
+├── .env.server                 # Institute server (A100 / Slurm) preset
+└── README.md
+```
+
+### Gazetteers (`backend/gazetteer/data/`)
+
+| File | Entries |
+|------|---------|
+| `chemical.csv` | 107K+ compounds |
+| `species.csv` | 235K+ species |
+| `plant_part.csv` | ~345 terms |
+| `analytical_technique.csv` | ~184 techniques |
+| `extraction_method.csv` | ~77 methods |
+| `development_stage.csv` | ~45 stages |
+| `season.csv` | ~55 terms |
+| `bioactivity.csv` | ~124 activities |
+
+---
 
 ## Testing
 
@@ -309,128 +469,6 @@ Gazetteer CSV files in `backend/gazetteer/data/`:
 pytest backend/tests/ -v
 ```
 
-## Troubleshooting
+The regression suite covers the RAG engine's collection lifecycle, the embedding-dim clamp, the structured citation schema, the per-user upload-job store, and the user-lock manager.
 
-### Qdrant indexing errors on PDF upload
-
-The backend recognises and auto-recovers from two Qdrant failure modes.
-If you see one of these in the logs:
-
-| Symptom in logs | What it means |
-|---|---|
-| `Wrong vector size` / `Wrong vector dimension` | The embedding-model dim changed since the collection was first created (e.g., switching from `bge-m3` 1024-dim to `Qwen3-Embedding-4B` 2560-dim). Each `RagService` derives a `model_suffix` hash and bakes it into the collection name (`user_{id}_{suffix}`) so a real model swap creates a fresh collection — but if you set `RAG_EMBEDDING_DIM` to a smaller MRL truncation after indexing at full dim, the points in the old collection no longer match. |
-| `Collection not found` / `404` from Qdrant | The cached `QdrantVectorStore` wrapper still references a collection name that has since been dropped (e.g., manual `rm -rf data/qdrant`). The wrapper cache lives in-process so it survives the deletion. |
-
-**Auto-recovery (already in place).** `services/rag_engine.py` does
-three things to recover without manual intervention:
-
-- The indexing retry path in `process_and_index_pdfs_with_texts` detects
-  either signature (substring match on the exception message) and calls
-  `_invalidate_user_collection(user_id)` to drop the stale wrapper from
-  the in-process cache. If the failure looks like dimension drift, it
-  also calls `_reset_user_chroma_in_place(user_id)` which delegates to
-  Qdrant's `client.delete_collection(...)` — clean, atomic, no
-  filesystem operations.
-- The retry then re-deletes the affected sources, re-creates the
-  collection on first access (`_ensure_qdrant_collection` is idempotent),
-  and re-runs `add_documents`. The user sees the upload finish
-  successfully on a transparent retry.
-- Sparse vectors live alongside dense vectors on each point, so any
-  collection reset/delete removes both atomically — no separate cache
-  to invalidate and no possibility of stale BM25 serving results from
-  a dropped corpus.
-
-**Why this is simpler than the old Chroma path.** Earlier versions used
-embedded ChromaDB (SQLite under the hood), which had a class of
-"moved-inode readonly" failures on macOS/Linux when a directory was
-deleted underneath an open connection. Qdrant's embedded client doesn't
-have that pathology — it operates on its own page-locked storage and
-recovers cleanly from `delete_collection` followed by re-creation.
-
-**Manual recovery** (only if auto-recovery somehow loops):
-
-```bash
-# Stop the backend process first.
-# macOS / Linux:
-rm -rf data/qdrant
-# Windows (PowerShell):
-Remove-Item -Recurse -Force data\qdrant
-# Restart the backend; the directory is recreated cleanly on next upload.
-```
-
-Only Qdrant collection storage (dense + sparse vectors) and parent
-stores are dropped — uploaded PDFs in `data/uploads/` and the paper
-cache in `data/cache/` are untouched.
-
-### `Reranking failed: cannot reshape tensor of 0 elements into shape [...]`
-
-**Cause.** The cross-encoder reranker's tokenizer produced a zero-length
-sequence for at least one (query, passage) pair. PyTorch then can't infer
-the `-1` dimension when reshaping a tensor of 0 elements (`8 × 0 × ? × 128`
-is 0 for any value of `?`).
-
-This happens when the query is empty / whitespace-only, or a passage
-slipped through with no extractable text after tokenization.
-
-**The code already handles this.** `rag_engine.py` does three layers of
-defence:
-
-1. **Filter out blank passages** before building rerank pairs.
-2. **Skip rerank entirely** if the query string is empty.
-3. **Drop pairs where either side is whitespace-only** before calling
-   `reranker.predict`.
-
-In all three cases the pipeline falls back to retrieval-order results, so
-queries still return — only the rerank step is skipped. If you see this
-log line, the system has already recovered; no manual action needed.
-
-### `Error calling ollama LLM for RAG: [SSL: WRONG_VERSION_NUMBER]`
-
-**Cause.** Almost always a URL-scheme mismatch:
-
-- `RAG_OLLAMA_URL` is set to `https://...` but the server on the other end
-  is serving plain HTTP, **or**
-- `RAG_OLLAMA_URL` is set to `http://...` but the server requires HTTPS
-  (e.g. behind a Cloudflare tunnel).
-
-The TLS handshake fails because the bytes the client receives aren't a
-valid TLS record.
-
-**Fix.**
-
-1. Check what `RAG_OLLAMA_URL` resolves to at runtime (real env vars
-   override `.env` values):
-   ```powershell
-   $env:RAG_OLLAMA_URL
-   ```
-2. Match the scheme to your server:
-   - **Local Ollama** (`ollama serve` on the same machine) → `http://localhost:11434`
-   - **Cloudflare tunnel / hosted endpoint** → `https://<your-tunnel>.trycloudflare.com`
-3. Restart the backend after changing.
-
-The backend now logs an actionable hint when this happens — look for the
-line "SSL handshake failed … Check that the URL scheme (http vs https)
-matches what the server is actually serving."
-
-### `InvalidArgument: Unexpected input data type. Actual: tensor(int32), expected: tensor(int64)` from pymupdf
-
-**Cause.** `pymupdf 1.27.2.3`'s bundled layout submodule (`pymupdf.layout.onnx.BoxRFDGNN`) constructs `edge_index` as `int32` but its ONNX model declares the input as `tensor(int64)`. ONNX Runtime is strict about input types, so any non-trivial multi-page PDF crashes during layout analysis.
-
-**Auto-recovery (already in place).** `rag_engine.py` has a one-time runtime patch (`_ensure_pymupdf_layout_int64_patch`) that wraps `BoxRFDGNN.predict`'s ONNX `session.run` call to coerce any int input narrower than `int64` up to `int64` before the model sees it. The patch:
-
-- Runs once per process, idempotent via a class flag.
-- Logged at INFO level on first install ("Installed pymupdf_layout int32→int64 coercion patch").
-- Logs a clear warning if the upstream module path moves so a future pymupdf upgrade doesn't silently break extraction.
-- Only touches the `BoxRFDGNN.predict` method — no monkey-patching of pip-installed source files (which `pip install -r requirements.txt` would wipe).
-
-If you see this error in logs, the patch failed to apply — check the preceding log lines for the "skipping int64 patch" reason.
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `→` | Next section |
-| `←` | Previous section |
-| `↑` | Scroll up 100px |
-| `↓` | Scroll down 100px |
-| `e` | Extract entities (on paper page) |
+---
