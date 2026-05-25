@@ -58,7 +58,9 @@ async def _process_upload_job(job_id: str, saved_paths: List[str], parser_type: 
             })
         logger.info(f"Upload job {job_id} completed: {len(indexed_files)} files indexed")
     except Exception as e:
-        logger.error(f"Upload job {job_id} failed: {e}")
+        # logger.exception captures the full traceback — needed to find
+        # the actual call site of any error inside the upload pipeline.
+        logger.exception(f"Upload job {job_id} failed: {e}")
         job_store.update(job_id, {
             "status": "failed",
             "message": f"Indexing failed: {str(e)}",

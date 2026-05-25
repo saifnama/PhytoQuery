@@ -1127,6 +1127,13 @@ class RAGService:
             # a remote-URL branch alongside this one — the call sites
             # (``self._qdrant_client``) don't care which mode produced it.
             os.makedirs(config.qdrant_dir, exist_ok=True)
+            # DIAGNOSTIC: log the full stack so any second instantiation is
+            # visible — there should be exactly ONE of these per process.
+            import traceback as _tb
+            logger.info(
+                f"QdrantClient instantiation site for {config.qdrant_dir}:\n"
+                + "".join(_tb.format_stack())
+            )
             self._qdrant_client = QdrantClient(path=config.qdrant_dir)
             logger.info(
                 f"Initialized Qdrant local client at {config.qdrant_dir}"
