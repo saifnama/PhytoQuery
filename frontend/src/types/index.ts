@@ -186,24 +186,3 @@ export interface PaperIdentifier {
   value: string;
 }
 
-export interface GraphNode {
-  id: string;
-  name: string;
-  label: string;
-  count: number;
-  paper_count: number;
-  x?: number;
-  y?: number;
-  category?: number;
-}
-
-export interface GraphLink {
-  source: string;
-  target: string;
-  weight: number;
-}
-
-export interface Graph3DData {
-  nodes: GraphNode[];
-  links: GraphLink[];
-}

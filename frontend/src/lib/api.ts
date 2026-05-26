@@ -9,7 +9,6 @@ import type {
   SearchFilters,
   Entity,
   IndexedFileInfo,
-  Graph3DData,
 } from '../types';
 
 type PaperApiResponse = (PaperData & { entities?: Entity[] }) | { error: string; sections: unknown[] };
@@ -306,10 +305,6 @@ export const searchTypesApi = {
 export const dashboardApi = {
   async getMetrics() {
     const response = await api.get('/api/dashboard/metrics');
-    return response.data;
-  },
-  async getGraph3D(): Promise<Graph3DData> {
-    const response = await api.get<Graph3DData>('/api/dashboard/graph3d');
     return response.data;
   },
 };

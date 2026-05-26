@@ -19,7 +19,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from backend.db.database import get_db
-from backend.db.models import Paper, Entity, PaperEntity
+from backend.db.models import Paper, PaperEntity
 
 router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger(__name__)
@@ -55,66 +55,30 @@ def _maybe_json_load(value):
     return value
 
 
-def _entity_row_to_dict(pe: PaperEntity, entity: Entity) -> dict:
-    """Convert a (PaperEntity, Entity) row pair into the API entity dict shape.
+def _entity_row_to_dict(pe: PaperEntity) -> dict:
+    """Convert a ``PaperEntity`` row into the API entity dict shape.
 
-    This is the single source of truth for the entity payload returned by both
-    the `/paper/json` DB-first fast path and `/paper/db/{doi}/entities`. The
-    frontend depends on the existing `{label, text, count, metadata}` keys; we
-    add `canonical` and `aliases` as a superset.
+    The frontend depends on the ``{label, text, count, metadata}`` keys;
+    ``canonical`` and ``aliases`` are kept as a superset for callers that
+    need them. There is no longer a separate ``Entity`` catalog table to
+    join against — entity-type metadata (SMILES for chemicals, taxonomy
+    for species, etc.) lives either in the ``metadata`` JSON column on
+    this row or in the gazetteer CSV files (resolved at render time on
+    the frontend). We pass through whatever happens to be in the JSON
+    payload here; if there is none, ``metadata`` is an empty dict.
     """
-    e = entity
-    metadata: dict = {}
+    meta_raw = _maybe_json_load(pe.meta)
+    metadata: dict = meta_raw if isinstance(meta_raw, dict) else {}
 
-    # SPECIES
-    if e.family:
-        metadata["family"] = e.family
-    if e.common_name:
-        metadata["common_name"] = e.common_name
-    if e.accepted_scientific_name:
-        metadata["accepted_scientific_name"] = e.accepted_scientific_name
-    if e.taxon_id:
-        metadata["taxon_id"] = e.taxon_id
-    if e.name_type:
-        metadata["name_type"] = e.name_type
-
-    # CHEMICAL
-    if e.inchikey:
-        metadata["inchikey"] = e.inchikey
-    if e.smiles:
-        metadata["smiles"] = e.smiles
-    if e.molecular_formula:
-        metadata["molecular_formula"] = e.molecular_formula
-    if e.preferred_name:
-        metadata["preferred_name"] = e.preferred_name
-
-    # LOCATION
-    if e.country:
-        metadata["country"] = e.country
-    if e.state:
-        metadata["state"] = e.state
-
-    # Provenance
-    if e.source_db:
-        metadata["source_db"] = e.source_db
-    if e.source_url:
-        metadata["source_url"] = e.source_url
-
-    # Catch-all metadata blob — merge last so typed columns win on key collision
-    extra_meta = _maybe_json_load(e.metadata_json)
-    if isinstance(extra_meta, dict):
-        for k, v in extra_meta.items():
-            metadata.setdefault(k, v)
-
-    aliases = _maybe_json_load(e.aliases_json)
+    aliases = metadata.pop("aliases", None) if isinstance(metadata, dict) else None
     if not isinstance(aliases, list):
         aliases = []
 
     return {
-        "label": e.label,
-        "text": e.display_text or e.canonical_text,
-        "canonical": e.canonical_text,
-        "count": pe.mention_count,
+        "label": pe.label,
+        "text": pe.canonical_text,
+        "canonical": pe.canonical_text,
+        "count": pe.frequency,
         "metadata": metadata,
         "aliases": aliases,
     }
@@ -581,11 +545,13 @@ async def list_papers(limit: int = Query(50, ge=1, le=500), offset: int = Query(
 
 @router.get("/db/{doi:path}/entities")
 async def get_paper_entities(doi: str, db: AsyncSession = Depends(get_db)):
-    """Fetch pre-extracted entities for a paper from the SQLite database using its DOI.
+    """Fetch pre-extracted entities for a paper from the SQLite database
+    using its DOI.
 
-    Joins the new 3-table star schema (papers ↔ paper_entities ↔ entities) and
-    returns the existing `{label, text, count, metadata}` shape the frontend
-    consumes — now augmented with `canonical` and `aliases` from the Entity row.
+    Returns ``{label, text, canonical, count, metadata, aliases}`` per
+    entity. ``metadata`` is whatever was stored in the ``paper_entities.
+    metadata`` JSON column at ingest time (chemical/species enrichment
+    happens on the frontend via the gazetteer CSVs at render time).
     """
     try:
         clean_id = _normalize_identifier(doi)
@@ -601,16 +567,13 @@ async def get_paper_entities(doi: str, db: AsyncSession = Depends(get_db)):
         if not paper_id:
             return {"entities": []}
 
-        # 2. JOIN paper_entities ↔ entities to load full per-entity metadata
-        #    in a single round-trip.
-        join_result = await db.execute(
-            select(PaperEntity, Entity)
-            .join(Entity, PaperEntity.entity_id == Entity.id)
-            .where(PaperEntity.paper_id == paper_id)
+        # 2. Single-table query — entity-type metadata is on the row.
+        result = await db.execute(
+            select(PaperEntity).where(PaperEntity.paper_id == paper_id)
         )
-        rows = join_result.all()
+        rows = result.scalars().all()
 
-        formatted_entities = [_entity_row_to_dict(pe, entity) for pe, entity in rows]
+        formatted_entities = [_entity_row_to_dict(pe) for pe in rows]
 
         return {"paper_id": paper_id, "doi": clean_id, "entities": formatted_entities}
     except Exception as e:

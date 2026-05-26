@@ -6,7 +6,7 @@ from sqlalchemy.orm import declarative_base
 
 DB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "db_data"
+    "pq_db"
 )
 os.makedirs(DB_DIR, exist_ok=True)
 DB_PATH = os.path.join(DB_DIR, "phytoquery.sqlite")

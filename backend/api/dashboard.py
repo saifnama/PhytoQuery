@@ -1,214 +1,141 @@
+"""Dashboard router — aggregates over the two-table schema.
+
+Single endpoint ``/metrics`` returns KPIs + chart data for the homepage
+dashboard. Every count is a UNIQUE count (no mention-row duplication):
+
+  * ``total_papers``         — distinct papers (UNIQUE(doi) enforced)
+  * ``total_entities``       — distinct ``(label, canonical_text)`` tuples
+  * ``total_journals``       — DISTINCT journal names
+  * ``papers_by_journal``    — distinct papers per journal
+  * ``entity_distribution``  — distinct canonical_text values per label
+                                (powers the entity donut)
+  * ``papers_by_year``       — distinct papers per year
+  * ``geo_distribution``     — distinct papers per country (heatmap)
+
+The ``/sunburst`` and ``/graph3d`` endpoints used to live here too; they
+were removed because the frontend doesn't render them and their value
+metric was ``SUM(frequency)`` which mixed mention-counts with the
+"uniqueness" principle the rest of the dashboard uses.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
-from collections import defaultdict
-from typing import Any
 
 from backend.db.database import get_db
-from backend.db.models import Paper, Entity, PaperEntity
+from backend.db.models import Paper, PaperEntity
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 
 @router.get("/metrics")
 async def get_dashboard_metrics(db: AsyncSession = Depends(get_db)):
-    """Fetch all aggregated metrics for the homepage dashboard."""
+    """Aggregated metrics for the homepage dashboard."""
     try:
-        total_papers_result = await db.execute(select(func.count(Paper.id)))
-        total_papers = total_papers_result.scalar() or 0
+        # ---- KPIs ---------------------------------------------------------
+        total_papers = (await db.execute(
+            select(func.count(Paper.id))
+        )).scalar() or 0
 
-        total_entities_result = await db.execute(select(func.count()).select_from(PaperEntity))
-        total_entities = total_entities_result.scalar() or 0
+        # Count UNIQUE entities across the corpus — one (label, canonical_text)
+        # tuple = one entity, regardless of how many papers reference it.
+        # The previous COUNT(*) FROM paper_entities counted mention-rows,
+        # which is misleading (e.g. "alpha-pinene" appearing in 200 papers
+        # would inflate the chemical total by ~200x).
+        total_entities = (await db.execute(
+            select(func.count()).select_from(
+                select(PaperEntity.label, PaperEntity.canonical_text)
+                .distinct()
+                .subquery()
+            )
+        )).scalar() or 0
 
-        total_journals_result = await db.execute(
-            select(func.count(func.distinct(Paper.journal))).where(Paper.journal != None)
-        )
-        total_journals = total_journals_result.scalar() or 0
+        total_journals = (await db.execute(
+            select(func.count(func.distinct(Paper.journal)))
+            .where(Paper.journal.is_not(None))
+        )).scalar() or 0
 
-        top_3_journals_result = await db.execute(
+        top_3_journals_rows = (await db.execute(
             select(Paper.journal)
-            .where(Paper.journal != None)
+            .where(Paper.journal.is_not(None))
             .group_by(Paper.journal)
             .order_by(desc(func.count(Paper.id)))
             .limit(3)
-        )
-        top_3_journals = [row[0] for row in top_3_journals_result.all()]
+        )).all()
+        top_3_journals = [row[0] for row in top_3_journals_rows]
 
-        papers_by_journal_result = await db.execute(
+        # ---- Charts -------------------------------------------------------
+        papers_by_journal_rows = (await db.execute(
             select(Paper.journal, func.count(Paper.id).label("count"))
-            .where(Paper.journal != None)
+            .where(Paper.journal.is_not(None))
             .group_by(Paper.journal)
             .order_by(desc("count"))
             .limit(10)
-        )
-        papers_by_journal = [{"name": row[0], "value": row[1]} for row in papers_by_journal_result.all()]
+        )).all()
+        papers_by_journal = [
+            {"name": row[0], "value": row[1]} for row in papers_by_journal_rows
+        ]
 
-        entity_distribution_result = await db.execute(
-            select(Entity.label, func.count().label("count"))
-            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
-            .group_by(Entity.label)
+        # Entity distribution by label — count DISTINCT canonical_text per
+        # label so the donut shows "how many unique chemicals/species/..."
+        # rather than total mention-rows (which would over-report by the
+        # average number of papers each entity appears in).
+        entity_distribution_rows = (await db.execute(
+            select(
+                PaperEntity.label,
+                func.count(func.distinct(PaperEntity.canonical_text)).label("count"),
+            )
+            .group_by(PaperEntity.label)
             .order_by(desc("count"))
-        )
-        entity_distribution = [{"name": row[0].title(), "value": row[1]} for row in entity_distribution_result.all()]
+        )).all()
+        entity_distribution = [
+            {"name": (row[0] or "").title(), "value": row[1]}
+            for row in entity_distribution_rows
+        ]
 
-        papers_by_year_result = await db.execute(
+        papers_by_year_rows = (await db.execute(
             select(Paper.year, func.count(Paper.id).label("count"))
-            .where(Paper.year != None)
+            .where(Paper.year.is_not(None))
             .group_by(Paper.year)
             .order_by(Paper.year)
-        )
-        papers_by_year = [{"name": str(row[0]), "value": row[1]} for row in papers_by_year_result.all()]
+        )).all()
+        papers_by_year = [
+            {"name": str(row[0]), "value": row[1]} for row in papers_by_year_rows
+        ]
 
-        geo_result = await db.execute(
+        # Geographic distribution — country lives inside the metadata JSON
+        # on LOCATION rows now (no typed column). SQLite's json_extract is
+        # exposed by SQLAlchemy via func.json_extract. The count is distinct
+        # papers per country (not duplicated LOCATION rows).
+        country_expr = func.json_extract(PaperEntity.meta, "$.country").label("country")
+        geo_rows = (await db.execute(
             select(
-                Entity.country.label("country"),
+                country_expr,
                 func.count(func.distinct(PaperEntity.paper_id)).label("count"),
             )
-            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
-            .where(Entity.label == 'LOCATION', Entity.country.is_not(None))
-            .group_by(Entity.country)
+            .where(PaperEntity.label == "LOCATION")
+            .where(country_expr.is_not(None))
+            .group_by("country")
             .order_by(desc("count"))
-        )
-        geo_distribution = [{"name": row[0], "value": row[1]} for row in geo_result.all() if row[0]]
+        )).all()
+        geo_distribution = [
+            {"name": row[0], "value": row[1]} for row in geo_rows if row[0]
+        ]
 
         return {
             "kpis": {
                 "total_papers": total_papers,
                 "total_entities": total_entities,
                 "total_journals": total_journals,
-                "top_journals": ", ".join(top_3_journals)
+                "top_journals": ", ".join(top_3_journals),
             },
             "charts": {
                 "papers_by_journal": papers_by_journal,
                 "entity_distribution": entity_distribution,
                 "papers_by_year": papers_by_year,
-                "geo_distribution": geo_distribution
-            }
+                "geo_distribution": geo_distribution,
+            },
         }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/sunburst")
-async def get_sunburst_data(db: AsyncSession = Depends(get_db)):
-    """
-    Hierarchical entity data for the sunburst chart.
-    Structure: Entity Type → Entity Name → Paper Count (mention count)
-    """
-    try:
-        result = await db.execute(
-            select(
-                Entity.label,
-                Entity.display_text.label("name"),
-                func.sum(PaperEntity.mention_count).label("value"),
-            )
-            .join(PaperEntity, Entity.id == PaperEntity.entity_id)
-            .group_by(Entity.id, Entity.label, Entity.display_text)
-            .order_by(Entity.label, desc("value"))
-        )
-        rows = result.all()
-
-        # Group by label (entity type)
-        type_map: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for row in rows:
-            label = row[0]
-            name = row[1]
-            value = row[2] or 0
-            type_map[label][name] = value
-
-        children = []
-        for label, entities in sorted(type_map.items()):
-            children.append({
-                "name": label.title(),
-                "children": [
-                    {"name": name, "value": val}
-                    for name, val in sorted(entities.items(), key=lambda x: -x[1])
-                ]
-            })
-
-        return {"name": "Entities", "children": children}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/graph3d")
-async def get_graph3d_data(db: AsyncSession = Depends(get_db)):
-    """
-    3D Knowledge Graph: Chemical + Species + Location entities across all papers.
-    Nodes: entities (Chemical/Species/Location)
-    Edges: entity co-appears in same paper → linked. Paper DOIs are NOT nodes
-    (they act as implicit hubs — multiple chemicals linked by same paper are connected).
-    """
-    try:
-        INCLUDED_LABELS = {'CHEMICAL', 'SPECIES', 'LOCATION'}
-
-        # Fetch entities we care about
-        result = await db.execute(
-            select(
-                PaperEntity.paper_id,
-                Entity.label,
-                Entity.display_text.label("canonical"),
-                Entity.id.label("entity_id"),
-                PaperEntity.mention_count,
-            )
-            .join(Entity, PaperEntity.entity_id == Entity.id)
-            .where(Entity.label.in_(INCLUDED_LABELS))
-        )
-        rows = result.all()
-
-        if not rows:
-            return {"nodes": [], "links": []}
-
-        # Build entity nodes keyed by entity_id (stable integer PK)
-        node_map: dict[int, dict] = {}
-        for paper_id, label, canonical, entity_id, count in rows:
-            if entity_id not in node_map:
-                node_map[entity_id] = {
-                    "id": f"e{entity_id}",
-                    "name": canonical,
-                    "label": label,  # CHEMICAL | SPECIES | LOCATION
-                    "count": 0,
-                    "paper_ids": set(),
-                }
-            node_map[entity_id]["count"] += (count or 0)
-            node_map[entity_id]["paper_ids"].add(paper_id)
-
-        # Build co-occurrence: entities in same paper
-        # Group entity_ids by paper_id first
-        paper_entity_ids: dict[int, list[int]] = defaultdict(list)
-        for paper_id, _label, _canonical, entity_id, _count in rows:
-            if entity_id not in paper_entity_ids[paper_id]:
-                paper_entity_ids[paper_id].append(entity_id)
-
-        # Link every pair of entities in the same paper
-        link_map: dict[tuple, int] = defaultdict(int)
-        for paper_id, ids in paper_entity_ids.items():
-            ids_sorted = sorted(ids)
-            for i in range(len(ids_sorted)):
-                for j in range(i + 1, len(ids_sorted)):
-                    link_map[(ids_sorted[i], ids_sorted[j])] += 1
-
-        nodes = [
-            {
-                "id": v["id"],
-                "name": v["name"],
-                "label": v["label"],
-                "count": v["count"],
-                "paper_count": len(v["paper_ids"]),
-            }
-            for _eid, v in sorted(node_map.items(), key=lambda x: -x[1]["count"])
-        ]
-
-        # Filter: only keep links with weight >= 2 (entity appears in >= 2 papers together)
-        links = [
-            {"source": f"e{k[0]}", "target": f"e{k[1]}", "weight": w}
-            for k, w in sorted(link_map.items(), key=lambda x: -x[1])
-            if w >= 2
-        ]
-
-        return {"nodes": nodes, "links": links}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
