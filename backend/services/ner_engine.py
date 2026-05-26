@@ -22,14 +22,11 @@ from backend.config import (
     NER_OLLAMA_MODEL,
     NER_OPENROUTER_API_KEY,
     NER_OPENROUTER_MODEL,
-    NER_GROQ_API_KEY,
-    NER_GROQ_MODEL,
     NER_LLAMACPP_URL,
     NER_LLAMACPP_API_KEY,
     NER_LLAMACPP_MODEL,
     NER_CONFIDENCE_THRESHOLD,
     NER_CHUNK_SIZE_WORDS,
-    GROQ_URL,
     OPENROUTER_URL,
     _normalize_openai_compat_url,
     get_ner_provider,
@@ -40,21 +37,18 @@ def get_active_provider():
     """Determine which LLM provider to use as the primary for NER.
 
     Priority: llama.cpp/OpenAI-compat (explicit opt-in) > Ollama (local,
-    fast for bulk) > Groq (cloud-fast) > OpenRouter (cloud-diverse).
-    Other configured providers remain available as fall-throughs in
-    ``call_llm``.
+    fast for bulk) > OpenRouter (cloud-diverse). Other configured
+    providers remain available as fall-throughs in ``call_llm``.
     """
     if NER_LLAMACPP_URL:
         return "llamacpp"
     if NER_OLLAMA_URL:
         return "ollama"
-    if NER_GROQ_API_KEY:
-        return "groq"
     if NER_OPENROUTER_API_KEY:
         return "openrouter"
     raise ValueError(
-        "No LLM provider configured. Set NER_LLAMACPP_URL, NER_OLLAMA_URL, "
-        "NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
+        "No LLM provider configured. Set NER_LLAMACPP_URL, "
+        "NER_OLLAMA_URL, or NER_OPENROUTER_API_KEY"
     )
 
 
@@ -493,7 +487,7 @@ class NERService:
 
         # LLM extraction in parallel across sections, bounded by a
         # semaphore so we don't trip free-tier concurrency limits on
-        # the provider (OpenRouter free models, Groq free tier, etc).
+        # the provider (OpenRouter free models, llama.cpp / vLLM rate caps, etc).
         # Each call still goes through ``_extract_entities_with_retry``
         # so the validation-retry safety net is intact.
         sem = asyncio.Semaphore(3)
@@ -734,7 +728,7 @@ class NERService:
 
         # Try self-hosted OpenAI-compatible (llama.cpp / vLLM / LM
         # Studio) first when configured — same wire format as
-        # Groq/OpenRouter so we delegate to ``_call_openai_compatible``
+        # OpenRouter so we delegate to ``_call_openai_compatible``
         # with the normalized endpoint URL.
         if provider == "llamacpp" and NER_LLAMACPP_URL:
             content = await self._call_openai_compatible(
@@ -777,19 +771,6 @@ class NERService:
             except Exception as e:
                 logger.error(f"Error calling Ollama LLM: {e}")
                 # Fall through to try OpenRouter
-
-        # Try Groq (fallback) — OpenAI-compatible wire format
-        if NER_GROQ_API_KEY:
-            content = await self._call_openai_compatible(
-                provider_name="Groq",
-                url=GROQ_URL,
-                api_key=NER_GROQ_API_KEY,
-                model=NER_GROQ_MODEL,
-                text_chunk=text_chunk,
-                error_hint=error_hint,
-            )
-            if content:
-                return content
 
         # Try OpenRouter (fallback) — OpenAI-compatible wire format
         if NER_OPENROUTER_API_KEY:
@@ -964,9 +945,10 @@ class NERService:
         text_chunk: str,
         error_hint: Optional[str] = None,
     ) -> str:
-        """Generic OpenAI-compatible chat completion call (Groq, OpenRouter).
+        """Generic OpenAI-compatible chat completion call (OpenRouter,
+        llama.cpp / vLLM, LM Studio).
 
-        Both providers expose the same wire format: POST {model, messages,
+        All these providers expose the same wire format: POST {model, messages,
         temperature} to /chat/completions, Bearer auth, response shape
         ``{ choices: [ { message: { content } } ] }``.
 

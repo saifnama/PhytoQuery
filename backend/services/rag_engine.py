@@ -374,7 +374,7 @@ class OllamaLLM:
                 extraction pass (Pydantic-validated downstream).
                 Translated transparently per provider:
                   - Ollama: payload.format = "json"
-                  - OpenAI-compatible (Groq/OpenRouter): payload.response_format
+                  - OpenAI-compatible (OpenRouter/llama.cpp): payload.response_format
                 Default ``None`` preserves the prior free-text behavior.
         """
         # Build messages list from either argument
@@ -387,8 +387,8 @@ class OllamaLLM:
 
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
-                "RAG is not configured. Set RAG_GROQ_API_KEY, RAG_OPENROUTER_API_KEY, "
-                "or configure RAG_OLLAMA_URL."
+                "RAG is not configured. Set RAG_LLAMACPP_URL, "
+                "RAG_OPENROUTER_API_KEY, or configure RAG_OLLAMA_URL."
             )
 
         headers = {}
@@ -403,7 +403,7 @@ class OllamaLLM:
                 # Ollama uses a top-level ``format`` field; "json" enables
                 # grammar-constrained JSON output.
                 payload["format"] = "json"
-        else:  # OpenAI-compatible: openrouter, groq, llamacpp
+        else:  # OpenAI-compatible: openrouter, llamacpp
             payload = {
                 "model": self.model,
                 "messages": msg_list,
@@ -441,7 +441,6 @@ class OllamaLLM:
 
                 if self.provider != "ollama" and response.status_code == 401:
                     env_var = {
-                        "groq": "RAG_GROQ_API_KEY",
                         "openrouter": "RAG_OPENROUTER_API_KEY",
                         "llamacpp": "RAG_LLAMACPP_API_KEY",
                     }.get(self.provider, "the provider's API key")
@@ -470,7 +469,7 @@ class OllamaLLM:
 
                 if self.provider == "ollama":
                     return Response(result["message"]["content"])
-                else:  # OpenAI-compatible: openrouter, groq
+                else:  # OpenAI-compatible: openrouter, llamacpp
                     return Response(result["choices"][0]["message"]["content"])
             except Exception as e:
                 last_exception = e
@@ -527,7 +526,7 @@ class OllamaLLM:
         Format handling:
           - Ollama streams newline-delimited JSON; each line carries
             ``message.content`` and a final ``done: true`` marker.
-          - OpenAI-compatible (OpenRouter / Groq) streams SSE; each
+          - OpenAI-compatible (OpenRouter / llama.cpp) streams SSE; each
             ``data: {...}`` line has ``choices[0].delta.content`` and
             ends with ``data: [DONE]``.
         """
@@ -540,7 +539,7 @@ class OllamaLLM:
 
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
-                "RAG is not configured. Set RAG_LLAMACPP_URL, RAG_GROQ_API_KEY, "
+                "RAG is not configured. Set RAG_LLAMACPP_URL, "
                 "RAG_OPENROUTER_API_KEY, or configure RAG_OLLAMA_URL."
             )
 
@@ -552,7 +551,7 @@ class OllamaLLM:
                 "stream": True,
                 "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
             }
-        else:  # OpenAI-compatible: openrouter, groq, llamacpp
+        else:  # OpenAI-compatible: openrouter, llamacpp
             payload = {
                 "model": self.model,
                 "messages": msg_list,
@@ -574,7 +573,6 @@ class OllamaLLM:
         async with client.stream("POST", self.url, **kwargs) as response:
             if self.provider != "ollama" and response.status_code == 401:
                 env_var = {
-                    "groq": "RAG_GROQ_API_KEY",
                     "openrouter": "RAG_OPENROUTER_API_KEY",
                     "llamacpp": "RAG_LLAMACPP_API_KEY",
                 }.get(self.provider, "the provider's API key")
@@ -586,9 +584,9 @@ class OllamaLLM:
             # Surface upstream error bodies. Without aread() the body
             # is still a streaming iterator, so the default
             # raise_for_status() message hides the actual provider
-            # error JSON (e.g. Groq's "messages must alternate roles"
-            # or context-window overflow), making 400s impossible to
-            # diagnose from logs alone.
+            # error JSON (e.g. an OpenAI-compatible "messages must
+            # alternate roles" or context-window overflow), making
+            # 400s impossible to diagnose from logs alone.
             if response.status_code >= 400:
                 await response.aread()
                 body_text = response.text or "<empty body>"

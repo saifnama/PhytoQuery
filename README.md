@@ -64,7 +64,7 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 
 ### Named Entity Recognition (NER)
 - **Dictionary-backed** matchers (spaCy PhraseMatcher with stemmed surface forms): PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
-- **LLM-assisted** path (requires Ollama / Groq / OpenRouter / llama.cpp config)
+- **LLM-assisted** path (requires Ollama / OpenRouter / llama.cpp config)
 - Entities highlighted inline and grouped in a sidebar; CSV export
 - **Graph View** — physics-based knowledge graph linking the paper's DOI to its extracted entities (vis-network)
 
@@ -97,8 +97,8 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 | Molecules | smiles-drawer (SMILES → 2D structure) |
 | Sanitization | nh3 (server, Rust-backed), DOMPurify (client) |
 | Paper sources | Europe PMC API, OpenAlex API, PubMed eutils |
-| RAG LLM | llama.cpp / vLLM / LM Studio (OpenAI-compatible) > Groq > OpenRouter > Ollama |
-| NER LLM | llama.cpp > Ollama > Groq > OpenRouter |
+| RAG LLM | llama.cpp / vLLM / LM Studio (OpenAI-compatible) > OpenRouter > Ollama |
+| NER LLM | llama.cpp > Ollama > OpenRouter |
 | Knowledge base | SQLite (WAL, FK on, busy-timeout) + async SQLAlchemy (`sqlite+aiosqlite`) |
 | Config | python-dotenv + per-environment `.env.<profile>` switching |
 
@@ -233,9 +233,9 @@ cp .env.server .env       # or cp .env.macbook .env
 
 ### LLM providers
 
-PhytoQuery dispatches across four providers per pipeline. The **first one with credentials wins**; the rest stand by as fallbacks.
+PhytoQuery dispatches across three providers per pipeline. The **first one with credentials wins**; the rest stand by as fallbacks.
 
-**RAG priority:** llama.cpp (or any OpenAI-compatible self-host) → Groq → OpenRouter → Ollama
+**RAG priority:** llama.cpp (or any OpenAI-compatible self-host) → OpenRouter → Ollama
 
 ```bash
 # Self-hosted OpenAI-compatible (highest priority when URL is set —
@@ -248,10 +248,6 @@ PhytoQuery dispatches across four providers per pipeline. The **first one with c
 # RAG_LLAMACPP_MODEL=qwen2.5-7b-instruct
 # RAG_LLAMACPP_API_KEY=               # optional; only if server uses --api-key
 
-# Groq (fastest cloud, generous free tier — https://console.groq.com/keys)
-RAG_GROQ_API_KEY=gsk_...
-RAG_GROQ_MODEL=llama-3.3-70b-versatile
-
 # OpenRouter (diverse model catalog)
 RAG_OPENROUTER_API_KEY=sk-or-v1-...
 RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
@@ -261,13 +257,12 @@ RAG_OLLAMA_URL=http://localhost:11434
 RAG_OLLAMA_MODEL=llama3.1:8b
 ```
 
-**NER priority:** llama.cpp → Ollama → Groq → OpenRouter (local-first; bulk per-paper extraction is cheaper local)
+**NER priority:** llama.cpp → Ollama → OpenRouter (local-first; bulk per-paper extraction is cheaper local)
 
 ```bash
 # NER_LLAMACPP_URL=https://your-name.trycloudflare.com
 NER_OLLAMA_URL=http://localhost:11434
 NER_OLLAMA_MODEL=llama3.1:8b
-NER_GROQ_API_KEY=gsk_...
 NER_OPENROUTER_API_KEY=sk-or-v1-...
 ```
 

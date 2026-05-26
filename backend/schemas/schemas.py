@@ -86,7 +86,7 @@ class Citations(BaseModel):
 
     A wrapper rather than a bare list because providers' JSON mode
     require an object at the top level — bare arrays are rejected
-    by Groq, OpenRouter, and Ollama format='json'.
+    by OpenRouter, llama.cpp, and Ollama format='json'.
     """
 
     citations: List[Citation] = Field(default_factory=list)

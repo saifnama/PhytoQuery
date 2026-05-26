@@ -78,8 +78,6 @@ def env_optional(key: str):
 
 RAG_OPENROUTER_API_KEY = env("RAG_OPENROUTER_API_KEY")
 RAG_OPENROUTER_MODEL = env("RAG_OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
-RAG_GROQ_API_KEY = env("RAG_GROQ_API_KEY")
-RAG_GROQ_MODEL = env("RAG_GROQ_MODEL", "llama-3.3-70b-versatile")
 RAG_OLLAMA_URL = env("RAG_OLLAMA_URL")
 RAG_OLLAMA_MODEL = env("RAG_OLLAMA_MODEL", "llama3.1:8b")
 
@@ -93,8 +91,8 @@ RAG_OLLAMA_MODEL = env("RAG_OLLAMA_MODEL", "llama3.1:8b")
 #   RAG_LLAMACPP_URL=https://your-name.trycloudflare.com
 #   RAG_LLAMACPP_MODEL=qwen2.5-7b-instruct
 #
-# Higher priority than Groq/OpenRouter/Ollama in the provider
-# chain — setting this URL is an explicit opt-in, so it wins.
+# Higher priority than OpenRouter/Ollama in the provider chain —
+# setting this URL is an explicit opt-in, so it wins.
 RAG_LLAMACPP_URL = env("RAG_LLAMACPP_URL")
 RAG_LLAMACPP_API_KEY = env("RAG_LLAMACPP_API_KEY")
 RAG_LLAMACPP_MODEL = env("RAG_LLAMACPP_MODEL", "default")
@@ -151,8 +149,6 @@ NER_OLLAMA_URL = env("NER_OLLAMA_URL", "https://trycloudflare.com")
 NER_OLLAMA_MODEL = env("NER_OLLAMA_MODEL", "llama3.1:8b")
 NER_OPENROUTER_API_KEY = env("NER_OPENROUTER_API_KEY")
 NER_OPENROUTER_MODEL = env("NER_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")
-NER_GROQ_API_KEY = env("NER_GROQ_API_KEY")
-NER_GROQ_MODEL = env("NER_GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # Self-hosted OpenAI-compatible LLM for NER (mirrors RAG side —
 # llama.cpp ``server``, vLLM, etc.). Optional ``--api-key`` flag.
@@ -169,7 +165,6 @@ NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
 # Provider Selection Logic
 # ---------------------------------------------------------------------------
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
@@ -199,13 +194,13 @@ def _has_real_key(key: str, sentinels: set) -> bool:
 
 
 def get_rag_provider() -> dict:
-    """RAG provider priority: llama.cpp/OpenAI-compat > Groq > OpenRouter > Ollama.
+    """RAG provider priority: llama.cpp/OpenAI-compat > OpenRouter > Ollama.
 
     Self-hosted OpenAI-compatible (llama.cpp, vLLM, LM Studio, ...)
     goes first because setting ``RAG_LLAMACPP_URL`` is an explicit
     opt-in — if the user pointed at their server, that's what they
-    want to use. Groq follows as the fastest cloud option, then
-    OpenRouter (diverse models), then Ollama (local-mode fallback).
+    want to use. OpenRouter follows as the cloud option (diverse
+    models), then Ollama (local-mode fallback).
     """
     if RAG_LLAMACPP_URL:
         return {
@@ -213,13 +208,6 @@ def get_rag_provider() -> dict:
             "url": _normalize_openai_compat_url(RAG_LLAMACPP_URL),
             "model": RAG_LLAMACPP_MODEL,
             "api_key": RAG_LLAMACPP_API_KEY or "",
-        }
-    if _has_real_key(RAG_GROQ_API_KEY, {"gsk_", "gsk"}):
-        return {
-            "provider": "groq",
-            "url": GROQ_URL,
-            "model": RAG_GROQ_MODEL,
-            "api_key": RAG_GROQ_API_KEY,
         }
     if _has_real_key(RAG_OPENROUTER_API_KEY, {"sk-", "sk"}):
         return {
@@ -243,12 +231,12 @@ def get_rag_provider() -> dict:
 
 
 def get_ner_provider() -> dict:
-    """NER provider priority: llama.cpp/OpenAI-compat > Ollama > Groq > OpenRouter.
+    """NER provider priority: llama.cpp/OpenAI-compat > Ollama > OpenRouter.
 
     Self-hosted OpenAI-compatible (llama.cpp, vLLM, ...) goes first
     when explicitly configured — bulk NER on a controlled local
     model is typically faster and cheaper than cloud round-trips.
-    Local Ollama follows, then Groq/OpenRouter as cloud fallbacks.
+    Local Ollama follows, then OpenRouter as a cloud fallback.
     """
     if NER_LLAMACPP_URL:
         return {
@@ -263,13 +251,6 @@ def get_ner_provider() -> dict:
             "url": f"{NER_OLLAMA_URL}/api/chat",
             "model": NER_OLLAMA_MODEL,
         }
-    if _has_real_key(NER_GROQ_API_KEY, {"gsk_", "gsk"}):
-        return {
-            "provider": "groq",
-            "url": GROQ_URL,
-            "model": NER_GROQ_MODEL,
-            "api_key": NER_GROQ_API_KEY,
-        }
     if NER_OPENROUTER_API_KEY:
         return {
             "provider": "openrouter",
@@ -278,5 +259,5 @@ def get_ner_provider() -> dict:
             "api_key": NER_OPENROUTER_API_KEY,
         }
     raise ValueError(
-        "No NER provider configured. Set NER_OLLAMA_URL, NER_GROQ_API_KEY, or NER_OPENROUTER_API_KEY"
+        "No NER provider configured. Set NER_LLAMACPP_URL, NER_OLLAMA_URL, or NER_OPENROUTER_API_KEY"
     )
