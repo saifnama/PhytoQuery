@@ -136,6 +136,21 @@ body {
     to { transform: translateY(0); opacity: 1; }
 }
 
+/* Plant Origin Map — pulse rings on each country marker. Matches the
+   previous ECharts effectScatter "stroke" rippleEffect with scale=3.3,
+   period=3.3s. Applied to <circle> elements inside react-simple-maps
+   Marker; transform-box: fill-box keeps the scale centred on the
+   circle itself rather than the SVG root's (0,0). */
+@keyframes map-pulse {
+    0%   { transform: scale(1);   opacity: 0.7; }
+    100% { transform: scale(3.3); opacity: 0;   }
+}
+.map-pulse {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: map-pulse 3.3s ease-out infinite;
+}
+
 /* Typing-indicator dots — used by the chat thread's TypingIndicator.
    Three dots receive the same animation with staggered animation-delay
    so they bounce in sequence. */

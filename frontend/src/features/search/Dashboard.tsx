@@ -1,25 +1,19 @@
 /**
- * Dashboard — shadcn-native charts (Recharts) + the Plant Origin Heatmap
- * which remains on ECharts until PR3 swaps it to react-simple-maps.
+ * Dashboard — fully shadcn-native after PR3:
  *
- * Migrated to Recharts via @/components/ui/chart:
- *   - Entity Distribution donut  → EntityDonutChart
- *   - Publication Timeline       → PublicationTimelineChart
- *   - Journal Distribution bars  → JournalBarsChart (inside JournalDistributionWidget)
+ *   - Stat cards            → shadcn Card + cva accent variants
+ *   - ChartCard wrapper      → shadcn Card + CardHeader + CardTitle
+ *   - Journal Distribution   → shadcn Card panes (incl. JournalBarsChart)
+ *   - Entity Distribution    → EntityDonutChart (Recharts)
+ *   - Publication Timeline   → PublicationTimelineChart (Recharts)
+ *   - Plant Origin Heatmap   → PlantOriginMap (react-simple-maps + CSS pulse)
+ *
+ * No ECharts anywhere — the world map's geo component was the last
+ * holdout and is now a CSS-animated SVG via react-simple-maps.
  */
 
 import React, { useEffect, useState } from 'react';
-import ReactECharts from 'echarts-for-react';
-import * as echarts from 'echarts';
-import type { EChartsOption } from 'echarts';
 import { dashboardApi } from '../../lib/api';
-import { PHYTOQUERY_THEME_NAME, ensurePhytoQueryTheme } from '../../lib/echartsTheme';
-
-// The PhytoQuery ECharts theme is still needed for the world map (geoOption)
-// until PR3 replaces it with react-simple-maps. The Coastal theme was only
-// used by the Journal Distribution widget — that widget no longer uses
-// ECharts, so its registration is gone.
-ensurePhytoQueryTheme();
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -35,6 +29,7 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import { PublicationTimelineChart } from './PublicationTimelineChart';
 import { EntityDonutChart } from './EntityDonutChart';
+import { PlantOriginMap } from './PlantOriginMap';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -142,163 +137,14 @@ function ChartCard({
   );
 }
 
-// ─── Country centroid helpers (geo_light_prompt.md spec) ────────────────────
-
-type Lnglat = [number, number];
-
-// Aliases map NER variants to the EXACT canonical names used in /public/world.json
-// (which uses short English names: "Russia", "Turkey", "Iran", "Vietnam", "Korea",
-// "Czech Rep.", "Lao PDR", "Dem. Rep. Korea", "Dem. Rep. Congo").
-const COUNTRY_ALIASES: Record<string, string> = {
-  'usa': 'United States',
-  'u.s.a.': 'United States',
-  'u.s.': 'United States',
-  'us': 'United States',
-  'united states of america': 'United States',
-  'america': 'United States',
-  'uk': 'United Kingdom',
-  'u.k.': 'United Kingdom',
-  'britain': 'United Kingdom',
-  'great britain': 'United Kingdom',
-  'russian federation': 'Russia',
-  'türkiye': 'Turkey',
-  'turkiye': 'Turkey',
-  'iran (islamic republic of)': 'Iran',
-  'syrian arab republic': 'Syria',
-  'viet nam': 'Vietnam',
-  'venezuela (bolivarian republic of)': 'Venezuela',
-  'bolivia (plurinational state of)': 'Bolivia',
-  'united republic of tanzania': 'Tanzania',
-  'republic of moldova': 'Moldova',
-  'north macedonia': 'Macedonia',
-  'south korea': 'Korea',
-  'republic of korea': 'Korea',
-  'north korea': 'Dem. Rep. Korea',
-  "korea, democratic people's republic of": 'Dem. Rep. Korea',
-  'czech republic': 'Czech Rep.',
-  'czechia': 'Czech Rep.',
-  'laos': 'Lao PDR',
-  "lao people's democratic republic": 'Lao PDR',
-  'drc': 'Dem. Rep. Congo',
-  'democratic republic of congo': 'Dem. Rep. Congo',
-  'democratic republic of the congo': 'Dem. Rep. Congo',
-  'ivory coast': "Côte d'Ivoire",
-  "cote d'ivoire": "Côte d'Ivoire",
-  'cote d ivoire': "Côte d'Ivoire",
-};
-
-// GeoJSON in the wild is messy — empty rings, NaN coords, GeometryCollection,
-// missing properties. Every helper below treats malformed input as "skip,
-// don't throw" so one bad feature can never poison the centroid map.
-
-function isLnglatPoint(p: unknown): p is [number, number] {
-  return (
-    Array.isArray(p) &&
-    p.length >= 2 &&
-    typeof p[0] === 'number' && Number.isFinite(p[0]) &&
-    typeof p[1] === 'number' && Number.isFinite(p[1])
-  );
-}
-
-function isRing(r: unknown): r is [number, number][] {
-  return Array.isArray(r) && r.length > 0 && r.every(isLnglatPoint);
-}
-
-function ringArea(ring: [number, number][]): number {
-  if (ring.length < 3) return 0;
-  let a = 0;
-  for (let i = 0; i < ring.length - 1; i++) {
-    a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
-  }
-  return Math.abs(a / 2);
-}
-
-function ringBboxCenter(ring: [number, number][]): Lnglat | null {
-  let xMin = Infinity, yMin = Infinity, xMax = -Infinity, yMax = -Infinity;
-  for (const [x, y] of ring) {
-    if (x < xMin) xMin = x;
-    if (x > xMax) xMax = x;
-    if (y < yMin) yMin = y;
-    if (y > yMax) yMax = y;
-  }
-  if (!Number.isFinite(xMin) || !Number.isFinite(yMin)) return null;
-  const cx = (xMin + xMax) / 2;
-  const cy = (yMin + yMax) / 2;
-  return Number.isFinite(cx) && Number.isFinite(cy) ? [cx, cy] : null;
-}
-
-// Walks any GeoJSON geometry — Polygon, MultiPolygon, or GeometryCollection —
-// and returns every valid outer ring it can find.
-function collectOuterRings(geom: any): [number, number][][] {
-  const rings: [number, number][][] = [];
-  if (!geom || typeof geom !== 'object') return rings;
-  const t = geom.type;
-  if (t === 'Polygon') {
-    const ring = geom.coordinates?.[0];
-    if (isRing(ring)) rings.push(ring);
-  } else if (t === 'MultiPolygon') {
-    for (const poly of geom.coordinates ?? []) {
-      const ring = poly?.[0];
-      if (isRing(ring)) rings.push(ring);
-    }
-  } else if (t === 'GeometryCollection') {
-    for (const sub of geom.geometries ?? []) {
-      rings.push(...collectOuterRings(sub));
-    }
-  }
-  return rings;
-}
-
-function featureCentroid(feature: any): Lnglat | null {
-  const rings = collectOuterRings(feature?.geometry);
-  if (rings.length === 0) return null;
-  // Largest polygon (by area) wins — keeps centroids on the main landmass
-  // for multi-island countries instead of drifting offshore.
-  let largest = rings[0];
-  let maxArea = ringArea(largest);
-  for (let i = 1; i < rings.length; i++) {
-    const a = ringArea(rings[i]);
-    if (a > maxArea) { maxArea = a; largest = rings[i]; }
-  }
-  return ringBboxCenter(largest);
-}
-
-function buildCentroidMap(world: any): Map<string, Lnglat> {
-  const map = new Map<string, Lnglat>();
-  const features = Array.isArray(world?.features) ? world.features : [];
-  let failed = 0;
-  for (const f of features) {
-    try {
-      const name = f?.properties?.name;
-      if (typeof name !== 'string' || !name.trim()) continue;
-      const c = featureCentroid(f);
-      if (c) map.set(name.toLowerCase(), c);
-    } catch (err) {
-      failed += 1;
-      // One bad feature must not break the rest of the map.
-    }
-  }
-  if (failed > 0) {
-    console.warn(`[Dashboard] centroid map skipped ${failed} malformed feature(s)`);
-  }
-  return map;
-}
-
-function lookupCentroid(rawName: string, centroids: Map<string, Lnglat>): Lnglat | null {
-  const key = rawName.trim().toLowerCase();
-  const direct = centroids.get(key);
-  if (direct) return direct;
-  const aliased = COUNTRY_ALIASES[key];
-  return aliased ? centroids.get(aliased.toLowerCase()) ?? null : null;
-}
+// Centroid helpers extracted to @/lib/mapCentroids and consumed by
+// PlantOriginMap — the dashboard no longer needs them directly.
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 const Dashboard: React.FC = () => {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [worldGeo, setWorldGeo] = useState<unknown>(null);
-  const [centroids, setCentroids] = useState<Map<string, Lnglat>>(() => new Map());
 
   // ── DB Explorer drawer state ───────────────────────────────────────────────
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -311,21 +157,9 @@ const Dashboard: React.FC = () => {
     setDrawerOpen(true);
   };
 
-  // Fetch world map geoJSON once (served from /public — no CDN at runtime)
-  useEffect(() => {
-    fetch('/world.json')
-      .then((r) => r.json())
-      .then((data) => {
-        (echarts as any).registerMap('world', data);
-        setCentroids(buildCentroidMap(data));
-        setWorldGeo(data);
-      })
-      .catch(() => {
-        setWorldGeo({});
-      });
-  }, []);
-
-  // Fetch metrics
+  // Fetch metrics. World geo + centroids are now handled inside
+  // PlantOriginMap (single source of truth, lazy-loaded with the map
+  // component itself).
   useEffect(() => {
     dashboardApi.getMetrics()
       .then(setMetrics)
@@ -333,7 +167,7 @@ const Dashboard: React.FC = () => {
       .finally(() => setIsLoading(false));
   }, []);
 
-  const isReady = !!metrics && !!worldGeo;
+  const isReady = !!metrics;
 
   // ── Loading / not-ready guard ──────────────────────────────────────────────
   if (isLoading || !isReady) {
@@ -378,72 +212,10 @@ const Dashboard: React.FC = () => {
     ? Math.round((dominant.value / papersTotal) * 100)
     : 0;
 
-  // ── Chart Options ───────────────────────────────────────────────────────
-  // Entity Distribution + Publication Timeline are now Recharts components;
-  // see EntityDonutChart.tsx + PublicationTimelineChart.tsx.
-
-  // ── Plant Origin Heatmap (geo_light_prompt.md — Ghost Map effectScatter) ──
-  const geoPoints = metrics.charts.geo_distribution
-    .map((d) => {
-      const c = lookupCentroid(d.name, centroids);
-      if (!c) return null;
-      return { name: d.name, value: [c[0], c[1], d.value] as [number, number, number] };
-    })
-    .filter((p): p is { name: string; value: [number, number, number] } => p !== null);
-
-  const geoMax = geoPoints.reduce((m, p) => Math.max(m, p.value[2]), 1);
-
-  const geoOption: EChartsOption = {
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'item',
-      backgroundColor: 'rgba(255,255,255,0.97)',
-      borderColor: '#E2E8F0',
-      borderWidth: 1,
-      extraCssText:
-        'border-radius:8px;padding:8px 12px;font-family:Inter,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,0.08)',
-      formatter: (p: any) => {
-        const v = Array.isArray(p.value) ? p.value[2] : p.value;
-        return `<b style="color:#0E7490;font-size:11px">${p.name}</b><br/><span style="color:#8A95B0;font-size:10px">${v} papers</span>`;
-      },
-    },
-    geo: {
-      map: 'world',
-      roam: true,
-      itemStyle: {
-        areaColor: '#FFFFFF',
-        borderColor: '#D8E8EE',
-        borderWidth: 0.6,
-      },
-      emphasis: {
-        itemStyle: {
-          areaColor: '#EBF8FB',
-          borderColor: '#9DE4EF',
-          borderWidth: 0.8,
-        },
-        label: { show: false },
-      },
-    },
-    series: [
-      {
-        type: 'effectScatter',
-        coordinateSystem: 'geo',
-        data: geoPoints,
-        encode: { value: 2 },
-        symbolSize: (d: number[]) => Math.max(5, Math.sqrt(d[2] / geoMax) * 33),
-        rippleEffect: { brushType: 'stroke', scale: 3.3, period: 3.3 },
-        itemStyle: { color: '#06B6D4', opacity: 0.92 },
-        emphasis: {
-          itemStyle: {
-            opacity: 1,
-            shadowBlur: 14,
-            shadowColor: 'rgba(6,182,212,0.35)',
-          },
-        },
-        label: { show: false },
-      },
-    ],
-  };
+  // Entity Distribution + Publication Timeline + Plant Origin Heatmap
+  // are all dedicated components now (EntityDonutChart,
+  // PublicationTimelineChart, PlantOriginMap). Dashboard.tsx just
+  // wires data through them.
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 py-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -528,32 +300,18 @@ const Dashboard: React.FC = () => {
           </ChartCard>
         </div>
 
-        {/* Row 3: Geographic Heatmap — Ghost Map (geo_light_prompt.md) */}
+        {/* Row 3: Plant Origin Heatmap — react-simple-maps + CSS pulse */}
         <div className="mt-6">
           <ChartCard title="Geographic distribution of bioactive species collection sites">
-            <div
-              className="h-[520px] w-full rounded-2xl overflow-hidden"
-              style={{ background: '#EDF5F8' }}
-            >
-              <ReactECharts
-                option={geoOption}
-                theme={PHYTOQUERY_THEME_NAME}
-                style={{ width: '100%', height: '100%' }}
-                opts={{ renderer: 'canvas' }}
-                onEvents={{
-                  click: (params: any) => {
-                    // effectScatter dots emit seriesType: 'effectScatter' with a name (country).
-                    // Geo-region clicks (the country fill itself) also pass params.name.
-                    if (typeof params?.name === 'string' && params.name) {
-                      openDrawer({
-                        tab: 'papers',
-                        filter: { kind: 'country', label: `Origin: ${params.name}`, value: params.name },
-                      });
-                    }
-                  },
-                }}
-              />
-            </div>
+            <PlantOriginMap
+              data={metrics.charts.geo_distribution}
+              onCountryClick={(name) =>
+                openDrawer({
+                  tab: 'papers',
+                  filter: { kind: 'country', label: `Origin: ${name}`, value: name },
+                })
+              }
+            />
           </ChartCard>
         </div>
       </div>
