@@ -1,6 +1,11 @@
 /**
- * Dashboard — ECharts charts: Journal Distribution widget, Entity Distribution,
- * Publication Timeline, Plant Origin Heatmap (world map).
+ * Dashboard — shadcn-native charts (Recharts) + the Plant Origin Heatmap
+ * which remains on ECharts until PR3 swaps it to react-simple-maps.
+ *
+ * Migrated to Recharts via @/components/ui/chart:
+ *   - Entity Distribution donut  → EntityDonutChart
+ *   - Publication Timeline       → PublicationTimelineChart
+ *   - Journal Distribution bars  → JournalBarsChart (inside JournalDistributionWidget)
  */
 
 import React, { useEffect, useState } from 'react';
@@ -8,19 +13,18 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import type { EChartsOption } from 'echarts';
 import { dashboardApi } from '../../lib/api';
-import { ENTITY_COLORS } from '../../lib/entityColors';
-import { PHYTOQUERY_THEME_NAME, ensurePhytoQueryTheme, ensureCoastalTheme } from '../../lib/echartsTheme';
+import { PHYTOQUERY_THEME_NAME, ensurePhytoQueryTheme } from '../../lib/echartsTheme';
 
-// Register both themes when this lazy-loaded module first evaluates. Both
-// `ensure*` calls are idempotent — internal flag in echartsTheme.ts guards
-// against double-registration. Doing this here (instead of in main.tsx) keeps
-// echarts out of the initial bundle.
+// The PhytoQuery ECharts theme is still needed for the world map (geoOption)
+// until PR3 replaces it with react-simple-maps. The Coastal theme was only
+// used by the Journal Distribution widget — that widget no longer uses
+// ECharts, so its registration is gone.
 ensurePhytoQueryTheme();
-ensureCoastalTheme();
-import { useTheme } from '../../lib/theme';
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PublicationTimelineChart } from './PublicationTimelineChart';
+import { EntityDonutChart } from './EntityDonutChart';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,35 +41,6 @@ interface DashboardMetrics {
     papers_by_year: { name: string; value: number }[];
     geo_distribution: { name: string; value: number }[];
   };
-}
-
-// ─── Entity distribution helpers (entity_donut_v2_prompt.md spec) ───────────
-
-function entityKey(displayName: string): string {
-  return displayName.toLowerCase().replace(/\s+/g, '_');
-}
-
-function formatEntityName(displayName: string): string {
-  return displayName.replace(/_/g, ' ');
-}
-
-interface EntityDatum {
-  value: number;
-  name: string;
-  itemStyle: { color: string };
-}
-
-function prepareEntityData(
-  raw: { name: string; value: number }[]
-): EntityDatum[] {
-  return raw.map((d) => {
-    const key = entityKey(d.name);
-    return {
-      value: d.value,
-      name: formatEntityName(d.name),
-      itemStyle: { color: ENTITY_COLORS[key]?.hex ?? '#94A3B8' },
-    };
-  });
 }
 
 // ─── Stat Card (Style 5 — spec: h.md) ─────────────────────────────────────────
@@ -279,9 +254,6 @@ const Dashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [worldGeo, setWorldGeo] = useState<unknown>(null);
   const [centroids, setCentroids] = useState<Map<string, Lnglat>>(() => new Map());
-  const { theme } = useTheme();
-  const isDark = theme === 'dark';
-  const [timelineHover, setTimelineHover] = useState(false);
 
   // ── DB Explorer drawer state ───────────────────────────────────────────────
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -362,180 +334,8 @@ const Dashboard: React.FC = () => {
     : 0;
 
   // ── Chart Options ───────────────────────────────────────────────────────
-
-  const entityDistOption: EChartsOption = {
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'item',
-      formatter: '{b}: {d}%',
-    },
-    legend: {
-      top: '5%',
-      left: 'center',
-      icon: 'circle',
-      itemWidth: 8,
-      itemHeight: 8,
-      itemGap: 12,
-      textStyle: { color: '#90A4AE', fontSize: 11 },
-      selectedMode: false,
-    },
-    series: [
-      {
-        name: 'Entity Distribution',
-        type: 'pie',
-        radius: ['40%', '70%'],
-        avoidLabelOverlap: false,
-        label: { show: false, position: 'center' },
-        emphasis: {
-          label: {
-            show: true,
-            fontSize: 28,
-            fontWeight: 'bold',
-            color: '#1A5F6B',
-            formatter: '{b}',
-          },
-          itemStyle: {
-            shadowBlur: 20,
-            shadowOffsetX: 0,
-            shadowColor: 'rgba(0, 0, 0, 0.25)',
-          },
-        },
-        labelLine: { show: false },
-        itemStyle: {
-          borderRadius: 6,
-          borderColor: 'transparent',
-          borderWidth: 2,
-        },
-        data: prepareEntityData(metrics.charts.entity_distribution),
-      },
-    ],
-  };
-
-  // ── Publication Timeline — smooth area chart (spec: publication_timeline_prompt.md) ──
-  const timelineYears = metrics.charts.papers_by_year.map((d) => d.name);
-  const timelineCounts = metrics.charts.papers_by_year.map((d) => d.value);
-  const timelineAvg = timelineCounts.length
-    ? Math.round(timelineCounts.reduce((a, b) => a + b, 0) / timelineCounts.length)
-    : 0;
-
-  const timelineOption: EChartsOption = {
-    backgroundColor: 'transparent',
-    grid: { top: 28, right: 16, bottom: 60, left: 48, containLabel: false },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'line',
-        lineStyle: { color: '#4DD0E1', width: 1, type: 'dashed' },
-      },
-      backgroundColor: isDark ? '#1E2535' : '#ffffff',
-      borderColor: isDark ? 'rgba(255,255,255,0.1)' : '#E0E0E0',
-      borderWidth: 1,
-      textStyle: {
-        color: isDark ? '#F0F2F8' : '#111111',
-        fontSize: 12,
-        fontFamily: 'Inter, system-ui, sans-serif',
-      },
-      formatter: (params: any) => {
-        const p = Array.isArray(params) ? params[0] : params;
-        return `<b style="font-family:monospace">${p.axisValue}</b><br/>${p.value} papers`;
-      },
-    },
-    xAxis: {
-      type: 'category',
-      data: timelineYears,
-      boundaryGap: false,
-      axisLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.1)' : '#E0E0E0' } },
-      axisTick: { show: false },
-      axisLabel: {
-        color: isDark ? '#7880A0' : '#6B7280',
-        fontSize: 10,
-        fontFamily: 'monospace',
-        interval: 4,
-        margin: 10,
-      },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: {
-        color: isDark ? '#7880A0' : '#6B7280',
-        fontSize: 10,
-        fontFamily: 'monospace',
-      },
-      splitLine: {
-        lineStyle: {
-          color: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
-        },
-      },
-    },
-    dataZoom: [
-      {
-        type: 'slider',
-        show: timelineHover,
-        height: 18,
-        bottom: 8,
-        borderColor: 'transparent',
-        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#F0F0F0',
-        fillerColor: isDark ? 'rgba(77,208,225,0.2)' : 'rgba(77,208,225,0.15)',
-        handleStyle: { color: '#4DD0E1' },
-        moveHandleStyle: { color: '#4DD0E1' },
-        textStyle: { color: isDark ? '#7880A0' : '#6B7280', fontSize: 10 },
-        labelFormatter: (val: number) => timelineYears[val] ?? '',
-      },
-      { type: 'inside' },
-    ],
-    series: [
-      {
-        type: 'line',
-        data: timelineCounts,
-        smooth: 0.4,
-        symbol: 'none',
-        symbolSize: 6,
-        lineStyle: { color: '#00ACC1', width: 2 },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: isDark ? 'rgba(0,172,193,0.4)' : 'rgba(77,208,225,0.35)' },
-              { offset: 1, color: isDark ? 'rgba(0,172,193,0.02)' : 'rgba(77,208,225,0.02)' },
-            ],
-          },
-        },
-        markPoint: {
-          symbol: 'circle',
-          symbolSize: 8,
-          itemStyle: {
-            color: '#00ACC1',
-            borderColor: isDark ? '#1E2535' : '#ffffff',
-            borderWidth: 2,
-          },
-          label: { show: false },
-          data: [{ type: 'max', name: 'Peak' }],
-        },
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: {
-            color: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)',
-            type: 'dashed',
-            width: 1,
-          },
-          label: {
-            show: true,
-            position: 'end',
-            formatter: `avg ${timelineAvg}`,
-            color: isDark ? '#7880A0' : '#6B7280',
-            fontSize: 10,
-            fontFamily: 'monospace',
-          },
-          data: [{ type: 'average', name: 'Average' }],
-        },
-      },
-    ],
-  };
+  // Entity Distribution + Publication Timeline are now Recharts components;
+  // see EntityDonutChart.tsx + PublicationTimelineChart.tsx.
 
   // ── Plant Origin Heatmap (geo_light_prompt.md — Ghost Map effectScatter) ──
   const geoPoints = metrics.charts.geo_distribution
@@ -667,34 +467,19 @@ const Dashboard: React.FC = () => {
         {/* Row 2: Entity Distribution + Publication Timeline */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
           <ChartCard title="Entity Distribution">
-            <div className="h-80 w-full">
-              <ReactECharts
-                option={entityDistOption}
-                theme={PHYTOQUERY_THEME_NAME}
-                style={{ width: '100%', height: '100%' }}
-                opts={{ renderer: 'canvas' }}
-                onEvents={{
-                  click: (params: any) => {
-                    if (typeof params?.name === 'string') {
-                      openDrawer({
-                        tab: 'entities',
-                        filter: { kind: 'entity', label: `Type: ${params.name}`, value: params.name },
-                      });
-                    }
-                  },
-                }}
-              />
-            </div>
+            <EntityDonutChart
+              data={metrics.charts.entity_distribution}
+              onSliceClick={(name) =>
+                openDrawer({
+                  tab: 'entities',
+                  filter: { kind: 'entity', label: `Type: ${name}`, value: name },
+                })
+              }
+            />
           </ChartCard>
 
           <ChartCard title="Publication Timeline">
-            <div
-              className="h-[300px] w-full"
-              onMouseEnter={() => setTimelineHover(true)}
-              onMouseLeave={() => setTimelineHover(false)}
-            >
-              <ReactECharts option={timelineOption} theme={PHYTOQUERY_THEME_NAME} style={{ width: '100%', height: '100%' }} opts={{ renderer: 'canvas' }} />
-            </div>
+            <PublicationTimelineChart data={metrics.charts.papers_by_year} />
           </ChartCard>
         </div>
 

@@ -1,235 +1,109 @@
 /**
- * Journal Distribution Widget — pure ECharts, Coastal Pastel theme.
+ * Journal Distribution Widget — shadcn-native rewrite.
  *
  * Two panes:
- *   Left  — dominant journal hero (ECharts `graphic` API, no series).
- *   Right — ranked horizontal bar chart of remaining top journals.
+ *   Left  — dominant-journal hero in plain JSX + Tailwind. The
+ *           previous implementation abused ECharts' ``graphic`` API
+ *           as an SVG/canvas drawing primitive even though no chart
+ *           series was being plotted. JSX is the right tool here:
+ *           less code, theme-aware (no manual dark-mode branches),
+ *           a11y-friendly out of the box.
+ *   Right — ranked horizontal bar chart via ``<JournalBarsChart />``
+ *           (shadcn "Bar Chart - Horizontal" pattern, Recharts).
  *
- * Spec: hm.md.
+ * The component's public API is unchanged so Dashboard.tsx needs no
+ * call-site update.
  */
 
-import React from 'react';
-import ReactECharts from 'echarts-for-react';
-import type { EChartsOption } from 'echarts';
-import { COASTAL_THEME_NAME, COASTAL_PALETTE } from '../../lib/echartsTheme';
+import React from "react"
+import { JournalBarsChart } from "./JournalBarsChart"
 
 interface JournalEntry {
-  name: string;
-  value: number;
+  name: string
+  value: number
 }
 
 interface Props {
-  journals: JournalEntry[];   // sorted desc by paper count, dominant first
-  totalPapers: number;        // for percentage calc
-  height?: number;            // pane height in px (default 260)
-  onJournalClick?: (name: string) => void;  // fires on right-pane bar click
+  journals: JournalEntry[] // sorted desc by paper count, dominant first
+  totalPapers: number // for percentage calc
+  height?: number // pane height in px (default 260)
+  onJournalClick?: (name: string) => void // fires on right-pane bar click
 }
 
-const LEFT_PADDING = 28;
-const PROGRESS_BAR_WIDTH = 280;
-
-const JournalDistributionWidget: React.FC<Props> = ({ journals, totalPapers, height = 260, onJournalClick }) => {
+const JournalDistributionWidget: React.FC<Props> = ({
+  journals,
+  totalPapers,
+  height = 260,
+  onJournalClick,
+}) => {
   if (!journals.length) {
     return (
       <div
-        className="flex items-center justify-center text-xs text-slate-400"
+        className="flex items-center justify-center text-xs text-muted-foreground"
         style={{ height }}
       >
         No journal data
       </div>
-    );
+    )
   }
 
-  const dominant = journals[0];
-  const ranked = journals.slice(1, 10);
-  const pct = totalPapers > 0 ? Math.round((dominant.value / totalPapers) * 100) : 0;
-  const fillWidth = Math.round(
-    PROGRESS_BAR_WIDTH * (totalPapers > 0 ? dominant.value / totalPapers : 0)
-  );
-
-  // ── Left pane: hero stats via `graphic` API ────────────────────────────────
-  const heroOption: EChartsOption = {
-    backgroundColor: '#F2FBFC',
-    graphic: {
-      elements: [
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 28,
-          style: {
-            text: wrapJournalName(dominant.name),
-            font: '500 15px Inter, system-ui, sans-serif',
-            fill: '#1A5F6B',
-            lineHeight: 22,
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 88,
-          style: {
-            text: dominant.value.toLocaleString(),
-            font: '500 58px Inter, system-ui, sans-serif',
-            fill: '#2AACBF',
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING + measureBigNumberWidth(dominant.value) + 8,
-          top: 118,
-          style: {
-            text: 'papers',
-            font: '400 15px Inter, system-ui, sans-serif',
-            fill: '#5BBCC8',
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 170,
-          style: {
-            text: `${pct}%`,
-            font: '500 28px Inter, system-ui, sans-serif',
-            fill: '#2AACBF',
-          },
-        },
-        {
-          type: 'rect',
-          left: LEFT_PADDING,
-          top: 212,
-          shape: { width: PROGRESS_BAR_WIDTH, height: 5, r: 3 },
-          style: { fill: 'rgba(160,228,241,0.3)' },
-        },
-        {
-          type: 'rect',
-          left: LEFT_PADDING,
-          top: 212,
-          shape: { width: fillWidth, height: 5, r: 3 },
-          style: { fill: '#A0E4F1' },
-        },
-      ],
-    },
-  };
-
-  // ── Right pane: ranked horizontal bars ─────────────────────────────────────
-  const rankedOption: EChartsOption = {
-    backgroundColor: '#FBFEFE',
-    grid: { top: 10, right: 44, bottom: 10, left: 10, containLabel: true },
-    xAxis: {
-      type: 'value',
-      show: false,
-      max: ranked[0]?.value ?? 0,
-    },
-    yAxis: {
-      type: 'category',
-      inverse: true,
-      data: ranked.map((j) => j.name),
-      axisLabel: {
-        fontSize: 10,
-        color: '#5A8080',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        width: 90,
-        overflow: 'truncate',
-      },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: ranked.map((j, i) => ({
-          value: j.value,
-          itemStyle: {
-            color: COASTAL_PALETTE[i % COASTAL_PALETTE.length],
-            borderRadius: [0, 3, 3, 0],
-          },
-        })),
-        barMaxWidth: 8,
-        label: {
-          show: true,
-          position: 'right',
-          formatter: '{c}',
-          fontSize: 10,
-          fontFamily: 'Inter, system-ui, sans-serif',
-          color: '#7AACAC',
-        },
-        showBackground: true,
-        backgroundStyle: {
-          color: 'rgba(160,228,241,0.12)',
-          borderRadius: [0, 3, 3, 0],
-        },
-        emphasis: {
-          itemStyle: { opacity: 0.75 },
-        },
-      },
-    ],
-    tooltip: {
-      show: true,
-      backgroundColor: '#fff',
-      borderColor: '#A0E4F1',
-      borderWidth: 1,
-      textStyle: { color: '#1A5F6B', fontSize: 12 },
-      formatter: (p: any) => `${p.name}<br/><b>${p.value}</b> papers`,
-    },
-  };
+  const dominant = journals[0]
+  const ranked = journals.slice(1, 10)
+  const pct =
+    totalPapers > 0 ? Math.round((dominant.value / totalPapers) * 100) : 0
 
   return (
     <div
-      className="grid overflow-hidden rounded-2xl border"
-      style={{
-        gridTemplateColumns: '1fr 1px 220px',
-        borderColor: '#C8F1F8',
-        height,
-      }}
+      className="grid overflow-hidden rounded-2xl border border-border"
+      style={{ gridTemplateColumns: "1fr 1px 240px", height }}
     >
-      <ReactECharts
-        option={heroOption}
-        theme={COASTAL_THEME_NAME}
-        style={{ width: '100%', height: '100%' }}
-        opts={{ renderer: 'canvas' }}
-        notMerge
-      />
-      <div style={{ background: '#C8F1F8' }} />
-      <ReactECharts
-        option={rankedOption}
-        theme={COASTAL_THEME_NAME}
-        style={{ width: '100%', height: '100%' }}
-        opts={{ renderer: 'canvas' }}
-        notMerge
-        onEvents={onJournalClick ? {
-          click: (params: any) => {
-            if (typeof params?.name === 'string') onJournalClick(params.name);
-          },
-        } : undefined}
-      />
+      {/* Left pane — hero stat, plain JSX */}
+      <div className="flex flex-col justify-between p-6 bg-muted/30">
+        <div className="text-sm font-medium text-foreground line-clamp-2 leading-tight">
+          {dominant.name}
+        </div>
+
+        <div className="flex items-baseline gap-2">
+          <span
+            className="text-6xl font-semibold tabular-nums text-foreground"
+            style={{ color: "var(--chart-1)" }}
+          >
+            {dominant.value.toLocaleString()}
+          </span>
+          <span className="text-sm text-muted-foreground">papers</span>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <span
+              className="text-2xl font-medium tabular-nums"
+              style={{ color: "var(--chart-1)" }}
+            >
+              {pct}%
+            </span>
+            <span className="text-xs text-muted-foreground">of corpus</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${pct}%`,
+                backgroundColor: "var(--chart-1)",
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div className="bg-border" />
+
+      {/* Right pane — ranked horizontal bars */}
+      <div className="p-3 overflow-hidden bg-card">
+        <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
+      </div>
     </div>
-  );
-};
-
-// Wrap journal name to at most two lines of ~24 chars each.
-function wrapJournalName(name: string): string {
-  if (name.length <= 24) return name;
-  const words = name.split(' ');
-  const lines: string[] = [];
-  let current = '';
-  for (const w of words) {
-    if ((current + ' ' + w).trim().length > 24 && current) {
-      lines.push(current.trim());
-      current = w;
-      if (lines.length >= 1) break;
-    } else {
-      current = (current + ' ' + w).trim();
-    }
-  }
-  if (current) lines.push(current.trim());
-  return lines.slice(0, 2).join('\n');
+  )
 }
 
-// Approximate pixel width of the big-number text so we can place "papers"
-// beside it without overlap. 58px Inter digits ~ 32px wide; comma ~ 12px.
-function measureBigNumberWidth(n: number): number {
-  const s = n.toLocaleString();
-  let w = 0;
-  for (const ch of s) w += ch === ',' ? 12 : 32;
-  return w;
-}
-
-export default JournalDistributionWidget;
+export default JournalDistributionWidget
