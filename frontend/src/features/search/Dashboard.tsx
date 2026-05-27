@@ -23,6 +23,16 @@ ensurePhytoQueryTheme();
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { cva, type VariantProps } from 'class-variance-authority';
+import { cn } from '@/lib/utils';
 import { PublicationTimelineChart } from './PublicationTimelineChart';
 import { EntityDonutChart } from './EntityDonutChart';
 
@@ -43,28 +53,40 @@ interface DashboardMetrics {
   };
 }
 
-// ─── Stat Card (Style 5 — spec: h.md) ─────────────────────────────────────────
+// ─── Stat Card — shadcn Card + cva accent variants ───────────────────────────
+//
+// Each variant supplies two CSS custom properties (--stat-accent and
+// --stat-divider) that the JSX consumes via inline style. This keeps the
+// per-accent palette declarative on the component instead of hidden in
+// a separate stylesheet, while leaving the shadcn Card's own structural
+// classes (bg-card, ring-foreground/10, rounded-2xl, etc.) intact.
 
-type StatAccent = 'aqua' | 'lavender' | 'sage';
+const statCardVariants = cva('gap-0 py-5 transition-shadow', {
+  variants: {
+    accent: {
+      aqua: '[--stat-accent:#4DD0E1] [--stat-divider:#B2EBF2]',
+      lavender: '[--stat-accent:#9575CD] [--stat-divider:#D1C4E9]',
+      sage: '[--stat-accent:#81C784] [--stat-divider:#C8E6C8]',
+    },
+  },
+  defaultVariants: { accent: 'aqua' },
+});
 
-function StatCard({
-  accent,
-  label,
-  value,
-  footer,
-  onClick,
-}: {
-  accent: StatAccent;
+interface StatCardProps extends VariantProps<typeof statCardVariants> {
   label: string;
   value: number;
   footer: React.ReactNode;
   onClick?: () => void;
-}) {
+}
+
+function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
   const clickable = !!onClick;
   return (
-    <div
-      className="stat-card"
-      data-accent={accent}
+    <Card
+      className={cn(
+        statCardVariants({ accent }),
+        clickable && 'cursor-pointer hover:ring-foreground/20',
+      )}
       onClick={onClick}
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
@@ -73,27 +95,50 @@ function StatCard({
           ? (e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                onClick!();
+                onClick?.();
               }
             }
           : undefined
       }
-      style={clickable ? { cursor: 'pointer' } : undefined}
     >
-      <div className="stat-label">{label}</div>
-      <div className="stat-number">{value.toLocaleString()}</div>
-      <div className="stat-divider" />
-      <div className="stat-footer">{footer}</div>
-    </div>
+      <CardHeader className="px-5">
+        <span
+          className="text-[9px] font-medium uppercase tracking-[0.12em]"
+          style={{ color: 'var(--stat-accent)' }}
+        >
+          {label}
+        </span>
+      </CardHeader>
+      <CardContent className="px-5">
+        <div className="text-[52px] font-medium font-mono leading-[0.9] tracking-[-0.04em]">
+          {value.toLocaleString()}
+        </div>
+      </CardContent>
+      <Separator
+        className="mx-5 my-2 [&]:bg-[var(--stat-divider)]"
+      />
+      <CardFooter className="px-5 text-[11px] text-muted-foreground leading-[1.5]">
+        {footer}
+      </CardFooter>
+    </Card>
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+// ─── Chart Card — shadcn Card composition ────────────────────────────────────
+function ChartCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="saas-card p-6">
-      <h3 className="text-base font-semibold text-slate-900 mb-6">{title}</h3>
-      {children}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
@@ -408,8 +453,8 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* KPI Cards — Style 5 (h.md) */}
-      <div className="stats-strip mb-8">
+      {/* KPI Cards — shadcn Card with cva accent variants */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8">
         <StatCard
           accent="aqua"
           label="Papers indexed"
@@ -417,7 +462,7 @@ const Dashboard: React.FC = () => {
           footer={
             yearMin !== null && yearMax !== null ? (
               <>
-                {yearMin} <span className="stat-accent">→</span> {yearMax}
+                {yearMin} <span className="text-[color:var(--stat-accent)] mx-[3px]">→</span> {yearMax}
               </>
             ) : (
               'No year data'
@@ -431,7 +476,7 @@ const Dashboard: React.FC = () => {
           value={entitiesTotal}
           footer={
             <>
-              {entitiesPerPaper} entities <span className="stat-accent">·</span> per paper
+              {entitiesPerPaper} entities <span className="text-[color:var(--stat-accent)] mx-[3px]">·</span> per paper
             </>
           }
           onClick={() => openDrawer({ tab: 'entities', filter: null })}
@@ -442,7 +487,7 @@ const Dashboard: React.FC = () => {
           value={journalsTotal}
           footer={
             <>
-              1 journal <span className="stat-accent">·</span> {dominantPct}% of corpus
+              1 journal <span className="text-[color:var(--stat-accent)] mx-[3px]">·</span> {dominantPct}% of corpus
             </>
           }
           onClick={() => openDrawer({ tab: 'journals', filter: null })}
@@ -450,7 +495,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Row 1: Journal Distribution Widget (full-width) */}
-      <div className="charts-grid mt-8">
+      <div className="mt-8">
         <ChartCard title="Top Journals">
           <JournalDistributionWidget
             journals={metrics.charts.papers_by_journal}

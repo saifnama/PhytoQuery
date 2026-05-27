@@ -993,86 +993,10 @@ html, body, header, aside, main, nav, button, input, textarea,
     var(--citation-flash-easing) forwards;
 }
 
-/* ── Dashboard Stat Cards (Style 5) ────────────────────────────────────────
-   Spec: h.md. Three equal-width cards with mono number + coloured hairline
-   divider. Theme follows the app's class-driven dark mode (not OS setting). */
-
-.stats-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-
-  --card-bg: #ffffff;
-  --card-border: #E0E0E0;
-  --number-color: #111111;
-  --footer-color: #90A4AE;
-}
-
-.dark .stats-strip {
-  --card-bg: #161A23;
-  --card-border: #1E2535;
-  --number-color: #F0F2F8;
-  --footer-color: #546E7A;
-}
-
-.stat-card {
-  background: var(--card-bg);
-  border: 0.5px solid var(--card-border);
-  border-radius: 14px;
-  padding: 20px 22px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.stat-label {
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent-color);
-  margin-bottom: 6px;
-}
-
-.stat-number {
-  font-size: 52px;
-  font-weight: 500;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--number-color);
-  letter-spacing: -0.04em;
-  line-height: 0.9;
-  margin-bottom: 12px;
-}
-
-.stat-divider {
-  height: 1px;
-  background: var(--divider-color);
-  margin-bottom: 8px;
-}
-
-.stat-footer {
-  font-size: 11px;
-  color: var(--footer-color);
-  line-height: 1.5;
-}
-
-.stat-accent {
-  color: var(--accent-color);
-  margin: 0 3px;
-}
-
-.stat-card[data-accent="aqua"] {
-  --accent-color: #4DD0E1;
-  --divider-color: #B2EBF2;
-}
-.stat-card[data-accent="lavender"] {
-  --accent-color: #9575CD;
-  --divider-color: #D1C4E9;
-}
-.stat-card[data-accent="sage"] {
-  --accent-color: #81C784;
-  --divider-color: #C8E6C8;
-}
+/* Dashboard stat cards are now built with shadcn Card + cva accent
+   variants in frontend/src/features/search/Dashboard.tsx — the
+   previous .stats-strip / .stat-card / .stat-* / [data-accent] CSS
+   has been deleted. */
 
 @theme inline {
     --font-heading: var(--font-sans);
