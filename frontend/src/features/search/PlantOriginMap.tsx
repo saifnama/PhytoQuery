@@ -6,7 +6,6 @@ import {
   Marker,
   ZoomableGroup,
 } from "react-simple-maps"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
   buildCentroidMap,
   lookupCentroid,
@@ -15,28 +14,30 @@ import {
 
 /**
  * Plant Origin Heatmap — react-simple-maps replacement for the previous
- * ECharts effectScatter geo. Matches the ECharts visual closely:
+ * ECharts effectScatter geo.
  *
  *   - Light "ghost map" world fill (#FFFFFF) with light teal borders
  *     (#D8E8EE), darker on hover (#9DE4EF).
- *   - Cyan pulsing markers (#06B6D4) sized by sqrt(value / max), with
- *     a stroke-only ring that expands 3.3x over 3.3s (matches the
- *     ECharts ``rippleEffect: { brushType: 'stroke', scale: 3.3,
- *     period: 3.3 }`` config exactly via pure CSS).
- *   - Per-marker animation-delay so the rings don't pulse in lockstep.
- *   - Custom hover tooltip positioned at the cursor. Uses shadcn
- *     ``bg-popover`` / ``text-popover-foreground`` tokens so dark
- *     mode auto-flips with the theme.
- *   - Pan + drag via ``<ZoomableGroup>`` (parity with ECharts
- *     ``geo.roam: true``).
+ *   - Cyan markers (#06B6D4) sized by sqrt(value / max).
+ *   - Ripple effect: **three concentric rings per marker**, each on
+ *     the same 2.1s animation cycle but with -0s / -0.7s / -1.4s
+ *     animation-delays so a new ring starts every 0.7s and three are
+ *     always visible at different scales/opacities. That's the
+ *     raindrop-on-water look — a single ring fading to zero left
+ *     visible dead gaps between cycles.
+ *   - ``vector-effect="non-scaling-stroke"`` keeps the ring 1.6px
+ *     thick regardless of scale, matching the original ECharts
+ *     ``rippleEffect: { brushType: 'stroke' }`` look.
  *
- * The world.json topology comes from /public/world.json — the SAME
- * file ECharts was reading. No re-download, same country names.
- *
- * Projection: ``geoNaturalEarth1`` — the rounded earth-globe look
- * common in academic data viz. Closest visual match to ECharts'
- * default world projection.
+ * Geographies consume the world.json URL directly so react-simple-maps
+ * handles the TopoJSON / GeoJSON resolution internally (passing a
+ * pre-parsed object can fail when the format doesn't match RSM's
+ * expectations exactly). We still fetch world.json ourselves once to
+ * build the centroid map for marker positioning — RSM caches by URL
+ * so the duplicate fetch is free.
  */
+
+const WORLD_GEO_URL = "/world.json"
 
 interface Props {
   data: { name: string; value: number }[]
@@ -51,43 +52,39 @@ interface Hovered {
   y: number
 }
 
-// Type narrowing — react-simple-maps' generic geographies don't carry
-// a property schema. Treat the rsmKey + properties.name optionally.
+// react-simple-maps' generic geographies don't carry a property
+// schema; we just need rsmKey + an optional properties.name.
 interface GeoFeature {
   rsmKey: string
   properties: { name?: string }
 }
 
 export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
-  const [worldGeo, setWorldGeo] = useState<unknown>(null)
   const [centroids, setCentroids] = useState<Map<string, Lnglat>>(
     () => new Map(),
   )
   const [hovered, setHovered] = useState<Hovered | null>(null)
 
-  // Fetch the world topology once on mount.
+  // Fetch world.json once for centroid extraction. The Geographies
+  // component does its own (cached) fetch via the URL prop, so there's
+  // no double download in practice.
   useEffect(() => {
     let cancelled = false
-    fetch("/world.json")
+    fetch(WORLD_GEO_URL)
       .then((r) => r.json())
       .then((world) => {
-        if (cancelled) return
-        setWorldGeo(world)
-        setCentroids(buildCentroidMap(world))
+        if (!cancelled) setCentroids(buildCentroidMap(world))
       })
       .catch(() => {
-        if (!cancelled) setWorldGeo({})
+        /* map keeps rendering without markers */
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Resolve each data entry to a [lng, lat] + a base radius proportional
-  // to ``sqrt(value / max)``. The sqrt scaling keeps small + large
-  // values both visible — linear scaling would hide low-count countries.
   const markers = useMemo(() => {
-    if (!data.length) return []
+    if (!data.length || centroids.size === 0) return []
     const max = data.reduce((m, d) => Math.max(m, d.value), 1)
     return data
       .map((d) => {
@@ -102,12 +99,6 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
       )
   }, [data, centroids])
 
-  // Loading state — Skeleton matches the original chart height so the
-  // dashboard layout doesn't shift when the map arrives.
-  if (!worldGeo) {
-    return <Skeleton className="rounded-2xl" style={{ height }} />
-  }
-
   return (
     <div
       className="relative w-full overflow-hidden rounded-2xl"
@@ -115,11 +106,11 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
     >
       <ComposableMap
         projection="geoNaturalEarth1"
-        projectionConfig={{ scale: 155 }}
+        projectionConfig={{ scale: 175 }}
         style={{ width: "100%", height: "100%" }}
       >
         <ZoomableGroup zoom={1} center={[0, 20]} minZoom={1} maxZoom={5}>
-          <Geographies geography={worldGeo as object}>
+          <Geographies geography={WORLD_GEO_URL}>
             {({ geographies }: { geographies: GeoFeature[] }) =>
               geographies.map((g) => (
                 <Geography
@@ -173,20 +164,30 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
               onMouseLeave={() => setHovered(null)}
               onClick={() => onCountryClick?.(m.name)}
             >
-              {/* Stroke-only pulse ring — staggered start per marker */}
+              {/* Three concentric ripple rings. Each runs the same 2.1s
+                  cycle but with animation-delays of 0, -0.7s, -1.4s so
+                  a new ring starts every 0.7s and three are always on
+                  screen at different scales — the raindrop-on-water look.
+                  vector-effect keeps the stroke a constant 1.6px as the
+                  ring scales up. */}
+              {[0, -0.7, -1.4].map((delay, k) => (
+                <circle
+                  key={k}
+                  r={m.baseR}
+                  fill="none"
+                  stroke="#06B6D4"
+                  strokeWidth={1.6}
+                  vectorEffect="non-scaling-stroke"
+                  className="map-ripple cursor-pointer"
+                  style={{ animationDelay: `${delay}s` }}
+                />
+              ))}
+
+              {/* Solid center dot. */}
               <circle
-                r={m.baseR}
-                fill="none"
-                stroke="#06B6D4"
-                strokeWidth={1.5}
-                className="map-pulse cursor-pointer"
-                style={{ animationDelay: `${(i % 7) * 0.15}s` }}
-              />
-              {/* Solid center dot */}
-              <circle
-                r={m.baseR * 0.45}
+                r={m.baseR * 0.55}
                 fill="#06B6D4"
-                opacity={0.92}
+                opacity={0.95}
                 className="cursor-pointer"
               />
             </Marker>

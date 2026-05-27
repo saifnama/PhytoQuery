@@ -136,19 +136,29 @@ body {
     to { transform: translateY(0); opacity: 1; }
 }
 
-/* Plant Origin Map — pulse rings on each country marker. Matches the
-   previous ECharts effectScatter "stroke" rippleEffect with scale=3.3,
-   period=3.3s. Applied to <circle> elements inside react-simple-maps
-   Marker; transform-box: fill-box keeps the scale centred on the
-   circle itself rather than the SVG root's (0,0). */
-@keyframes map-pulse {
-    0%   { transform: scale(1);   opacity: 0.7; }
-    100% { transform: scale(3.3); opacity: 0;   }
+/* Plant Origin Map — ripple rings on each country marker. THREE
+   concentric rings render per marker, all running this same 2.1s
+   cycle but with animation-delays of 0, -0.7s, -1.4s so a new ring
+   starts every 0.7s. At any moment three rings are visible at
+   different scales/opacities — the raindrop-on-water effect. A
+   single-ring animation left visible dead gaps between cycles.
+
+   Opacity holds longer at the start, fades only after 60% — that's
+   what gives the ring its "expand while staying bright, then fade
+   only at the edge" character. Linear interpolation from 0.85 → 0
+   over the full cycle looks washy.
+
+   transform-box: fill-box keeps the scale centred on the circle
+   itself rather than the SVG root's (0,0). */
+@keyframes map-ripple {
+    0%   { transform: scale(0.7); opacity: 0.85; }
+    60%  {                         opacity: 0.35; }
+    100% { transform: scale(4.5); opacity: 0;    }
 }
-.map-pulse {
+.map-ripple {
     transform-box: fill-box;
     transform-origin: center;
-    animation: map-pulse 3.3s ease-out infinite;
+    animation: map-ripple 2.1s ease-out infinite;
 }
 
 /* Typing-indicator dots — used by the chat thread's TypingIndicator.
