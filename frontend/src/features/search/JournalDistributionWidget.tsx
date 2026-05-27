@@ -1,21 +1,38 @@
 /**
- * Journal Distribution Widget — shadcn-native rewrite.
+ * Journal Distribution Widget — shadcn-native composition.
  *
- * Two panes:
- *   Left  — dominant-journal hero in plain JSX + Tailwind. The
- *           previous implementation abused ECharts' ``graphic`` API
- *           as an SVG/canvas drawing primitive even though no chart
- *           series was being plotted. JSX is the right tool here:
- *           less code, theme-aware (no manual dark-mode branches),
- *           a11y-friendly out of the box.
- *   Right — ranked horizontal bar chart via ``<JournalBarsChart />``
- *           (shadcn "Bar Chart - Horizontal" pattern, Recharts).
+ * Both panes are shadcn ``<Card>`` instances; the dividing rule is a
+ * shadcn ``<Separator orientation="vertical">``. The outer wrapper is
+ * a layout-only flex container that gives the unified rounded border
+ * (no nested Card rings).
  *
- * The component's public API is unchanged so Dashboard.tsx needs no
- * call-site update.
+ * Colors are the original Coastal palette hex values (preserved at the
+ * user's request — these specific teals don't map cleanly to shadcn
+ * semantic tokens):
+ *   - #1A5F6B  hero title
+ *   - #2AACBF  big-number + percentage
+ *   - #5BBCC8  caption text
+ *   - #A0E4F1  progress-bar fill
+ *   - #F2FBFC  left-pane background
+ *   - #FBFEFE  right-pane background
+ *   - #C8F1F8  outer border + inter-pane separator
+ *
+ * Card defaults are overridden in two places: ``rounded-none ring-0``
+ * (the outer div already provides the rounded border, so each inner
+ * Card's own ring would double up), and ``gap-0`` (the hero pane uses
+ * ``justify-between`` to distribute its three sections across the full
+ * pane height instead of shadcn's default 24px gaps).
  */
 
 import React from "react"
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
 import { JournalBarsChart } from "./JournalBarsChart"
 
 interface JournalEntry {
@@ -54,40 +71,40 @@ const JournalDistributionWidget: React.FC<Props> = ({
 
   return (
     <div
-      className="grid overflow-hidden rounded-2xl border"
-      style={{
-        gridTemplateColumns: "1fr 1px 240px",
-        height,
-        borderColor: "#C8F1F8",
-      }}
+      className="flex overflow-hidden rounded-2xl border"
+      style={{ height, borderColor: "#C8F1F8" }}
     >
-      {/* Left pane — hero stat, plain JSX with original Coastal palette
-          colours (matches the pre-migration ECharts `graphic` layout). */}
-      <div
-        className="flex flex-col justify-between p-6"
+      {/* Left pane — shadcn Card with full Header/Content/Footer composition.
+          justify-between spreads the three sections across the pane. */}
+      <Card
+        className="flex-1 rounded-none ring-0 gap-0 justify-between py-6"
         style={{ background: "#F2FBFC" }}
       >
-        <div
-          className="text-sm font-medium line-clamp-2 leading-tight"
-          style={{ color: "#1A5F6B" }}
-        >
-          {dominant.name}
-        </div>
-
-        <div className="flex items-baseline gap-2">
-          <span
-            className="text-6xl font-semibold tabular-nums"
-            style={{ color: "#2AACBF" }}
+        <CardHeader>
+          <CardTitle
+            className="text-sm font-medium line-clamp-2 leading-tight"
+            style={{ color: "#1A5F6B" }}
           >
-            {dominant.value.toLocaleString()}
-          </span>
-          <span className="text-sm" style={{ color: "#5BBCC8" }}>
-            papers
-          </span>
-        </div>
+            {dominant.name}
+          </CardTitle>
+        </CardHeader>
 
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
+        <CardContent>
+          <div className="flex items-baseline gap-2">
+            <span
+              className="text-6xl font-semibold tabular-nums leading-none"
+              style={{ color: "#2AACBF" }}
+            >
+              {dominant.value.toLocaleString()}
+            </span>
+            <span className="text-sm" style={{ color: "#5BBCC8" }}>
+              papers
+            </span>
+          </div>
+        </CardContent>
+
+        <CardFooter className="flex-col items-stretch gap-2">
+          <div className="flex w-full items-baseline justify-between">
             <span
               className="text-2xl font-medium tabular-nums"
               style={{ color: "#2AACBF" }}
@@ -110,19 +127,26 @@ const JournalDistributionWidget: React.FC<Props> = ({
               }}
             />
           </div>
-        </div>
-      </div>
+        </CardFooter>
+      </Card>
 
-      {/* Divider */}
-      <div style={{ background: "#C8F1F8" }} />
+      {/* Inter-pane divider — shadcn Separator. The default --border
+          token would be too dark on this background, so it's
+          explicitly tinted with the Coastal border colour. */}
+      <Separator
+        orientation="vertical"
+        className="h-auto bg-[#C8F1F8]"
+      />
 
-      {/* Right pane — ranked horizontal bars */}
-      <div
-        className="p-3 overflow-hidden"
+      {/* Right pane — shadcn Card hosting the bar chart. */}
+      <Card
+        className="w-[240px] rounded-none ring-0 gap-0 py-3"
         style={{ background: "#FBFEFE" }}
       >
-        <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
-      </div>
+        <CardContent className="h-full px-3">
+          <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
+        </CardContent>
+      </Card>
     </div>
   )
 }
