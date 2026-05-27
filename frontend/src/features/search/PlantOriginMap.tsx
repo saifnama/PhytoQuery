@@ -6,38 +6,31 @@ import {
   Marker,
   ZoomableGroup,
 } from "react-simple-maps"
+// topojson-client is a transitive dep of react-simple-maps — we use it
+// here to decode the world-atlas TopoJSON to a GeoJSON FeatureCollection
+// once, then reuse that for both <Geographies> and centroid extraction.
+import { feature } from "topojson-client"
+import type { Topology } from "topojson-specification"
 import {
   buildCentroidMap,
   lookupCentroid,
   type Lnglat,
 } from "@/lib/mapCentroids"
 
+// GeoJSON FeatureCollection we hand to <Geographies> after decoding.
+type WorldGeo = { type: "FeatureCollection"; features: unknown[] }
+
 /**
  * Plant Origin Heatmap — react-simple-maps replacement for the previous
  * ECharts effectScatter geo.
  *
- *   - Light "ghost map" world fill (#FFFFFF) with light teal borders
- *     (#D8E8EE), darker on hover (#9DE4EF).
- *   - Cyan markers (#06B6D4) sized by sqrt(value / max).
- *   - Ripple effect: **three concentric rings per marker**, each on
- *     the same 2.1s animation cycle but with -0s / -0.7s / -1.4s
- *     animation-delays so a new ring starts every 0.7s and three are
- *     always visible at different scales/opacities. That's the
- *     raindrop-on-water look — a single ring fading to zero left
- *     visible dead gaps between cycles.
- *   - ``vector-effect="non-scaling-stroke"`` keeps the ring 1.6px
- *     thick regardless of scale, matching the original ECharts
- *     ``rippleEffect: { brushType: 'stroke' }`` look.
- *
- * Geographies consume the world.json URL directly so react-simple-maps
- * handles the TopoJSON / GeoJSON resolution internally (passing a
- * pre-parsed object can fail when the format doesn't match RSM's
- * expectations exactly). We still fetch world.json ourselves once to
- * build the centroid map for marker positioning — RSM caches by URL
- * so the duplicate fetch is free.
+ * Data source: the canonical d3 `world-atlas` countries-110m TopoJSON
+ * (bundled at /world-topo.json). We fetch + decode it once in this
+ * component, pass the resulting FeatureCollection to <Geographies>,
+ * and reuse the same decoded data for centroid extraction.
  */
 
-const WORLD_GEO_URL = "/world.json"
+const WORLD_GEO_URL = "/world-topo.json"
 
 interface Props {
   data: { name: string; value: number }[]
@@ -45,9 +38,15 @@ interface Props {
   height?: number
 }
 
-interface Hovered {
+interface MarkerHover {
   name: string
   value: number
+  x: number
+  y: number
+}
+
+interface CountryHover {
+  name: string
   x: number
   y: number
 }
@@ -60,23 +59,36 @@ interface GeoFeature {
 }
 
 export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
+  const [world, setWorld] = useState<WorldGeo | null>(null)
   const [centroids, setCentroids] = useState<Map<string, Lnglat>>(
     () => new Map(),
   )
-  const [hovered, setHovered] = useState<Hovered | null>(null)
+  const [markerHover, setMarkerHover] = useState<MarkerHover | null>(null)
+  const [countryHover, setCountryHover] = useState<CountryHover | null>(null)
 
-  // Fetch world.json once for centroid extraction. The Geographies
-  // component does its own (cached) fetch via the URL prop, so there's
-  // no double download in practice.
+  // Marker takes precedence over country if both are active (marker
+  // sits on top of the country shape in z-order anyway).
+  const tip: MarkerHover | CountryHover | null = markerHover ?? countryHover
+  const tipHasValue = tip != null && "value" in tip
+
+  // Fetch the world-atlas TopoJSON, decode it to a GeoJSON
+  // FeatureCollection, then hand the SAME object to <Geographies>
+  // (d3-geo path projection) and buildCentroidMap (marker placement).
   useEffect(() => {
     let cancelled = false
     fetch(WORLD_GEO_URL)
-      .then((r) => r.json())
-      .then((world) => {
-        if (!cancelled) setCentroids(buildCentroidMap(world))
+      .then((r) => {
+        if (!r.ok) throw new Error(`world-topo.json HTTP ${r.status}`)
+        return r.json()
       })
-      .catch(() => {
-        /* map keeps rendering without markers */
+      .then((topo: Topology) => {
+        if (cancelled) return
+        const fc = feature(topo, topo.objects.countries) as unknown as WorldGeo
+        setWorld(fc)
+        setCentroids(buildCentroidMap(fc))
+      })
+      .catch((err) => {
+        console.error("[PlantOriginMap] failed to load world geo:", err)
       })
     return () => {
       cancelled = true
@@ -106,50 +118,64 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
     >
       <ComposableMap
         projection="geoNaturalEarth1"
-        projectionConfig={{ scale: 175 }}
+        projectionConfig={{ scale: 175, center: [0, 20] }}
         style={{ width: "100%", height: "100%" }}
       >
-        <ZoomableGroup zoom={1} center={[0, 20]} minZoom={1} maxZoom={5}>
-          <Geographies geography={WORLD_GEO_URL}>
-            {({ geographies }: { geographies: GeoFeature[] }) =>
-              geographies.map((g) => (
-                <Geography
-                  key={g.rsmKey}
-                  geography={g}
-                  style={{
-                    default: {
-                      fill: "#FFFFFF",
-                      stroke: "#D8E8EE",
-                      strokeWidth: 0.6,
-                      outline: "none",
-                    },
-                    hover: {
-                      fill: "#EBF8FB",
-                      stroke: "#9DE4EF",
-                      strokeWidth: 0.8,
-                      outline: "none",
-                      cursor: onCountryClick ? "pointer" : "default",
-                    },
-                    pressed: {
-                      fill: "#EBF8FB",
-                      outline: "none",
-                    },
-                  }}
-                  onClick={() => {
-                    const name = g.properties?.name
-                    if (name && onCountryClick) onCountryClick(name)
-                  }}
-                />
-              ))
-            }
-          </Geographies>
+        <ZoomableGroup zoom={1} minZoom={1} maxZoom={5}>
+          {world && (
+            <Geographies geography={world}>
+              {({ geographies }: { geographies: GeoFeature[] }) =>
+                geographies.map((g) => (
+                  <Geography
+                    key={g.rsmKey}
+                    geography={g}
+                    style={{
+                      default: {
+                        fill: "#FFFFFF",
+                        stroke: "#D8E8EE",
+                        strokeWidth: 0.6,
+                        outline: "none",
+                      },
+                      hover: {
+                        fill: "#EBF8FB",
+                        stroke: "#9DE4EF",
+                        strokeWidth: 0.8,
+                        outline: "none",
+                        cursor: onCountryClick ? "pointer" : "default",
+                      },
+                      pressed: {
+                        fill: "#EBF8FB",
+                        outline: "none",
+                      },
+                    }}
+                    onMouseEnter={(e) => {
+                      const name = g.properties?.name
+                      if (name) {
+                        setCountryHover({ name, x: e.clientX, y: e.clientY })
+                      }
+                    }}
+                    onMouseMove={(e) =>
+                      setCountryHover((prev) =>
+                        prev ? { ...prev, x: e.clientX, y: e.clientY } : prev,
+                      )
+                    }
+                    onMouseLeave={() => setCountryHover(null)}
+                    onClick={() => {
+                      const name = g.properties?.name
+                      if (name && onCountryClick) onCountryClick(name)
+                    }}
+                  />
+                ))
+              }
+            </Geographies>
+          )}
 
           {markers.map((m, i) => (
             <Marker
               key={`${m.name}-${i}`}
               coordinates={m.coords}
               onMouseEnter={(e) =>
-                setHovered({
+                setMarkerHover({
                   name: m.name,
                   value: m.value,
                   x: e.clientX,
@@ -157,11 +183,11 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
                 })
               }
               onMouseMove={(e) =>
-                setHovered((prev) =>
+                setMarkerHover((prev) =>
                   prev ? { ...prev, x: e.clientX, y: e.clientY } : prev,
                 )
               }
-              onMouseLeave={() => setHovered(null)}
+              onMouseLeave={() => setMarkerHover(null)}
               onClick={() => onCountryClick?.(m.name)}
             >
               {/* Three concentric ripple rings. Each runs the same 2.1s
@@ -195,18 +221,29 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
         </ZoomableGroup>
       </ComposableMap>
 
-      {/* Tooltip — fixed-position, follows cursor */}
-      {hovered && (
+      {/* Tooltip — same fixed-position floating chip used for both
+          country hovers (name only) and marker hovers (name + count).
+          Marker hover wins if both happen at the same coords. */}
+      {tip && (
         <div
-          className="fixed z-50 pointer-events-none rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md"
-          style={{ left: hovered.x + 10, top: hovered.y + 10 }}
+          className="fixed z-50 pointer-events-none rounded-lg border border-border/60 bg-popover/95 backdrop-blur-sm px-3 py-2 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5"
+          style={{ left: tip.x + 14, top: tip.y + 14 }}
         >
-          <div className="font-semibold" style={{ color: "#0E7490" }}>
-            {hovered.name}
+          <div className="flex items-center gap-1.5 font-semibold tracking-tight">
+            {tipHasValue && (
+              <span
+                aria-hidden
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: "#06B6D4" }}
+              />
+            )}
+            <span style={{ color: "#0E7490" }}>{tip.name}</span>
           </div>
-          <div className="text-muted-foreground">
-            {hovered.value.toLocaleString()} papers
-          </div>
+          {tipHasValue && (
+            <div className="mt-0.5 text-muted-foreground tabular-nums">
+              {(tip as MarkerHover).value.toLocaleString()} papers
+            </div>
+          )}
         </div>
       )}
     </div>
