@@ -14,6 +14,8 @@ import type { Topology } from "topojson-specification"
 import {
   buildCentroidMap,
   lookupCentroid,
+  splitMultiCountry,
+  type Centroid,
   type Lnglat,
 } from "@/lib/mapCentroids"
 
@@ -60,7 +62,7 @@ interface GeoFeature {
 
 export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
   const [world, setWorld] = useState<WorldGeo | null>(null)
-  const [centroids, setCentroids] = useState<Map<string, Lnglat>>(
+  const [centroids, setCentroids] = useState<Map<string, Centroid>>(
     () => new Map(),
   )
   const [markerHover, setMarkerHover] = useState<MarkerHover | null>(null)
@@ -97,18 +99,43 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
 
   const markers = useMemo(() => {
     if (!data.length || centroids.size === 0) return []
-    const max = data.reduce((m, d) => Math.max(m, d.value), 1)
-    return data
-      .map((d) => {
-        const coords = lookupCentroid(d.name, centroids)
-        if (!coords) return null
-        const baseR = Math.max(3, Math.sqrt(d.value / max) * 12)
-        return { name: d.name, value: d.value, coords, baseR }
-      })
-      .filter(
-        (m): m is { name: string; value: number; coords: Lnglat; baseR: number } =>
-          m !== null,
-      )
+
+    // Aggregate by canonical world-atlas country. Multi-country mentions
+    // like "Italy And France" or "Guinea, Uganda And Sudan" are split
+    // and each component country gets the paper's contribution credited
+    // (full attribution to each — the paper IS about both/all). Direct
+    // lookup is tried first so single-country names containing " And " /
+    // commas (Antigua and Barbuda, Trinidad and Tobago, etc.) keep their
+    // own aliased centroid instead of getting split.
+    const byCountry = new Map<
+      string,
+      { name: string; value: number; coords: Lnglat }
+    >()
+
+    const contribute = (rawName: string, value: number): boolean => {
+      const c = lookupCentroid(rawName, centroids)
+      if (!c) return false
+      const existing = byCountry.get(c.name)
+      if (existing) existing.value += value
+      else byCountry.set(c.name, { name: c.name, value, coords: c.coords })
+      return true
+    }
+
+    for (const d of data) {
+      if (contribute(d.name, d.value)) continue
+      const parts = splitMultiCountry(d.name)
+      if (parts.length === 1) continue
+      for (const part of parts) contribute(part, d.value)
+    }
+
+    const aggregated = Array.from(byCountry.values())
+    const max = aggregated.reduce((m, d) => Math.max(m, d.value), 1)
+    return aggregated.map(({ name, value, coords }) => ({
+      name,
+      value,
+      coords,
+      baseR: Math.max(3, Math.sqrt(value / max) * 12),
+    }))
   }, [data, centroids])
 
   return (
