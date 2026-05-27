@@ -1,11 +1,20 @@
 <#
 .SYNOPSIS
-    PhytoQuery - Qdrant Server lifecycle helper (Docker) for Windows.
+    PhytoQuery - Qdrant Server lifecycle helper (Docker or Podman) for Windows.
 
 .DESCRIPTION
     Mirror of scripts/qdrant.sh for PowerShell. Idempotent: start when
     already running is a no-op, start on a stopped container resumes it
     without losing data.
+
+    Runtime selection (env QDRANT_RUNTIME):
+      auto    (default) try podman first, fall back to docker
+      podman  force podman
+      docker  force docker
+
+    Docker and Podman share the same CLI surface for run / ps / start /
+    stop / logs / rm / inspect — the only branching is the prerequisite
+    check (Docker needs a reachable daemon; Podman is daemonless).
 
 .EXAMPLE
     .\scripts\qdrant.ps1 start      # start (creates container on first run)
@@ -17,14 +26,16 @@
 
 .NOTES
     Settings via environment variables (sensible defaults baked in):
-      QDRANT_CONTAINER    container name           default: pq_qdrant
-      QDRANT_STORAGE_DIR  host storage path        default: $env:/var/lib/docker/volumes/pq_qdrant/_data
+      QDRANT_RUNTIME      auto | docker | podman   default: auto
+      QDRANT_CONTAINER    container name           default: phytoquery-qdrant
+      QDRANT_STORAGE_DIR  host storage path        default: %LOCALAPPDATA%\phytoquery\qdrant_storage
       QDRANT_VERSION      qdrant/qdrant image tag  default: v1.18.0
       QDRANT_PORT_REST    REST + Web UI port       default: 6333
       QDRANT_PORT_GRPC    gRPC port                default: 6334
 
-    Requires Docker Desktop for Windows (or any Docker-compatible runtime
-    exposed via docker.exe on PATH).
+    Requires one of:
+      * Docker Desktop for Windows (docker.exe on PATH), OR
+      * Podman Desktop / podman.exe on PATH
 #>
 
 param(
@@ -36,7 +47,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ─── settings ───────────────────────────────────────────────────────────────
-$Name        = if ($env:QDRANT_CONTAINER)   { $env:QDRANT_CONTAINER }   else { 'pq_qdrant' }
+$Name        = if ($env:QDRANT_CONTAINER)   { $env:QDRANT_CONTAINER }   else { 'phytoquery-qdrant' }
 $StorageDir  = if ($env:QDRANT_STORAGE_DIR) { $env:QDRANT_STORAGE_DIR } else { Join-Path $env:LOCALAPPDATA 'phytoquery\qdrant_storage' }
 $Version     = if ($env:QDRANT_VERSION)     { $env:QDRANT_VERSION }     else { 'v1.18.0' }
 $PortRest    = if ($env:QDRANT_PORT_REST)   { $env:QDRANT_PORT_REST }   else { '6333' }
@@ -44,23 +55,57 @@ $PortGrpc    = if ($env:QDRANT_PORT_GRPC)   { $env:QDRANT_PORT_GRPC }   else { '
 $Image       = "qdrant/qdrant:$Version"
 $RestUrl     = "http://localhost:$PortRest"
 
-# ─── prerequisite check ─────────────────────────────────────────────────────
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    Write-Error "docker not found in PATH. Install Docker Desktop for Windows."
-    exit 1
+# ─── runtime selection ──────────────────────────────────────────────────────
+$RuntimeChoice = if ($env:QDRANT_RUNTIME) { $env:QDRANT_RUNTIME.ToLower() } else { 'auto' }
+
+function Test-Cmd { param([string]$Name) [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
+
+switch ($RuntimeChoice) {
+    'auto' {
+        if (Test-Cmd 'podman')      { $Runtime = 'podman' }
+        elseif (Test-Cmd 'docker')  { $Runtime = 'docker' }
+        else {
+            Write-Error "Neither podman nor docker found in PATH. Install one of:`n  https://podman.io/docs/installation`n  https://docs.docker.com/desktop/install/windows-install/"
+            exit 1
+        }
+    }
+    { $_ -in 'podman', 'docker' } {
+        if (-not (Test-Cmd $RuntimeChoice)) {
+            Write-Error "$RuntimeChoice not found in PATH (QDRANT_RUNTIME=$RuntimeChoice)."
+            exit 1
+        }
+        $Runtime = $RuntimeChoice
+    }
+    default {
+        Write-Error "QDRANT_RUNTIME must be one of: auto, podman, docker (got '$RuntimeChoice')."
+        exit 1
+    }
 }
+
+# ─── prerequisite check ─────────────────────────────────────────────────────
+# Docker needs a reachable daemon; Podman is daemonless so `podman info`
+# is the cheapest liveness probe.
 try {
-    docker ps 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'docker ps failed' }
+    if ($Runtime -eq 'docker') {
+        docker ps 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'docker ps failed' }
+    } else {
+        podman info 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'podman info failed' }
+    }
 } catch {
-    Write-Error "'docker ps' failed. Is Docker Desktop running?"
+    if ($Runtime -eq 'docker') {
+        Write-Error "'docker ps' failed. Is Docker Desktop running? Or set `$env:QDRANT_RUNTIME = 'podman'."
+    } else {
+        Write-Error "'podman info' failed. On first run try: podman machine init; podman machine start"
+    }
     exit 1
 }
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 function Get-ContainerState {
-    # ``docker ps -a --filter name=^NAME$`` is more robust than
-    # ``docker inspect --format '{{.State.Status}}'`` because:
+    # ``<runtime> ps -a --filter name=^NAME$`` is more robust than
+    # ``<runtime> inspect --format '{{.State.Status}}'`` because:
     #   * It's container-only by definition (no risk of matching an
     #     image/network/volume with the same name → no "map has no
     #     entry for key 'State'" template-parsing error).
@@ -70,7 +115,7 @@ function Get-ContainerState {
     #     errors.
     #   * --format '{{.State}}' returns the plain state string directly
     #     (running / exited / paused / created / restarting / dead).
-    $line = docker ps -a --filter "name=^${Name}$" --format '{{.State}}' 2>$null
+    $line = & $Runtime ps -a --filter "name=^${Name}$" --format '{{.State}}' 2>$null
     if (-not $line) { return 'absent' }
     return $line.Trim().ToLower()
 }
@@ -107,15 +152,15 @@ function Invoke-Start {
         }
         { $_ -in 'exited', 'created', 'paused' } {
             Write-Host "Starting existing container '$Name' (state: $state)..."
-            docker start $Name | Out-Null
+            & $Runtime start $Name | Out-Null
         }
         'absent' {
             if (-not (Test-Path $StorageDir)) {
                 New-Item -ItemType Directory -Path $StorageDir -Force | Out-Null
             }
-            Write-Host "Creating container '$Name' from image $Image..."
+            Write-Host "Creating container '$Name' from image $Image (runtime: $Runtime)..."
             Write-Host "  Storage: $StorageDir"
-            docker run -d `
+            & $Runtime run -d `
                 --name $Name `
                 -p "${PortRest}:6333" -p "${PortGrpc}:6334" `
                 -v "${StorageDir}:/qdrant/storage" `
@@ -123,7 +168,7 @@ function Invoke-Start {
                 $Image | Out-Null
         }
         default {
-            Write-Error "Container in unexpected state '$state'. Try: docker inspect $Name"
+            Write-Error "Container in unexpected state '$state'. Try: $Runtime inspect $Name"
             exit 1
         }
     }
@@ -131,7 +176,7 @@ function Invoke-Start {
     if (Wait-ForHealth) {
         Write-Host 'Qdrant is healthy.'
     } else {
-        Write-Warning "/healthz did not respond within 15s. Check 'docker logs $Name'."
+        Write-Warning "/healthz did not respond within 15s. Check '$Runtime logs $Name'."
     }
     Write-Host ''
     Show-Urls
@@ -140,7 +185,7 @@ function Invoke-Start {
 function Invoke-Stop {
     $state = Get-ContainerState
     if ($state -eq 'running') {
-        docker stop $Name | Out-Null
+        & $Runtime stop $Name | Out-Null
         Write-Host "Stopped (state preserved on disk at $StorageDir)."
     } else {
         Write-Host "Not running (state: $state)."
@@ -149,6 +194,7 @@ function Invoke-Stop {
 
 function Invoke-Status {
     $state = Get-ContainerState
+    Write-Host "Runtime:   $Runtime"
     Write-Host "Container: $Name"
     Write-Host "State:     $state"
     Write-Host "Image:     $Image"
@@ -167,7 +213,7 @@ function Invoke-Status {
                 } catch { }
             }
         } catch {
-            Write-Host "Health:    UNREACHABLE - check 'docker logs $Name'"
+            Write-Host "Health:    UNREACHABLE - check '$Runtime logs $Name'"
         }
         Write-Host ''
         Show-Urls
@@ -180,13 +226,13 @@ function Invoke-Restart {
 }
 
 function Invoke-Logs {
-    docker logs -f --tail 200 $Name
+    & $Runtime logs -f --tail 200 $Name
 }
 
 function Invoke-Remove {
     Invoke-Stop
     if ((Get-ContainerState) -ne 'absent') {
-        docker rm $Name | Out-Null
+        & $Runtime rm $Name | Out-Null
         Write-Host "Container '$Name' removed."
     }
     Write-Host "Storage at $StorageDir preserved (delete manually if you want a clean slate)."
@@ -204,6 +250,7 @@ Usage: .\scripts\qdrant.ps1 {start|stop|status|restart|logs|remove}
   remove   Stop + delete container; on-disk storage preserved
 
 Settings via environment variables:
+  QDRANT_RUNTIME       auto | docker | podman   (default: auto)
   QDRANT_CONTAINER     (default: phytoquery-qdrant)
   QDRANT_STORAGE_DIR   (default: %LOCALAPPDATA%\phytoquery\qdrant_storage)
   QDRANT_VERSION       (default: v1.18.0)

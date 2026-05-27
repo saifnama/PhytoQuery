@@ -26,9 +26,9 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
    ┌──────────────┐ ┌────────────┐ ┌──────────────┐  ┌─────────────────┐
    │ Europe PMC / │ │ Gazetteers │ │ Qdrant       │  │ SQLite (WAL)    │
    │ OpenAlex /   │ │ (CSV →     │ │ Server       │  │ db_data/        │
-   │ PubMed APIs  │ │  pickled   │ │ (Docker, or  │  │ phytoquery.     │
-   │              │ │  Phrase-   │ │ embedded     │  │ sqlite          │
-   │              │ │  Matcher)  │ │ fallback)    │  │                 │
+   │ PubMed APIs  │ │  pickled   │ │ (Docker or   │  │ phytoquery.     │
+   │              │ │  Phrase-   │ │ Podman, or   │  │ sqlite          │
+   │              │ │  Matcher)  │ │ embedded)    │  │                 │
    └──────────────┘ └────────────┘ └──────────────┘  └─────────────────┘
 ```
 
@@ -88,7 +88,7 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 | Dictionary NER | spaCy 3.8 PhraseMatcher |
 | Embeddings | Qwen/Qwen3-Embedding-4B (primary, 2560 native → 1024 via MRL), BAAI/bge-m3 (fallback, 1024 native) |
 | Reranker | zeroentropy/zerank-2 (CrossEncoder, ~1 GB) |
-| Vector DB | Qdrant 1.18 — Server (Docker) or embedded local, hybrid dense + sparse named vectors |
+| Vector DB | Qdrant 1.18 — Server (Docker or Podman) or embedded local, hybrid dense + sparse named vectors |
 | Sparse encoder | FastEmbed `Qdrant/bm25` (IDF-weighted, stemming, stop-words) |
 | RAG glue | LangChain 1.2, langchain-qdrant 1.1, json-repair |
 | PDF parsing | Docling 2.92 (detailed, structure-preserving), PyMuPDF / fitz 1.27 (fast) + pymupdf4llm |
@@ -109,16 +109,16 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 ### Prerequisites
 - Python 3.10+ (3.12 recommended; 3.14 works with the threading guards in `backend/app.py`)
 - Node.js 18+ or [Bun](https://bun.sh/) for the frontend
-- Docker (for Qdrant Server — the recommended setup). Rootless Docker or membership in the `docker` group is enough; no `sudo` required.
+- **Docker or Podman** (for Qdrant Server — the recommended setup). Either works; the helper script auto-detects (Podman preferred when both are installed). For Docker, rootless mode or membership in the `docker` group is enough — no `sudo` required. For Podman, no extra setup beyond installing it (rootless by default).
 
 ### 1. Start Qdrant
 
-The bundled helper handles container lifecycle, storage paths, and a health probe. Same subcommands on every OS:
+The bundled helper handles container lifecycle, storage paths, and a health probe. **Works with Docker and Podman** — the helper auto-detects which one you have. Same subcommands on every OS:
 
 ```bash
 # Linux / macOS
 ./scripts/qdrant.sh start          # creates on first run; idempotent
-./scripts/qdrant.sh status         # state + health + collection count
+./scripts/qdrant.sh status         # state + health + collection count + runtime
 ./scripts/qdrant.sh stop           # stops, keeps storage on disk
 ./scripts/qdrant.sh restart
 ./scripts/qdrant.sh logs           # tail -f
@@ -135,19 +135,60 @@ The bundled helper handles container lifecycle, storage paths, and a health prob
 .\scripts\qdrant.ps1 remove
 ```
 
-Defaults:
+#### Container runtime — Docker or Podman
+
+`QDRANT_RUNTIME` selects (or pins) the engine:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` *(default)* | Try `podman` first, then `docker`. Whichever exists on PATH wins. |
+| `podman` | Force Podman; error out if not installed. |
+| `docker` | Force Docker; error out if not installed (or daemon unreachable). |
+
+```bash
+QDRANT_RUNTIME=podman ./scripts/qdrant.sh start     # pin to Podman
+QDRANT_RUNTIME=docker ./scripts/qdrant.sh start     # pin to Docker
+./scripts/qdrant.sh start                            # auto
+```
+
+The `status` command prints the active runtime so you can confirm which engine is managing the container.
+
+> Both engines share the same CLI surface for everything we use (`run`, `ps`, `start`, `stop`, `logs`, `rm`), so the script's logic is identical — only the prerequisite check differs (Docker needs a reachable daemon; Podman is daemonless and only needs `podman info` to succeed).
+
+#### Podman-specific notes
+
+- **First run on macOS/Windows** — Podman uses a lightweight VM. If `podman info` errors, bootstrap once:
+  ```bash
+  podman machine init && podman machine start
+  ```
+- **Smoke test (recommended after first-run on Windows/macOS)** — verifies that the two CLI behaviors the helper depends on (`{{.State}}` template field, `^X$` anchored-regex name filter) work on your Podman version:
+  ```bash
+  podman run --rm -d --name pq-probe docker.io/library/alpine:3 sleep 600
+  podman ps -a --filter 'name=^pq-probe$' --format '{{.State}}'   # expect: running
+  podman rm -f pq-probe
+  ```
+  If `{{.State}}` prints `running` and the filter matches exactly one row, `./scripts/qdrant.sh` will work end-to-end. Linux Podman is well-trodden and rarely needs this; the test exists mainly for the Podman-on-Windows VM path.
+- **Restart-on-reboot (Linux)** — `--restart unless-stopped` only survives logout if the user systemd unit is enabled (Docker doesn't need this):
+  ```bash
+  systemctl --user enable --now podman-restart.service
+  ```
+- **SELinux (Fedora/RHEL)** — if you hit "permission denied" on `/qdrant/storage`, the bind-mount needs a `:Z` suffix. Defaults work everywhere else.
+
+#### Defaults
 
 | Setting | Linux/macOS | Windows |
 |---------|-------------|---------|
-| Container name | `phytoquery-qdrant` | `pq_qdrant` |
+| Container name | `phytoquery-qdrant` | `phytoquery-qdrant` |
 | Storage | `~/.local/share/phytoquery/qdrant_storage` | `%LOCALAPPDATA%\phytoquery\qdrant_storage` |
 | Image | `qdrant/qdrant:v1.18.0` | same |
 | REST port | 6333 | same |
 | gRPC port | 6334 | same |
 
-Override any of them with env vars: `QDRANT_CONTAINER`, `QDRANT_STORAGE_DIR`, `QDRANT_VERSION`, `QDRANT_PORT_REST`, `QDRANT_PORT_GRPC`. Once it's up, the helper prints the REST URL (`http://localhost:6333`) and the Web UI URL (`http://localhost:6333/dashboard`).
+Override any of them with env vars: `QDRANT_RUNTIME`, `QDRANT_CONTAINER`, `QDRANT_STORAGE_DIR`, `QDRANT_VERSION`, `QDRANT_PORT_REST`, `QDRANT_PORT_GRPC`. Once it's up, the helper prints the REST URL (`http://localhost:6333`) and the Web UI URL (`http://localhost:6333/dashboard`).
 
-> **Don't have Docker?** You can fall back to embedded mode by leaving `RAG_QDRANT_URL` unset — the backend will use an in-process Qdrant client backed by `data/qdrant/`. See [Embedded mode caveats](#embedded-mode-caveats) below.
+> **No Docker AND no Podman?** Fall back to embedded mode by leaving `RAG_QDRANT_URL` unset — the backend will use an in-process Qdrant client backed by `data/qdrant/`. See [Embedded mode caveats](#embedded-mode-caveats) below.
+>
+> **Switching engines on an existing container?** Docker and Podman don't share storage by default, so a container created by one engine isn't visible to the other. Run `remove` first, then `start` under the new runtime — your `QDRANT_STORAGE_DIR` data is bind-mounted from the host and survives the swap.
 
 ### 2. Backend
 

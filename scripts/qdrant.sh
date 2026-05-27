@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# PhytoQuery — Qdrant Server (Docker)
+# PhytoQuery — Qdrant Server (Docker or Podman)
 # ─────────────────────────────────────────────────────────────────────────────
 # Manage a single Qdrant container next to the FastAPI backend. Idempotent:
 # re-running `start` when already running is a no-op, re-running on a stopped
 # container resumes it without losing data.
+#
+# Runtime selection:
+#   QDRANT_RUNTIME=auto    (default) try podman first, fall back to docker
+#   QDRANT_RUNTIME=podman  force podman
+#   QDRANT_RUNTIME=docker  force docker
+#
+# Docker and Podman share the same CLI for run / ps / start / stop / logs /
+# rm / inspect, so the only branching is the prerequisite check:
+#   * docker  — needs a reachable daemon (group membership or rootless)
+#   * podman  — daemonless; just needs the binary to be invokable
 #
 # Usage:
 #   ./scripts/qdrant.sh start      # start (creates container on first run)
@@ -15,6 +25,7 @@
 #   ./scripts/qdrant.sh remove     # stop + delete container; storage preserved
 #
 # All settings overridable via env vars (sensible defaults baked in):
+#   QDRANT_RUNTIME      container runtime        default: auto
 #   QDRANT_CONTAINER    container name           default: phytoquery-qdrant
 #   QDRANT_STORAGE_DIR  host storage path        default: ~/.local/share/phytoquery/qdrant_storage
 #   QDRANT_VERSION      qdrant/qdrant image tag  default: v1.18.0
@@ -23,10 +34,12 @@
 #   QDRANT_PORT_REST    REST + Web UI port       default: 6333
 #   QDRANT_PORT_GRPC    gRPC port                default: 6334
 #
-# Requirements:
-#   * docker installed and runnable WITHOUT sudo (user in `docker` group
-#     OR rootless docker daemon)
-#   * curl (for health probe — optional, only used by `status` & `start`)
+# Notes for podman users:
+#   * `--restart unless-stopped` only survives logout if the user systemd
+#     unit is enabled: `systemctl --user enable --now podman-restart.service`
+#   * On SELinux-enforcing systems (Fedora/RHEL), if you hit permission
+#     denied on /qdrant/storage, append `:Z` to QDRANT_STORAGE_DIR's mount
+#     by editing the run command — defaults work everywhere else.
 #
 # Does NOT require sudo. Works identically on Linux and macOS.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,25 +55,64 @@ IMAGE="qdrant/qdrant:${VERSION}"
 
 REST_URL="http://localhost:${PORT_REST}"
 
+# ─── runtime selection ──────────────────────────────────────────────────────
+QDRANT_RUNTIME="${QDRANT_RUNTIME:-auto}"
+case "$QDRANT_RUNTIME" in
+    auto)
+        if command -v podman >/dev/null 2>&1; then
+            RUNTIME=podman
+        elif command -v docker >/dev/null 2>&1; then
+            RUNTIME=docker
+        else
+            echo "ERROR: neither podman nor docker found in PATH." >&2
+            echo "  Install one of:" >&2
+            echo "    https://podman.io/docs/installation" >&2
+            echo "    https://docs.docker.com/get-docker/" >&2
+            exit 1
+        fi
+        ;;
+    podman|docker)
+        RUNTIME="$QDRANT_RUNTIME"
+        if ! command -v "$RUNTIME" >/dev/null 2>&1; then
+            echo "ERROR: ${RUNTIME} not found in PATH (QDRANT_RUNTIME=${QDRANT_RUNTIME})." >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "ERROR: QDRANT_RUNTIME must be one of: auto, podman, docker (got '${QDRANT_RUNTIME}')." >&2
+        exit 1
+        ;;
+esac
+
 # ─── prerequisite check ─────────────────────────────────────────────────────
-if ! command -v docker >/dev/null 2>&1; then
-    echo "ERROR: docker not found in PATH." >&2
-    echo "  Install Docker (or Podman aliased as docker)." >&2
-    exit 1
-fi
-if ! docker ps >/dev/null 2>&1; then
-    echo "ERROR: 'docker ps' failed. The Docker daemon is unreachable or" >&2
-    echo "  your user can't talk to it. Either:" >&2
-    echo "    (a) add your user to the docker group: sudo usermod -aG docker \$USER" >&2
-    echo "        (then log out and back in), OR" >&2
-    echo "    (b) use rootless docker: https://docs.docker.com/engine/security/rootless/" >&2
-    exit 1
+# Docker needs a reachable daemon; podman is daemonless and just needs to
+# be runnable. `podman info` is the cheapest liveness probe — it exits
+# non-zero if the user's storage / namespaces aren't initialized yet.
+if [[ "$RUNTIME" == "docker" ]]; then
+    if ! docker ps >/dev/null 2>&1; then
+        echo "ERROR: 'docker ps' failed. The Docker daemon is unreachable or" >&2
+        echo "  your user can't talk to it. Either:" >&2
+        echo "    (a) add your user to the docker group: sudo usermod -aG docker \$USER" >&2
+        echo "        (then log out and back in), OR" >&2
+        echo "    (b) use rootless docker: https://docs.docker.com/engine/security/rootless/" >&2
+        echo "  Or set QDRANT_RUNTIME=podman to use Podman instead." >&2
+        exit 1
+    fi
+else
+    if ! podman info >/dev/null 2>&1; then
+        echo "ERROR: 'podman info' failed. Podman is installed but its user" >&2
+        echo "  storage / namespaces aren't initialized. Try:" >&2
+        echo "    podman system reset           # nuclear: wipe + reinit" >&2
+        echo "  Or on first run (macOS/Windows):" >&2
+        echo "    podman machine init && podman machine start" >&2
+        exit 1
+    fi
 fi
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 container_state() {
-    # ``docker ps -a --filter name=^NAME$`` is preferred over
-    # ``docker inspect --format '{{.State.Status}}'``:
+    # ``<runtime> ps -a --filter name=^NAME$`` is preferred over
+    # ``<runtime> inspect --format '{{.State.Status}}'``:
     #   * Container-only lookup → no chance of matching an image,
     #     network, or volume with the same name (which on inspect
     #     would trigger "template parsing error: map has no entry
@@ -70,7 +122,7 @@ container_state() {
     #   * --format '{{.State}}' returns the state directly (running,
     #     exited, paused, created, restarting, dead).
     local line
-    line=$(docker ps -a --filter "name=^${NAME}$" --format '{{.State}}' 2>/dev/null || true)
+    line=$("$RUNTIME" ps -a --filter "name=^${NAME}$" --format '{{.State}}' 2>/dev/null || true)
     if [[ -z "$line" ]]; then
         echo "absent"
     else
@@ -111,13 +163,13 @@ cmd_start() {
             ;;
         exited|created|paused)
             echo "Starting existing container '${NAME}' (state: ${state})..."
-            docker start "$NAME" >/dev/null
+            "$RUNTIME" start "$NAME" >/dev/null
             ;;
         absent)
             mkdir -p "$STORAGE_DIR"
-            echo "Creating container '${NAME}' from image ${IMAGE}..."
+            echo "Creating container '${NAME}' from image ${IMAGE} (runtime: ${RUNTIME})..."
             echo "  Storage: ${STORAGE_DIR}"
-            docker run -d \
+            "$RUNTIME" run -d \
                 --name "$NAME" \
                 -p "${PORT_REST}:6333" -p "${PORT_GRPC}:6334" \
                 -v "${STORAGE_DIR}:/qdrant/storage" \
@@ -126,7 +178,7 @@ cmd_start() {
             ;;
         *)
             echo "ERROR: container in unexpected state '${state}'." >&2
-            echo "Try: docker inspect ${NAME}" >&2
+            echo "Try: ${RUNTIME} inspect ${NAME}" >&2
             exit 1
             ;;
     esac
@@ -134,7 +186,7 @@ cmd_start() {
     if wait_for_health; then
         echo "Qdrant is healthy."
     else
-        echo "WARN: /healthz did not respond within 15s. Check 'docker logs ${NAME}'." >&2
+        echo "WARN: /healthz did not respond within 15s. Check '${RUNTIME} logs ${NAME}'." >&2
     fi
     echo
     print_urls
@@ -143,7 +195,7 @@ cmd_start() {
 cmd_stop() {
     state=$(container_state)
     if [[ "$state" == "running" ]]; then
-        docker stop "$NAME" >/dev/null
+        "$RUNTIME" stop "$NAME" >/dev/null
         echo "Stopped (state preserved on disk at ${STORAGE_DIR})."
     else
         echo "Not running (state: ${state})."
@@ -152,6 +204,7 @@ cmd_stop() {
 
 cmd_status() {
     state=$(container_state)
+    echo "Runtime:   ${RUNTIME}"
     echo "Container: ${NAME}"
     echo "State:     ${state}"
     echo "Image:     ${IMAGE}"
@@ -169,7 +222,7 @@ cmd_status() {
                     echo "Collections: ${count}"
                 fi
             else
-                echo "Health:    UNREACHABLE — check 'docker logs ${NAME}'"
+                echo "Health:    UNREACHABLE — check '${RUNTIME} logs ${NAME}'"
             fi
         fi
         echo
@@ -183,13 +236,13 @@ cmd_restart() {
 }
 
 cmd_logs() {
-    docker logs -f --tail 200 "$NAME"
+    "$RUNTIME" logs -f --tail 200 "$NAME"
 }
 
 cmd_remove() {
     cmd_stop
     if [[ "$(container_state)" != "absent" ]]; then
-        docker rm "$NAME" >/dev/null
+        "$RUNTIME" rm "$NAME" >/dev/null
         echo "Container '${NAME}' removed."
     fi
     echo "Storage at ${STORAGE_DIR} preserved (delete manually if you want a clean slate)."
@@ -207,6 +260,7 @@ Usage: $0 {start|stop|status|restart|logs|remove}
   remove   Stop + delete container; on-disk storage preserved
 
 Settings via env vars:
+  QDRANT_RUNTIME       auto | docker | podman   (default: auto)
   QDRANT_CONTAINER     (default: phytoquery-qdrant)
   QDRANT_STORAGE_DIR   (default: \$HOME/.local/share/phytoquery/qdrant_storage)
   QDRANT_VERSION       (default: v1.18.0)
