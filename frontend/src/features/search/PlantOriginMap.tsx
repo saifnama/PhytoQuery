@@ -26,13 +26,14 @@ type WorldGeo = { type: "FeatureCollection"; features: unknown[] }
  * Plant Origin Heatmap — react-simple-maps replacement for the previous
  * ECharts effectScatter geo.
  *
- * Data source: the canonical d3 `world-atlas` countries-110m TopoJSON
- * (bundled at /world-topo.json). We fetch + decode it once in this
- * component, pass the resulting FeatureCollection to <Geographies>,
- * and reuse the same decoded data for centroid extraction.
+ * Data source: the canonical d3 `world-atlas` countries-50m TopoJSON
+ * (bundled at /world-topo-50m.json — 241 countries / territories). We
+ * fetch + decode it once in this component, pass the resulting
+ * FeatureCollection to <Geographies>, and reuse the same decoded data
+ * for centroid extraction.
  */
 
-const WORLD_GEO_URL = "/world-topo.json"
+const WORLD_GEO_URL = "/world-topo-50m.json"
 
 interface Props {
   data: { name: string; value: number }[]
@@ -80,7 +81,7 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
     let cancelled = false
     fetch(WORLD_GEO_URL)
       .then((r) => {
-        if (!r.ok) throw new Error(`world-topo.json HTTP ${r.status}`)
+        if (!r.ok) throw new Error(`world-topo-50m.json HTTP ${r.status}`)
         return r.json()
       })
       .then((topo: Topology) => {

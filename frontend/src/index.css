@@ -153,7 +153,7 @@ body {
 @keyframes map-ripple {
     0%   { transform: scale(0.7); opacity: 0.85; }
     60%  {                         opacity: 0.35; }
-    100% { transform: scale(4.5); opacity: 0;    }
+    100% { transform: scale(2.6); opacity: 0;    }
 }
 .map-ripple {
     transform-box: fill-box;

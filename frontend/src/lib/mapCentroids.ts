@@ -2,11 +2,14 @@
  * Country-centroid utilities for the dashboard's geographic map.
  *
  * Consumes a GeoJSON ``FeatureCollection`` (the decoded form of
- * ``/public/world-topo.json`` — the d3 ``world-atlas`` countries-110m
- * TopoJSON) and returns a name → [lng, lat] map that the map component
- * uses to position markers. The largest polygon of each country wins so
- * multi-island countries (Indonesia, Japan, UK …) get a centroid on the
- * main landmass rather than drifting offshore.
+ * ``/public/world-topo-50m.json`` — the d3 ``world-atlas`` countries-50m
+ * TopoJSON, 241 countries / territories) and returns a name → centroid
+ * map that the map component uses to position markers. The largest
+ * polygon of each country wins so multi-island countries (Indonesia,
+ * Japan, UK …) get a centroid on the main landmass rather than
+ * drifting offshore. Antimeridian-crossing polygons (Russia, Fiji)
+ * are unwrapped before averaging so their centroids don't collapse to
+ * longitude 0.
  *
  * GeoJSON in the wild is messy — empty rings, NaN coords,
  * GeometryCollection wrappers, missing properties. Every helper
@@ -21,29 +24,20 @@ export interface Centroid {
   coords: Lnglat
 }
 
-// Centroids for countries / dependencies absent from world-atlas-110m.
-// Coords are [lng, lat] of the geographic center. A marker drops at
-// the right spot even though world-atlas doesn't ship a country shape.
-const HARDCODED_CENTROIDS: Record<string, Centroid> = {
-  malta:                   { name: "Malta",                 coords: [14.4, 35.9] },
-  mauritius:               { name: "Mauritius",             coords: [57.5, -20.2] },
-  curaçao:                 { name: "Curaçao",               coords: [-69.0, 12.2] },
-  curacao:                 { name: "Curaçao",               coords: [-69.0, 12.2] },
-  martinique:              { name: "Martinique",            coords: [-61.0, 14.7] },
-  "french polynesia":      { name: "French Polynesia",      coords: [-149.5, -17.5] },
-  "isle of man":           { name: "Isle of Man",           coords: [-4.5, 54.2] },
-  "antigua and barbuda":   { name: "Antigua and Barbuda",   coords: [-61.8, 17.1] },
-  "são tomé and príncipe": { name: "São Tomé and Príncipe", coords: [6.6, 0.2] },
-}
-
 // Aliases map NER / Excel / ingest-time variants to the EXACT canonical
-// names used in world-atlas countries-110m (plus the HARDCODED names
-// above for territories world-atlas omits). world-atlas uses some
-// idiosyncratic short forms — "United States of America" (NOT "United
-// States"), "Czechia" (NOT "Czech Rep."), "Laos" (NOT "Lao PDR"),
-// "Macedonia" (NOT "North Macedonia"), "Bosnia and Herz.",
-// "Dominican Rep.", "Dem. Rep. Congo" — so the alias targets must match
-// those strings byte-for-byte or the centroid lookup misses.
+// names used in world-atlas countries-50m. Every centroid is computed
+// from the polygon geometry — no hardcoded coordinates anywhere. The
+// 50m source covers 241 countries / territories (including the small
+// island states that the smaller 110m omitted), so all centroids are
+// algorithmic.
+//
+// world-atlas uses some idiosyncratic short forms — "United States of
+// America" (NOT "United States"), "Czechia" (NOT "Czech Rep."), "Laos"
+// (NOT "Lao PDR"), "Macedonia" (NOT "North Macedonia"), "Bosnia and
+// Herz.", "Dominican Rep.", "Dem. Rep. Congo", "Fr. Polynesia",
+// "Antigua and Barb.", "São Tomé and Principe" (no acute on Principe) —
+// so the alias targets must match those strings byte-for-byte or the
+// centroid lookup misses.
 export const COUNTRY_ALIASES: Record<string, string> = {
   // United States
   usa: "United States of America",
@@ -105,13 +99,18 @@ export const COUNTRY_ALIASES: Record<string, string> = {
   "taiwan province of china": "Taiwan",
   // Caribbean
   "dominican republic": "Dominican Rep.",
+  "antigua and barbuda": "Antigua and Barb.",
+  curacao: "Curaçao",
+  // Oceania
+  "french polynesia": "Fr. Polynesia",
   // Cities → owning country
   havana: "Cuba",
-  // São Tomé encoding artifacts
-  "s. tom� and pr�ncipe": "São Tomé and Príncipe",
-  "s. tom?� and pr??ncipe": "São Tomé and Príncipe",
-  "sao tome and principe": "São Tomé and Príncipe",
-  "sao tome": "São Tomé and Príncipe",
+  // São Tomé encoding artifacts (50m uses "Principe" without acute)
+  "s. tom� and pr�ncipe": "São Tomé and Principe",
+  "s. tom?� and pr??ncipe": "São Tomé and Principe",
+  "sao tome and principe": "São Tomé and Principe",
+  "sao tome": "São Tomé and Principe",
+  "são tomé and príncipe": "São Tomé and Principe",
 }
 
 function isLnglatPoint(p: unknown): p is Lnglat {
@@ -150,7 +149,22 @@ function ringBboxCenter(ring: Lnglat[]): Lnglat | null {
     if (y > yMax) yMax = y
   }
   if (!Number.isFinite(xMin) || !Number.isFinite(yMin)) return null
-  const cx = (xMin + xMax) / 2
+
+  let cx: number
+  if (xMax - xMin > 270) {
+    // Polygon crosses the antimeridian (Russia is the classic case —
+    // Chukotka sits east of the date line, the rest is west). A naïve
+    // (xMin + xMax) / 2 averages -180 and +180 to 0 and drops the marker
+    // in the North Sea. Shift every negative longitude by +360 so they
+    // sit east of the positive ones, average the unwrapped values, then
+    // wrap the result back into [-180, +180].
+    let sum = 0
+    for (const [x] of ring) sum += x < 0 ? x + 360 : x
+    cx = sum / ring.length
+    if (cx > 180) cx -= 360
+  } else {
+    cx = (xMin + xMax) / 2
+  }
   const cy = (yMin + yMax) / 2
   return Number.isFinite(cx) && Number.isFinite(cy) ? [cx, cy] : null
 }
@@ -214,11 +228,6 @@ export function buildCentroidMap(world: unknown): Map<string, Centroid> {
     if (failed > 0) {
       console.warn(`[mapCentroids] skipped ${failed} malformed feature(s)`)
     }
-  }
-  // Merge hardcoded territories — world-atlas shapes win where they
-  // exist; hardcoded entries only fill the gaps.
-  for (const [key, val] of Object.entries(HARDCODED_CENTROIDS)) {
-    if (!map.has(key)) map.set(key, val)
   }
   return map
 }
