@@ -1,235 +1,154 @@
 /**
- * Journal Distribution Widget — pure ECharts, Coastal Pastel theme.
+ * Journal Distribution Widget — shadcn-native composition.
  *
- * Two panes:
- *   Left  — dominant journal hero (ECharts `graphic` API, no series).
- *   Right — ranked horizontal bar chart of remaining top journals.
+ * Both panes are shadcn ``<Card>`` instances; the dividing rule is a
+ * shadcn ``<Separator orientation="vertical">``. The outer wrapper is
+ * a layout-only flex container that gives the unified rounded border
+ * (no nested Card rings).
  *
- * Spec: hm.md.
+ * Colors are the original Coastal palette hex values (preserved at the
+ * user's request — these specific teals don't map cleanly to shadcn
+ * semantic tokens):
+ *   - #1A5F6B  hero title
+ *   - #2AACBF  big-number + percentage
+ *   - #5BBCC8  caption text
+ *   - #A0E4F1  progress-bar fill
+ *   - #F2FBFC  left-pane background
+ *   - #FBFEFE  right-pane background
+ *   - #C8F1F8  outer border + inter-pane separator
+ *
+ * Card defaults are overridden in two places: ``rounded-none ring-0``
+ * (the outer div already provides the rounded border, so each inner
+ * Card's own ring would double up), and ``gap-0`` (the hero pane uses
+ * ``justify-between`` to distribute its three sections across the full
+ * pane height instead of shadcn's default 24px gaps).
  */
 
-import React from 'react';
-import ReactECharts from 'echarts-for-react';
-import type { EChartsOption } from 'echarts';
-import { COASTAL_THEME_NAME, COASTAL_PALETTE } from '../../lib/echartsTheme';
+import React from "react"
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
+import { JournalBarsChart } from "./JournalBarsChart"
 
 interface JournalEntry {
-  name: string;
-  value: number;
+  name: string
+  value: number
 }
 
 interface Props {
-  journals: JournalEntry[];   // sorted desc by paper count, dominant first
-  totalPapers: number;        // for percentage calc
-  height?: number;            // pane height in px (default 260)
-  onJournalClick?: (name: string) => void;  // fires on right-pane bar click
+  journals: JournalEntry[] // sorted desc by paper count, dominant first
+  totalPapers: number // for percentage calc
+  height?: number // pane height in px (default 260)
+  onJournalClick?: (name: string) => void // fires on right-pane bar click
 }
 
-const LEFT_PADDING = 28;
-const PROGRESS_BAR_WIDTH = 280;
-
-const JournalDistributionWidget: React.FC<Props> = ({ journals, totalPapers, height = 260, onJournalClick }) => {
+const JournalDistributionWidget: React.FC<Props> = ({
+  journals,
+  totalPapers,
+  height = 260,
+  onJournalClick,
+}) => {
   if (!journals.length) {
     return (
       <div
-        className="flex items-center justify-center text-xs text-slate-400"
+        className="flex items-center justify-center text-xs text-muted-foreground"
         style={{ height }}
       >
         No journal data
       </div>
-    );
+    )
   }
 
-  const dominant = journals[0];
-  const ranked = journals.slice(1, 10);
-  const pct = totalPapers > 0 ? Math.round((dominant.value / totalPapers) * 100) : 0;
-  const fillWidth = Math.round(
-    PROGRESS_BAR_WIDTH * (totalPapers > 0 ? dominant.value / totalPapers : 0)
-  );
-
-  // ── Left pane: hero stats via `graphic` API ────────────────────────────────
-  const heroOption: EChartsOption = {
-    backgroundColor: '#F2FBFC',
-    graphic: {
-      elements: [
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 28,
-          style: {
-            text: wrapJournalName(dominant.name),
-            font: '500 15px Inter, system-ui, sans-serif',
-            fill: '#1A5F6B',
-            lineHeight: 22,
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 88,
-          style: {
-            text: dominant.value.toLocaleString(),
-            font: '500 58px Inter, system-ui, sans-serif',
-            fill: '#2AACBF',
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING + measureBigNumberWidth(dominant.value) + 8,
-          top: 118,
-          style: {
-            text: 'papers',
-            font: '400 15px Inter, system-ui, sans-serif',
-            fill: '#5BBCC8',
-          },
-        },
-        {
-          type: 'text',
-          left: LEFT_PADDING,
-          top: 170,
-          style: {
-            text: `${pct}%`,
-            font: '500 28px Inter, system-ui, sans-serif',
-            fill: '#2AACBF',
-          },
-        },
-        {
-          type: 'rect',
-          left: LEFT_PADDING,
-          top: 212,
-          shape: { width: PROGRESS_BAR_WIDTH, height: 5, r: 3 },
-          style: { fill: 'rgba(160,228,241,0.3)' },
-        },
-        {
-          type: 'rect',
-          left: LEFT_PADDING,
-          top: 212,
-          shape: { width: fillWidth, height: 5, r: 3 },
-          style: { fill: '#A0E4F1' },
-        },
-      ],
-    },
-  };
-
-  // ── Right pane: ranked horizontal bars ─────────────────────────────────────
-  const rankedOption: EChartsOption = {
-    backgroundColor: '#FBFEFE',
-    grid: { top: 10, right: 44, bottom: 10, left: 10, containLabel: true },
-    xAxis: {
-      type: 'value',
-      show: false,
-      max: ranked[0]?.value ?? 0,
-    },
-    yAxis: {
-      type: 'category',
-      inverse: true,
-      data: ranked.map((j) => j.name),
-      axisLabel: {
-        fontSize: 10,
-        color: '#5A8080',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        width: 90,
-        overflow: 'truncate',
-      },
-    },
-    series: [
-      {
-        type: 'bar',
-        data: ranked.map((j, i) => ({
-          value: j.value,
-          itemStyle: {
-            color: COASTAL_PALETTE[i % COASTAL_PALETTE.length],
-            borderRadius: [0, 3, 3, 0],
-          },
-        })),
-        barMaxWidth: 8,
-        label: {
-          show: true,
-          position: 'right',
-          formatter: '{c}',
-          fontSize: 10,
-          fontFamily: 'Inter, system-ui, sans-serif',
-          color: '#7AACAC',
-        },
-        showBackground: true,
-        backgroundStyle: {
-          color: 'rgba(160,228,241,0.12)',
-          borderRadius: [0, 3, 3, 0],
-        },
-        emphasis: {
-          itemStyle: { opacity: 0.75 },
-        },
-      },
-    ],
-    tooltip: {
-      show: true,
-      backgroundColor: '#fff',
-      borderColor: '#A0E4F1',
-      borderWidth: 1,
-      textStyle: { color: '#1A5F6B', fontSize: 12 },
-      formatter: (p: any) => `${p.name}<br/><b>${p.value}</b> papers`,
-    },
-  };
+  const dominant = journals[0]
+  const ranked = journals.slice(1, 10)
+  const pct =
+    totalPapers > 0 ? Math.round((dominant.value / totalPapers) * 100) : 0
 
   return (
     <div
-      className="grid overflow-hidden rounded-2xl border"
-      style={{
-        gridTemplateColumns: '1fr 1px 220px',
-        borderColor: '#C8F1F8',
-        height,
-      }}
+      className="flex overflow-hidden rounded-2xl border"
+      style={{ height, borderColor: "#C8F1F8" }}
     >
-      <ReactECharts
-        option={heroOption}
-        theme={COASTAL_THEME_NAME}
-        style={{ width: '100%', height: '100%' }}
-        opts={{ renderer: 'canvas' }}
-        notMerge
+      {/* Left pane — shadcn Card with full Header/Content/Footer composition.
+          justify-between spreads the three sections across the pane. */}
+      <Card
+        className="flex-1 rounded-none ring-0 gap-0 justify-between py-6"
+        style={{ background: "#F2FBFC" }}
+      >
+        <CardHeader>
+          <CardTitle
+            className="text-sm font-medium line-clamp-2 leading-tight"
+            style={{ color: "#1A5F6B" }}
+          >
+            {dominant.name}
+          </CardTitle>
+        </CardHeader>
+
+        <CardContent>
+          <div className="flex items-baseline gap-2">
+            <span
+              className="text-6xl font-semibold tabular-nums leading-none"
+              style={{ color: "#2AACBF" }}
+            >
+              {dominant.value.toLocaleString()}
+            </span>
+            <span className="text-sm" style={{ color: "#5BBCC8" }}>
+              papers
+            </span>
+          </div>
+        </CardContent>
+
+        <CardFooter className="flex-col items-stretch gap-2">
+          <div className="flex w-full items-baseline justify-between">
+            <span
+              className="text-2xl font-medium tabular-nums"
+              style={{ color: "#2AACBF" }}
+            >
+              {pct}%
+            </span>
+            <span className="text-xs" style={{ color: "#5BBCC8" }}>
+              of corpus
+            </span>
+          </div>
+          <div
+            className="h-1.5 w-full overflow-hidden rounded-full"
+            style={{ backgroundColor: "rgba(160,228,241,0.3)" }}
+          >
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{
+                width: `${pct}%`,
+                backgroundColor: "#A0E4F1",
+              }}
+            />
+          </div>
+        </CardFooter>
+      </Card>
+
+      {/* Inter-pane divider — shadcn Separator. The default --border
+          token would be too dark on this background, so it's
+          explicitly tinted with the Coastal border colour. */}
+      <Separator
+        orientation="vertical"
+        className="h-auto bg-[#C8F1F8]"
       />
-      <div style={{ background: '#C8F1F8' }} />
-      <ReactECharts
-        option={rankedOption}
-        theme={COASTAL_THEME_NAME}
-        style={{ width: '100%', height: '100%' }}
-        opts={{ renderer: 'canvas' }}
-        notMerge
-        onEvents={onJournalClick ? {
-          click: (params: any) => {
-            if (typeof params?.name === 'string') onJournalClick(params.name);
-          },
-        } : undefined}
-      />
+
+      {/* Right pane — shadcn Card hosting the bar chart. */}
+      <Card
+        className="w-[240px] rounded-none ring-0 gap-0 py-3"
+        style={{ background: "#FBFEFE" }}
+      >
+        <CardContent className="h-full px-3">
+          <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
+        </CardContent>
+      </Card>
     </div>
-  );
-};
-
-// Wrap journal name to at most two lines of ~24 chars each.
-function wrapJournalName(name: string): string {
-  if (name.length <= 24) return name;
-  const words = name.split(' ');
-  const lines: string[] = [];
-  let current = '';
-  for (const w of words) {
-    if ((current + ' ' + w).trim().length > 24 && current) {
-      lines.push(current.trim());
-      current = w;
-      if (lines.length >= 1) break;
-    } else {
-      current = (current + ' ' + w).trim();
-    }
-  }
-  if (current) lines.push(current.trim());
-  return lines.slice(0, 2).join('\n');
+  )
 }
 
-// Approximate pixel width of the big-number text so we can place "papers"
-// beside it without overlap. 58px Inter digits ~ 32px wide; comma ~ 12px.
-function measureBigNumberWidth(n: number): number {
-  const s = n.toLocaleString();
-  let w = 0;
-  for (const ch of s) w += ch === ',' ? 12 : 32;
-  return w;
-}
-
-export default JournalDistributionWidget;
+export default JournalDistributionWidget

@@ -83,11 +83,17 @@
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    /* Coastal palette — preserves the original Journal Distribution
+       widget look (aqua / sage / teal / peach / aqua-repeat). The
+       Publication Timeline overrides this with a cyan accent locally;
+       the Entity Donut uses semantic per-entity colours from
+       ENTITY_COLORS. These five variables are the default any new
+       chart inherits. */
+    --chart-1: #A0E4F1;
+    --chart-2: #B9EDB9;
+    --chart-3: #86CFBF;
+    --chart-4: #FFCBA5;
+    --chart-5: #A0E4F1;
     --radius: 0.625rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
@@ -128,6 +134,31 @@ body {
 @keyframes slide-up {
     from { transform: translateY(20px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
+}
+
+/* Plant Origin Map — ripple rings on each country marker. THREE
+   concentric rings render per marker, all running this same 2.1s
+   cycle but with animation-delays of 0, -0.7s, -1.4s so a new ring
+   starts every 0.7s. At any moment three rings are visible at
+   different scales/opacities — the raindrop-on-water effect. A
+   single-ring animation left visible dead gaps between cycles.
+
+   Opacity holds longer at the start, fades only after 60% — that's
+   what gives the ring its "expand while staying bright, then fade
+   only at the edge" character. Linear interpolation from 0.85 → 0
+   over the full cycle looks washy.
+
+   transform-box: fill-box keeps the scale centred on the circle
+   itself rather than the SVG root's (0,0). */
+@keyframes map-ripple {
+    0%   { transform: scale(0.7); opacity: 0.85; }
+    60%  {                         opacity: 0.35; }
+    100% { transform: scale(4.5); opacity: 0;    }
+}
+.map-ripple {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: map-ripple 2.1s ease-out infinite;
 }
 
 /* Typing-indicator dots — used by the chat thread's TypingIndicator.
@@ -987,86 +1018,10 @@ html, body, header, aside, main, nav, button, input, textarea,
     var(--citation-flash-easing) forwards;
 }
 
-/* ── Dashboard Stat Cards (Style 5) ────────────────────────────────────────
-   Spec: h.md. Three equal-width cards with mono number + coloured hairline
-   divider. Theme follows the app's class-driven dark mode (not OS setting). */
-
-.stats-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-
-  --card-bg: #ffffff;
-  --card-border: #E0E0E0;
-  --number-color: #111111;
-  --footer-color: #90A4AE;
-}
-
-.dark .stats-strip {
-  --card-bg: #161A23;
-  --card-border: #1E2535;
-  --number-color: #F0F2F8;
-  --footer-color: #546E7A;
-}
-
-.stat-card {
-  background: var(--card-bg);
-  border: 0.5px solid var(--card-border);
-  border-radius: 14px;
-  padding: 20px 22px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.stat-label {
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--accent-color);
-  margin-bottom: 6px;
-}
-
-.stat-number {
-  font-size: 52px;
-  font-weight: 500;
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--number-color);
-  letter-spacing: -0.04em;
-  line-height: 0.9;
-  margin-bottom: 12px;
-}
-
-.stat-divider {
-  height: 1px;
-  background: var(--divider-color);
-  margin-bottom: 8px;
-}
-
-.stat-footer {
-  font-size: 11px;
-  color: var(--footer-color);
-  line-height: 1.5;
-}
-
-.stat-accent {
-  color: var(--accent-color);
-  margin: 0 3px;
-}
-
-.stat-card[data-accent="aqua"] {
-  --accent-color: #4DD0E1;
-  --divider-color: #B2EBF2;
-}
-.stat-card[data-accent="lavender"] {
-  --accent-color: #9575CD;
-  --divider-color: #D1C4E9;
-}
-.stat-card[data-accent="sage"] {
-  --accent-color: #81C784;
-  --divider-color: #C8E6C8;
-}
+/* Dashboard stat cards are now built with shadcn Card + cva accent
+   variants in frontend/src/features/search/Dashboard.tsx — the
+   previous .stats-strip / .stat-card / .stat-* / [data-accent] CSS
+   has been deleted. */
 
 @theme inline {
     --font-heading: var(--font-sans);
@@ -1130,11 +1085,15 @@ html, body, header, aside, main, nav, button, input, textarea,
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    /* Dark-mode chart palette — kept identical to light mode because
+       the original ECharts theme was always-light; carrying the same
+       Coastal hues into dark backgrounds preserves brand cohesion
+       without per-mode branching. */
+    --chart-1: #A0E4F1;
+    --chart-2: #B9EDB9;
+    --chart-3: #86CFBF;
+    --chart-4: #FFCBA5;
+    --chart-5: #A0E4F1;
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.488 0.243 264.376);
