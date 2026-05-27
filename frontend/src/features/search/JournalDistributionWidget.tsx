@@ -54,41 +54,59 @@ const JournalDistributionWidget: React.FC<Props> = ({
 
   return (
     <div
-      className="grid overflow-hidden rounded-2xl border border-border"
-      style={{ gridTemplateColumns: "1fr 1px 240px", height }}
+      className="grid overflow-hidden rounded-2xl border"
+      style={{
+        gridTemplateColumns: "1fr 1px 240px",
+        height,
+        borderColor: "#C8F1F8",
+      }}
     >
-      {/* Left pane — hero stat, plain JSX */}
-      <div className="flex flex-col justify-between p-6 bg-muted/30">
-        <div className="text-sm font-medium text-foreground line-clamp-2 leading-tight">
+      {/* Left pane — hero stat, plain JSX with original Coastal palette
+          colours (matches the pre-migration ECharts `graphic` layout). */}
+      <div
+        className="flex flex-col justify-between p-6"
+        style={{ background: "#F2FBFC" }}
+      >
+        <div
+          className="text-sm font-medium line-clamp-2 leading-tight"
+          style={{ color: "#1A5F6B" }}
+        >
           {dominant.name}
         </div>
 
         <div className="flex items-baseline gap-2">
           <span
-            className="text-6xl font-semibold tabular-nums text-foreground"
-            style={{ color: "var(--chart-1)" }}
+            className="text-6xl font-semibold tabular-nums"
+            style={{ color: "#2AACBF" }}
           >
             {dominant.value.toLocaleString()}
           </span>
-          <span className="text-sm text-muted-foreground">papers</span>
+          <span className="text-sm" style={{ color: "#5BBCC8" }}>
+            papers
+          </span>
         </div>
 
         <div className="space-y-2">
           <div className="flex items-baseline justify-between">
             <span
               className="text-2xl font-medium tabular-nums"
-              style={{ color: "var(--chart-1)" }}
+              style={{ color: "#2AACBF" }}
             >
               {pct}%
             </span>
-            <span className="text-xs text-muted-foreground">of corpus</span>
+            <span className="text-xs" style={{ color: "#5BBCC8" }}>
+              of corpus
+            </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-1.5 w-full overflow-hidden rounded-full"
+            style={{ backgroundColor: "rgba(160,228,241,0.3)" }}
+          >
             <div
               className="h-full rounded-full transition-all duration-500"
               style={{
                 width: `${pct}%`,
-                backgroundColor: "var(--chart-1)",
+                backgroundColor: "#A0E4F1",
               }}
             />
           </div>
@@ -96,10 +114,13 @@ const JournalDistributionWidget: React.FC<Props> = ({
       </div>
 
       {/* Divider */}
-      <div className="bg-border" />
+      <div style={{ background: "#C8F1F8" }} />
 
       {/* Right pane — ranked horizontal bars */}
-      <div className="p-3 overflow-hidden bg-card">
+      <div
+        className="p-3 overflow-hidden"
+        style={{ background: "#FBFEFE" }}
+      >
         <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
       </div>
     </div>

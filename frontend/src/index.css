@@ -83,11 +83,17 @@
     --border: oklch(0.922 0 0);
     --input: oklch(0.922 0 0);
     --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.646 0.222 41.116);
-    --chart-2: oklch(0.6 0.118 184.704);
-    --chart-3: oklch(0.398 0.07 227.392);
-    --chart-4: oklch(0.828 0.189 84.429);
-    --chart-5: oklch(0.769 0.188 70.08);
+    /* Coastal palette — preserves the original Journal Distribution
+       widget look (aqua / sage / teal / peach / aqua-repeat). The
+       Publication Timeline overrides this with a cyan accent locally;
+       the Entity Donut uses semantic per-entity colours from
+       ENTITY_COLORS. These five variables are the default any new
+       chart inherits. */
+    --chart-1: #A0E4F1;
+    --chart-2: #B9EDB9;
+    --chart-3: #86CFBF;
+    --chart-4: #FFCBA5;
+    --chart-5: #A0E4F1;
     --radius: 0.625rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
@@ -1130,11 +1136,15 @@ html, body, header, aside, main, nav, button, input, textarea,
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 15%);
     --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.488 0.243 264.376);
-    --chart-2: oklch(0.696 0.17 162.48);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
+    /* Dark-mode chart palette — kept identical to light mode because
+       the original ECharts theme was always-light; carrying the same
+       Coastal hues into dark backgrounds preserves brand cohesion
+       without per-mode branching. */
+    --chart-1: #A0E4F1;
+    --chart-2: #B9EDB9;
+    --chart-3: #86CFBF;
+    --chart-4: #FFCBA5;
+    --chart-5: #A0E4F1;
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.488 0.243 264.376);

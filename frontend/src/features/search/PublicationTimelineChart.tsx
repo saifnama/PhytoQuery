@@ -39,10 +39,13 @@ import {
  * flips automatically via the ``.dark`` class on the document root.
  */
 
+// Original ECharts line accent (#00ACC1 cyan-600). Local override of
+// the --chart-1 default; gives the timeline its distinctive teal/cyan
+// look that the journal-bar Coastal palette doesn't carry.
 const chartConfig = {
   count: {
     label: "Papers",
-    color: "var(--chart-1)",
+    color: "#00ACC1",
   },
 } satisfies ChartConfig
 

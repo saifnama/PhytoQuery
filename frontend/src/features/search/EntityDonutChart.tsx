@@ -6,24 +6,21 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
+import { getEntityColor } from "@/lib/entityColors"
 
 /**
- * Entity Donut — shadcn "Pie Chart - Donut with Text" pattern.
+ * Entity Donut — shadcn "Pie Chart - Donut with Text" pattern, with
+ * semantic per-entity colours from ENTITY_COLORS (chemical=blue,
+ * species=green, location=cyan, etc.). This matches the previous
+ * ECharts dashboard look exactly — each entity TYPE has a stable,
+ * meaningful colour rather than cycling positionally through
+ * ``--chart-1`` … ``--chart-5``.
  *
  * Center text behaviour:
  *   - default: shows the total entity count + "entities" label
  *   - on slice hover: shows the active slice's name + value
  *
- * Slice colours cycle through ``--chart-1`` … ``--chart-5``. With 7
- * entity types the last two slots reuse the first two colours; that's
- * the canonical shadcn approach for >5 categories. Visual separation
- * across same-colour neighbours is provided by ``paddingAngle`` so
- * adjacent slices never blur together.
- *
- * The chart config is BUILT from the data so each entity name becomes
- * a config key — that lets ``<ChartTooltipContent />`` resolve the
- * slice colour via ``var(--color-KEY)`` automatically without any
- * extra plumbing.
+ * ``paddingAngle`` provides visual separation between adjacent slices.
  */
 
 interface Props {
@@ -41,14 +38,6 @@ function entityKey(name: string): string {
     .replace(/^_+|_+$/g, "")
 }
 
-const PALETTE = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
-] as const
-
 export function EntityDonutChart({ data, onSliceClick }: Props) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
 
@@ -57,17 +46,19 @@ export function EntityDonutChart({ data, onSliceClick }: Props) {
     [data],
   )
 
-  // chartConfig is rebuilt from data so each entity name maps to a
-  // cycled chart colour. ChartContainer exposes these as
-  // `--color-<key>` automatically.
+  // chartConfig is rebuilt from data so each entity name maps to its
+  // SEMANTIC colour from ENTITY_COLORS (chemical=blue, species=green,
+  // location=cyan, etc.). ChartContainer exposes these as
+  // `--color-<key>` automatically, so tooltips + legend stay consistent
+  // with the slice colour without any extra plumbing.
   const chartConfig = useMemo<ChartConfig>(() => {
     const config: ChartConfig = {
       value: { label: "Entities" },
     }
-    data.forEach((d, i) => {
+    data.forEach((d) => {
       config[entityKey(d.name)] = {
         label: d.name,
-        color: PALETTE[i % PALETTE.length],
+        color: getEntityColor(d.name).hex,
       }
     })
     return config
@@ -75,10 +66,10 @@ export function EntityDonutChart({ data, onSliceClick }: Props) {
 
   const dataWithFill = useMemo(
     () =>
-      data.map((d, i) => ({
+      data.map((d) => ({
         ...d,
         key: entityKey(d.name),
-        fill: PALETTE[i % PALETTE.length],
+        fill: getEntityColor(d.name).hex,
       })),
     [data],
   )
