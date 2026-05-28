@@ -43,8 +43,6 @@ import {
   Stop,
   ArrowClockwise,
   PencilSimple,
-  SpeakerHigh,
-  SpeakerSlash,
   CaretLeft,
   CaretRight,
   X,
@@ -111,23 +109,30 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   );
 };
 
-const ExportChatPdfButton: FC = () => {
+/**
+ * Cumulative "export up to here" — clicking the button on the Nth
+ * assistant message exports Q+A pairs 1 through N as a single PDF.
+ * The button on answer #1 exports just pair 1; on answer #3, pairs 1+2+3.
+ * Universal — uses the current message's position in the thread, no
+ * hardcoded indices.
+ */
+const ExportAnswerPdfButton: FC = () => {
   const thread = useThread();
+  const message = useMessage();
 
-  const handleExportChat = () => {
-    const turns: ThreadTurn[] = thread.messages
+  const handleExport = () => {
+    const messages = thread.messages;
+    const idx = messages.findIndex((m) => m.id === message.id);
+    if (idx < 0) return;
+    // Take every user / assistant turn from the start of the thread
+    // through (and including) the assistant message this button sits on.
+    const turns: ThreadTurn[] = messages
+      .slice(0, idx + 1)
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => {
-        const text = readMessageText(m);
-        const role: 'user' | 'assistant' =
-          m.role === 'user' ? 'user' : 'assistant';
-        const customData = (m.metadata?.custom ?? {}) as RagMessageCustomData;
-        return {
-          role,
-          text,
-          sources: role === 'assistant' ? customData.sources : undefined,
-        };
-      });
+      .map((m) => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        text: readMessageText(m),
+      }));
     exportThreadAsPdf({ turns });
   };
 
@@ -136,8 +141,8 @@ const ExportChatPdfButton: FC = () => {
       type="button"
       variant="ghost"
       size="icon-xs"
-      onClick={handleExportChat}
-      tooltip="Export entire chat as PDF"
+      onClick={handleExport}
+      tooltip="Export Chat"
     >
       <FilePdf size={14} weight="regular" />
     </TooltipIconButton>
@@ -417,32 +422,7 @@ const AssistantActionBar: FC = () => (
       </TooltipIconButton>
     </ActionBarPrimitive.Reload>
 
-    <ExportChatPdfButton />
-
-    <MessagePrimitive.If speaking={false}>
-      <ActionBarPrimitive.Speak asChild>
-        <TooltipIconButton
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          tooltip="Read this answer aloud"
-        >
-          <SpeakerHigh size={14} weight="regular" />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Speak>
-    </MessagePrimitive.If>
-    <MessagePrimitive.If speaking>
-      <ActionBarPrimitive.StopSpeaking asChild>
-        <TooltipIconButton
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          tooltip="Stop reading"
-        >
-          <SpeakerSlash size={14} weight="regular" />
-        </TooltipIconButton>
-      </ActionBarPrimitive.StopSpeaking>
-    </MessagePrimitive.If>
+    <ExportAnswerPdfButton />
   </ActionBarPrimitive.Root>
 );
 
