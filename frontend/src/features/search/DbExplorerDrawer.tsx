@@ -1,9 +1,16 @@
 /**
- * DB Explorer Drawer — retractable right-side panel.
- * Mirrors the phytoquery.html prototype: slide-in chrome, vertical trigger tab,
- * drag-resize (280–600px) persisted to localStorage, overlay/Escape/close
- * dismissal. Three tabs (Papers / Entities / Journals). Auto-opens via chart
- * click hooks driven by the parent.
+ * Database panel — retractable right-side drawer.
+ *
+ * Slide-in chrome, vertical trigger tab, drag-resize (440px → 35% of
+ * viewport width) persisted to localStorage, overlay/Escape/close
+ * dismissal. Three tabs (Papers / Entities / Journals). Auto-opens via
+ * chart click hooks driven by the parent (clicking a stat card or
+ * chart segment in Dashboard.tsx).
+ *
+ * Resize bounds match the design spec: hard 440px lower bound (the
+ * panel needs that much breathing room for the paper card layout) and
+ * a dynamic 35% upper bound computed against window.innerWidth so the
+ * main content always retains 65% of the viewport.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -13,9 +20,15 @@ import { sanitizeHtml } from '../../utils/sanitize';
 import { Skeleton } from '@/components/ui/skeleton';
 
 const XP_WIDTH_KEY = 'phytoquery-xp-width';
-const MIN_W = 280;
-const MAX_W = 600;
-const DEFAULT_W = 360;
+const MIN_W = 440;
+const MAX_W_PCT = 0.35;
+const DEFAULT_W = 440;
+/** Runtime maximum width — recomputed at every drag against the live
+ * viewport. Falls back to a generous 720px for SSR / pre-mount. */
+const computeMaxW = (): number => {
+  if (typeof window === 'undefined') return 720;
+  return Math.max(MIN_W, Math.floor(window.innerWidth * MAX_W_PCT));
+};
 
 export type DrawerTab = 'papers' | 'entities' | 'journals';
 
@@ -49,7 +62,8 @@ const DbExplorerDrawer: React.FC<Props> = ({
   const [width, setWidth] = useState<number>(() => {
     if (typeof window === 'undefined') return DEFAULT_W;
     const saved = parseInt(localStorage.getItem(XP_WIDTH_KEY) || '', 10);
-    return saved >= MIN_W && saved <= MAX_W ? saved : DEFAULT_W;
+    const maxW = computeMaxW();
+    return saved >= MIN_W && saved <= maxW ? saved : DEFAULT_W;
   });
 
   const [papers, setPapers] = useState<PaperRow[] | null>(null);
@@ -80,7 +94,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
     const onMove = (e: MouseEvent) => {
       if (!draggingRef.current) return;
       const delta = dragStartX.current - e.clientX;
-      const w = Math.min(MAX_W, Math.max(MIN_W, dragStartW.current + delta));
+      const w = Math.min(computeMaxW(), Math.max(MIN_W, dragStartW.current + delta));
       setWidth(w);
       try { localStorage.setItem(XP_WIDTH_KEY, String(w)); } catch { /* private mode */ }
     };

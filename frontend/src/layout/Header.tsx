@@ -1,72 +1,247 @@
-import React from 'react';
-import { Link } from '@tanstack/react-router';
-import { Compass, ListMagnifyingGlass, Chats, FlowerTulip } from '@phosphor-icons/react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Link, useRouterState } from '@tanstack/react-router';
+import {
+  Compass,
+  ListMagnifyingGlass,
+  Chats,
+  FlowerTulip,
+  Circle,
+} from '@phosphor-icons/react';
 import { useTheme } from '../lib/theme';
+import { useSearchStore } from '../stores/searchStore';
 
 interface HeaderProps {
   isLoading?: boolean;
 }
 
-// Tailwind utility groups for the nav links. `Link.activeProps.className`
-// is appended when the link's `to` matches the current pathname, so we get
-// type-safe active-state styling without a manual `pathname === '/...'` check.
-const NAV_BASE =
-  'flex items-center space-x-2 px-4 py-2 rounded-lg text-sm font-medium transition-all';
-const NAV_INACTIVE = 'text-slate-500 hover:text-slate-700';
-const NAV_ACTIVE = 'bg-white text-blue-600 shadow-sm';
+interface NavItem {
+  to: '/' | '/analyse' | '/chat';
+  label: string;
+  Icon: typeof Compass;
+}
 
+const NAV_ITEMS: readonly NavItem[] = [
+  { to: '/',        label: 'Explore', Icon: Compass },
+  { to: '/analyse', label: 'Analyse', Icon: ListMagnifyingGlass },
+  { to: '/chat',    label: 'Chat',    Icon: Chats },
+];
+
+const IDLE_COLLAPSE_MS = 10_000;
+const SCROLL_COLLAPSE_PX = 80;
+
+/**
+ * Header — tulip + PhytoQuery brand on the left, segmented pill nav on
+ * the right. The pill collapses to a single solid black ``ph-circle``
+ * dot after the user scrolls down past 80px OR after 10s of no
+ * scrolling/expand activity. Hovering the dot — or clicking it — pops
+ * the pill back open.
+ *
+ * The sliding indicator behind the active tab is positioned by measuring
+ * each Link's bounding box relative to the rail. Resizing observes both
+ * the rail and the individual Links so font-loading / window resize
+ * never leaves the indicator off the active tab.
+ *
+ * Theme-toggle on the tulip click is preserved from the previous
+ * Header — the design treats the tulip as purely decorative but the app
+ * relies on it for light/dark switching.
+ */
 const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   const { theme, toggleTheme } = useTheme();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  // Which item is the active tab? — derived from the route.
+  const activeIndex =
+    pathname.startsWith('/chat')    ? 2 :
+    pathname.startsWith('/analyse') ? 1 :
+    0;
+
+  // ── collapse state ───────────────────────────────────────────────────
+  const [collapsed, setCollapsed] = useState(false);
+  const hoveringRef = useRef(false);
+  // userOverride = the user manually expanded the dot. Don't re-collapse
+  // on small scroll bounces — only on a fresh scroll-down past the
+  // threshold OR after the idle timer fires again.
+  const userOverrideRef = useRef(false);
+  const idleTimerRef = useRef<number | null>(null);
+
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current !== null) {
+      window.clearTimeout(idleTimerRef.current);
+    }
+    idleTimerRef.current = window.setTimeout(() => {
+      if (!hoveringRef.current) {
+        userOverrideRef.current = false;
+        setCollapsed(true);
+      }
+    }, IDLE_COLLAPSE_MS);
+  }, []);
+
+  // Scroll-driven collapse: down past threshold → collapse;
+  // back to top → expand. The idle timer is NOT reset by mouse moves
+  // (only by scroll + expand) so the pill always settles to the dot
+  // ~10s after it opens.
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      const goingDown = y > lastY;
+      lastY = y;
+      resetIdleTimer();
+      if (y < 40) {
+        userOverrideRef.current = false;
+        setCollapsed(false);
+        return;
+      }
+      if (userOverrideRef.current) return;
+      if (y > SCROLL_COLLAPSE_PX && goingDown) setCollapsed(true);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    resetIdleTimer();
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current);
+    };
+  }, [resetIdleTimer]);
+
+  // ── sliding indicator ────────────────────────────────────────────────
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+
+  const measureIndicator = useCallback(() => {
+    const rail = railRef.current;
+    const item = itemRefs.current[activeIndex];
+    if (!rail || !item) return;
+    const railBox = rail.getBoundingClientRect();
+    const itemBox = item.getBoundingClientRect();
+    setIndicator({
+      left:  itemBox.left  - railBox.left,
+      width: itemBox.width,
+    });
+  }, [activeIndex]);
+
+  useEffect(() => {
+    if (collapsed) return;
+    measureIndicator();
+    const ro = new ResizeObserver(measureIndicator);
+    if (railRef.current) ro.observe(railRef.current);
+    itemRefs.current.forEach((el) => el && ro.observe(el));
+    return () => ro.disconnect();
+  }, [collapsed, measureIndicator]);
+
+  // ── manual expand (hover/click the dot) ──────────────────────────────
+  const expandManual = useCallback(() => {
+    hoveringRef.current = true;
+    userOverrideRef.current = true;
+    setCollapsed(false);
+    resetIdleTimer();
+  }, [resetIdleTimer]);
+
+  const handlePillLeave = useCallback(() => {
+    hoveringRef.current = false;
+    if (window.scrollY > SCROLL_COLLAPSE_PX) {
+      userOverrideRef.current = false;
+      setCollapsed(true);
+    } else {
+      resetIdleTimer();
+    }
+  }, [resetIdleTimer]);
 
   return (
-    <header className="h-16 flex items-center px-8 bg-white border-b border-slate-100 sticky top-0 z-30 justify-between">
+    <header className="h-16 flex items-center px-8 bg-white border-b border-zinc-200 sticky top-0 z-30 justify-between">
       <div className="flex items-center space-x-3">
         <button
           onClick={toggleTheme}
           aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="theme-toggle grid place-items-center rounded-lg p-1 hover:bg-slate-100 transition-colors"
+          className="theme-toggle grid place-items-center rounded-lg p-1 hover:bg-zinc-100 transition-colors"
         >
-          <FlowerTulip size={32} color="#db1f83" weight={theme === 'dark' ? 'fill' : 'regular'} />
+          <FlowerTulip
+            size={32}
+            color="#db1f83"
+            weight={theme === 'dark' ? 'fill' : 'regular'}
+          />
         </button>
-        <Link to="/" className="hover:opacity-80 transition-opacity">
-          <span className="text-xl font-bold text-slate-900 title-font">PhytoQuery</span>
+        {/* Clicking the brand resets the persisted search store AND
+            clears URL search params, so NerPage's `!lastQuery` branch
+            kicks in and the Dashboard surfaces. Without the reset,
+            sessionStorage-persisted results keep the search view live
+            even after navigating to "/". */}
+        <Link
+          to="/"
+          search={{}}
+          onClick={() => useSearchStore.getState().resetSearch()}
+          className="hover:opacity-80 transition-opacity"
+        >
+          <span className="text-xl font-bold text-zinc-900 title-font">
+            PhytoQuery
+          </span>
         </Link>
       </div>
 
       <div className="flex items-center space-x-4">
         {isLoading && (
-          <div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-200 border-t-blue-600" />
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-zinc-200 border-t-blue-600" />
         )}
 
-        <nav className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
-          <Link
-            to="/"
-            // `activeOptions.exact` so /paper/* doesn't keep Search highlighted.
-            activeOptions={{ exact: true }}
-            className={`${NAV_BASE} ${NAV_INACTIVE}`}
-            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
+        {collapsed ? (
+          <button
+            onClick={expandManual}
+            onMouseEnter={expandManual}
+            title={NAV_ITEMS[activeIndex].label}
+            aria-label={`Expand navigation — current: ${NAV_ITEMS[activeIndex].label}`}
+            className="grid h-8 w-8 place-items-center bg-transparent text-zinc-900 border-0 cursor-pointer transition-all duration-200"
+            style={{ animation: 'header-pill-fadein .22s ease both' }}
           >
-            <Compass size={18} weight="bold" />
-            <span>Explore</span>
-          </Link>
-          <Link
-            to="/analyse"
-            className={`${NAV_BASE} ${NAV_INACTIVE}`}
-            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
+            <Circle size={28} weight="fill" />
+          </button>
+        ) : (
+          <nav
+            ref={railRef}
+            onMouseEnter={() => {
+              hoveringRef.current = true;
+              if (idleTimerRef.current !== null) {
+                window.clearTimeout(idleTimerRef.current);
+              }
+            }}
+            onMouseLeave={handlePillLeave}
+            className="relative inline-flex items-center gap-0.5 p-1 bg-white border border-zinc-200 rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+            aria-label="Primary"
           >
-            <ListMagnifyingGlass size={18} weight="bold" />
-            <span>Analyse</span>
-          </Link>
-          <Link
-            to="/chat"
-            className={`${NAV_BASE} ${NAV_INACTIVE}`}
-            activeProps={{ className: `${NAV_BASE} ${NAV_ACTIVE}` }}
-          >
-            <Chats size={18} weight="bold" />
-            <span>Chat</span>
-          </Link>
-        </nav>
+            {/* Sliding indicator behind the active tab */}
+            <span
+              aria-hidden
+              className="absolute top-1 bottom-1 bg-zinc-100 rounded-full pointer-events-none"
+              style={{
+                left: indicator.left,
+                width: indicator.width,
+                transition:
+                  'left .32s cubic-bezier(.2,.85,.3,1.1), width .32s cubic-bezier(.2,.85,.3,1.1)',
+                zIndex: 0,
+              }}
+            />
+            {NAV_ITEMS.map((item, idx) => {
+              const isActive = idx === activeIndex;
+              const { Icon } = item;
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  ref={(el) => { itemRefs.current[idx] = el; }}
+                  activeOptions={item.to === '/' ? { exact: true } : undefined}
+                  className={[
+                    'relative z-[1] inline-flex items-center gap-2 h-10 px-[18px] rounded-full',
+                    'text-sm cursor-pointer no-underline transition-colors duration-200',
+                    isActive ? 'text-zinc-900 font-semibold' : 'text-zinc-500 font-medium hover:text-zinc-700',
+                  ].join(' ')}
+                >
+                  <Icon size={18} weight={isActive ? 'bold' : 'regular'} />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        )}
       </div>
     </header>
   );

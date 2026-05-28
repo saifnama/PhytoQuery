@@ -1,14 +1,40 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  lazy,
+  Suspense,
+} from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import SearchForm from './SearchForm';
 import { nerApi } from '../../lib/api';
 import { useSearchStore } from '../../stores/searchStore';
+import { useDrawerStore } from '../../stores/drawerStore';
+import { formatTextWithFormatting } from '../../utils/sanitize';
+import type { SearchFilters, SearchResult } from '../../types';
+import {
+  CaretDown,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  DownloadSimple,
+  ChartLine,
+  ChatCircle,
+  Circle,
+  LockSimple,
+  LockSimpleOpen,
+  Article,
+} from '@phosphor-icons/react';
 
 const route = getRouteApi('/');
 
 const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.default })));
-import { formatTextWithFormatting } from '../../utils/sanitize';
-import type { SearchFilters } from '../../types';
+
+type SortType = 'Relevance' | 'Citations' | 'Date';
+type SortDir = 'asc' | 'desc';
+type SourceKey = 'europepmc' | 'openalex' | 'database';
 
 /** Compare two SearchFilters objects for value equality. Cheap fixed-
  * shape compare — avoids pulling lodash for one call. */
@@ -23,25 +49,444 @@ function filtersEqual(a: SearchFilters | null, b: SearchFilters): boolean {
   );
 }
 
+const sortFromRaw = (raw: string | undefined | null): { type: SortType; dir: SortDir } =>
+  raw === 'cited'    ? { type: 'Citations', dir: 'desc' } :
+  raw === 'date'     ? { type: 'Date',      dir: 'desc' } :
+  raw === 'date_asc' ? { type: 'Date',      dir: 'asc'  } :
+                       { type: 'Relevance', dir: 'desc' };
+
+const sortToRaw = (v: { type: SortType; dir: SortDir }): string =>
+  v.type === 'Citations' ? 'cited' :
+  v.type === 'Date'      ? (v.dir === 'asc' ? 'date_asc' : 'date') :
+                           '';
+
+// ─── small UI atoms — co-located so NerPage stays a single file ─────────────
+
+interface FilterSectionProps {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}
+
+const FilterSection: React.FC<FilterSectionProps> = ({ title, defaultOpen = false, children }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`
+          flex w-full items-center justify-between bg-transparent border-0 cursor-pointer
+          py-1 text-[12px] font-bold uppercase tracking-[0.14em] text-zinc-900
+          ${open ? 'mb-3.5' : 'mb-0'}
+          transition-[margin-bottom] duration-200
+        `}
+      >
+        <span>{title}</span>
+        <CaretDown
+          size={12}
+          weight="bold"
+          className="text-zinc-500 transition-transform duration-200"
+          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        />
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2.5 animate-in fade-in slide-in-from-top-1 duration-150">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface SourcePillProps {
+  role: SourceKey;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}
+
+const SourcePill: React.FC<SourcePillProps> = ({ role, label, active, onClick }) => {
+  const tone = {
+    europepmc: 'bg-emerald-50 text-emerald-700',
+    openalex:  'bg-slate-100  text-slate-700',
+    database:  'bg-pink-50    text-pink-500',
+  }[role];
+  const toneActive = {
+    europepmc: 'bg-emerald-100 ring-emerald-700',
+    openalex:  'bg-slate-200   ring-slate-700',
+    database:  'bg-pink-100    ring-pink-500',
+  }[role];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`
+        inline-flex items-center gap-2 h-[34px] px-4 rounded-full
+        text-[13.5px] font-semibold whitespace-nowrap transition-all duration-150
+        ${tone}
+        ${active ? `${toneActive} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
+      `}
+    >
+      <span>{label}</span>
+    </button>
+  );
+};
+
+interface FilterTogglePillProps {
+  icon: React.ReactNode;
+  label: string;
+  tone: 'orange' | 'blue';
+  active: boolean;
+  onClick: () => void;
+}
+
+const FilterTogglePill: React.FC<FilterTogglePillProps> = ({ icon, label, tone, active, onClick }) => {
+  const base = {
+    orange: 'bg-orange-50 text-orange-700',
+    blue:   'bg-blue-50   text-blue-700',
+  }[tone];
+  const activeCls = {
+    orange: 'bg-orange-100 ring-orange-700',
+    blue:   'bg-blue-100   ring-blue-700',
+  }[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`
+        inline-flex items-center gap-1.5 h-[34px] px-3.5 rounded-full text-[13.5px] font-semibold
+        transition-all duration-150 ${base}
+        ${active ? `${activeCls} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
+      `}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+};
+
+interface SortSegmentedProps {
+  value: { type: SortType; dir: SortDir };
+  onChange: (v: { type: SortType; dir: SortDir }) => void;
+}
+
+/** Relevance | Citations | Date — plain text with thin vertical dividers.
+ * Active = bold + full-contrast color. Inactive = dim. Click Date when
+ * active = flip ↑/↓ direction. */
+const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
+  const options: SortType[] = ['Relevance', 'Citations', 'Date'];
+  return (
+    <div className="inline-flex items-center">
+      {options.map((opt, i) => {
+        const active = opt === value.type;
+        const isDate = opt === 'Date';
+        const Arrow = value.dir === 'asc' ? ArrowUp : ArrowDown;
+        return (
+          <React.Fragment key={opt}>
+            {i > 0 && <span aria-hidden className="w-px h-3.5 mx-3.5 bg-zinc-200" />}
+            <button
+              type="button"
+              onClick={() => {
+                if (active && isDate) {
+                  onChange({ ...value, dir: value.dir === 'asc' ? 'desc' : 'asc' });
+                } else if (!active) {
+                  onChange({ type: opt, dir: isDate ? (value.dir || 'desc') : 'desc' });
+                }
+              }}
+              className={`
+                inline-flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer
+                text-sm transition-colors duration-150
+                ${active
+                  ? 'font-bold text-zinc-900'
+                  : 'font-medium text-zinc-500 hover:text-zinc-900'}
+              `}
+            >
+              <span>{opt}</span>
+              {isDate && active && <Arrow size={13} weight="bold" />}
+            </button>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+};
+
+interface CircleCheckProps {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  count?: number | null;
+}
+
+const CircleCheck: React.FC<CircleCheckProps> = ({ checked, onToggle, label, count }) => (
+  <label
+    onClick={onToggle}
+    className="flex items-center gap-2.5 cursor-pointer text-sm text-zinc-900"
+  >
+    <Circle
+      size={18}
+      weight={checked ? 'fill' : 'regular'}
+      className={checked ? 'text-blue-600' : 'text-zinc-400'}
+    />
+    <span className="flex-1">{label}</span>
+    {count != null && (
+      <span className="font-mono text-xs text-zinc-500 tabular-nums">{count}</span>
+    )}
+  </label>
+);
+
+// ─── result card per design spec ────────────────────────────────────────────
+
+interface ResultCardProps {
+  result: SearchResult;
+  onOpen: () => void;
+  /** Animation delay so consecutive cards stagger in (40 + idx*60 ms). */
+  delayMs: number;
+}
+
+const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
+  const year = result.year || '';
+  const authors = result.authors || '';
+  const journal = result.journal || '';
+  const isOA = !!result.isOpenAccess;
+  const citationCount = typeof result.citationCount === 'number' ? result.citationCount : null;
+
+  return (
+    <article
+      onClick={onOpen}
+      style={{ animationDelay: `${delayMs}ms` }}
+      className="
+        pq-result-card relative bg-white border border-zinc-200 rounded-2xl px-6 py-5
+        transition-[border-color,box-shadow] duration-150 cursor-pointer
+        hover:border-zinc-400/80 hover:shadow-[0_2px_8px_-2px_rgba(15,23,42,0.08)]
+      "
+    >
+      {/* Top row — DOI left, year right */}
+      <div className="flex items-center justify-between mb-2.5">
+        {result.doi ? (
+          <a
+            href={`https://doi.org/${result.doi}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-[13px] font-medium text-blue-700 font-mono no-underline hover:underline"
+          >
+            {result.doi}
+          </a>
+        ) : <span />}
+        <span className="text-[13px] font-medium text-zinc-500">{year}</span>
+      </div>
+
+      {/* Title — serif, bold */}
+      <h3
+        className="
+          mb-2.5
+          font-bold text-[19px] leading-snug text-zinc-900
+        "
+        style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+        dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.title || '') }}
+      />
+
+      {/* Meta — authors • journal (italic) • Open Access (orange) • citations */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-zinc-500 mb-3.5">
+        {authors && (
+          <span
+            dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(authors) }}
+          />
+        )}
+        {journal && (
+          <>
+            <span className="text-zinc-400">•</span>
+            <span className="italic">{journal}</span>
+          </>
+        )}
+        {isOA && (
+          <>
+            <span className="text-zinc-400">•</span>
+            <span className="text-orange-600 font-semibold">Open Access</span>
+          </>
+        )}
+        {citationCount != null && citationCount > 0 && (
+          <>
+            <span className="text-zinc-400">•</span>
+            <span>{citationCount} citations</span>
+          </>
+        )}
+      </div>
+
+      {/* Excerpt (abstract) */}
+      {result.abstract && (
+        <div
+          className="text-sm text-zinc-500 leading-relaxed mb-4 line-clamp-3"
+          dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
+        />
+      )}
+
+      {/* Borderless action row — Download · Analyse · Chat (icon + label) */}
+      <div className="flex items-center gap-6">
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          title="Download"
+          className="
+            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
+            text-zinc-500 text-[13.5px] font-medium
+            hover:text-zinc-900 transition-colors duration-150
+          "
+        >
+          <DownloadSimple size={17} weight="regular" />
+          <span>Download</span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          title="Analyse"
+          className="
+            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
+            text-zinc-500 text-[13.5px] font-medium
+            hover:text-zinc-900 transition-colors duration-150
+          "
+        >
+          <ChartLine size={17} weight="regular" />
+          <span>Analyse</span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          title="Chat"
+          className="
+            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
+            text-zinc-500 text-[13.5px] font-medium
+            hover:text-zinc-900 transition-colors duration-150
+          "
+        >
+          <ChatCircle size={17} weight="regular" />
+          <span>Chat</span>
+        </button>
+      </div>
+    </article>
+  );
+};
+
+// ─── filter sidebar ─────────────────────────────────────────────────────────
+
+const EUROPEPMC_TYPES = ['Research Articles', 'Review Articles'] as const;
+// Single fallback list — full OpenAlex types (loaded statically; the live
+// list is fetched into the SearchForm dropdown but for the sidebar's
+// checkbox list a static set is fine and keeps the markup deterministic).
+const OPENALEX_TYPES = [
+  'Article', 'Preprint', 'Review', 'Dissertation', 'Letter',
+  'Book', 'Book Chapter', 'Erratum', 'Editorial', 'Paratext',
+  'Reference Entry', 'Report', 'Dataset', 'Peer Review', 'Other',
+  'Retraction', 'Supplementary Materials', 'Report Component',
+  'Database', 'Standard', 'Grant',
+] as const;
+
+interface FilterSidebarProps {
+  filters: SearchFilters;
+  onChange: (next: SearchFilters) => void;
+}
+
+const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
+  const source = (filters.source ?? 'europepmc') as SourceKey;
+  return (
+    <aside
+      className="
+        sticky top-[100px] mt-[92px] h-fit
+        flex flex-col gap-5 pr-6
+        border-r border-zinc-200
+      "
+    >
+      <div className="text-[15px] font-bold tracking-[-0.005em] text-zinc-900">
+        Filter by
+      </div>
+
+      <FilterSection title="Sources">
+        <div className="flex flex-col gap-2 items-start">
+          <SourcePill role="europepmc" label="Europe PMC"
+            active={source === 'europepmc'}
+            onClick={() => onChange({ ...filters, source: 'europepmc', article_type: '' })} />
+          <SourcePill role="openalex" label="OpenAlex"
+            active={source === 'openalex'}
+            onClick={() => onChange({ ...filters, source: 'openalex', article_type: '' })} />
+          <SourcePill role="database" label="Database"
+            active={source === 'database'}
+            onClick={() => onChange({ ...filters, source: 'database', article_type: '' })} />
+        </div>
+      </FilterSection>
+
+      {source === 'europepmc' && (
+        <FilterSection title="Availability">
+          <div className="flex flex-col gap-2 items-start">
+            <FilterTogglePill
+              icon={filters.open_access
+                ? <LockSimpleOpen size={14} weight="fill" />
+                : <LockSimple     size={14} weight="regular" />}
+              label="Open Access"
+              tone="orange"
+              active={!!filters.open_access}
+              onClick={() => onChange({ ...filters, open_access: !filters.open_access })} />
+            <FilterTogglePill
+              icon={<Article size={14} weight={filters.has_full_text ? 'fill' : 'regular'} />}
+              label="Full Text"
+              tone="blue"
+              active={!!filters.has_full_text}
+              onClick={() => onChange({ ...filters, has_full_text: !filters.has_full_text })} />
+          </div>
+        </FilterSection>
+      )}
+
+      {source !== 'database' && (
+        <FilterSection title="Type">
+          {(source === 'openalex' ? OPENALEX_TYPES : EUROPEPMC_TYPES).map((t) => {
+            // Map UI label back to backend key.
+            const key = source === 'openalex'
+              ? t.toLowerCase().replace(/\s+/g, '-')
+              : t === 'Research Articles' ? 'Research-article'
+              : t === 'Review Articles'   ? 'Review'
+              : '';
+            const checked = filters.article_type === key;
+            return (
+              <CircleCheck
+                key={t}
+                label={t}
+                checked={checked}
+                onToggle={() =>
+                  onChange({ ...filters, article_type: checked ? '' : key })
+                }
+              />
+            );
+          })}
+        </FilterSection>
+      )}
+    </aside>
+  );
+};
+
+// ─── main page ──────────────────────────────────────────────────────────────
+
 const NerPage: React.FC = () => {
   // ── Persisted search state (sessionStorage-backed, per-tab) ─────────────
-  const results = useSearchStore((s) => s.results);
-  const pagination = useSearchStore((s) => s.pagination);
-  const currentPage = useSearchStore((s) => s.currentPage);
-  const lastQuery = useSearchStore((s) => s.lastQuery);
-  const lastFilters = useSearchStore((s) => s.lastFilters);
-  const scrollY = useSearchStore((s) => s.scrollY);
+  const results       = useSearchStore((s) => s.results);
+  const pagination    = useSearchStore((s) => s.pagination);
+  const currentPage   = useSearchStore((s) => s.currentPage);
+  const lastQuery     = useSearchStore((s) => s.lastQuery);
+  const lastFilters   = useSearchStore((s) => s.lastFilters);
+  const scrollY       = useSearchStore((s) => s.scrollY);
   const setSearchResult = useSearchStore((s) => s.setSearchResult);
-  const setScrollY = useSearchStore((s) => s.setScrollY);
-  // ── Transient (NOT persisted — would lock the page on stale spinner) ────
+  const setScrollY    = useSearchStore((s) => s.setScrollY);
+
+  // Transient (intentionally NOT persisted)
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const search = route.useSearch();
   const didInitFromUrl = useRef(false);
 
-  // Restore on mount: if URL query matches what's cached, no fetch —
-  // paint the cached results and restore scroll. Otherwise fetch.
+  // Restore on mount: if URL query matches cache, paint cached results.
   useEffect(() => {
     if (didInitFromUrl.current) return;
     didInitFromUrl.current = true;
@@ -49,17 +494,15 @@ const NerPage: React.FC = () => {
     const q = search.q;
     if (!q) return;
     const filters: SearchFilters = {
-      open_access: search.oa === '1',
+      open_access:   search.oa === '1',
       has_full_text: search.ft === '1',
-      article_type: search.type ?? '',
-      sort: search.sort ?? '',
-      source: search.src ?? 'europepmc',
+      article_type:  search.type ?? '',
+      sort:          search.sort ?? '',
+      source:        search.src ?? 'europepmc',
     };
     const cacheMatches =
       results.length > 0 && lastQuery === q && filtersEqual(lastFilters, filters);
     if (cacheMatches) {
-      // Restore scroll on next paint — wait for the result list to be
-      // measured before we try to set window.scrollY.
       requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
       return;
     }
@@ -68,7 +511,6 @@ const NerPage: React.FC = () => {
   }, []);
 
   // Track scroll position so navigating back lands where we left off.
-  // Throttled via rAF to avoid hammering the store on every wheel tick.
   useEffect(() => {
     let frame: number | null = null;
     const onScroll = () => {
@@ -92,32 +534,27 @@ const NerPage: React.FC = () => {
   ) => {
     setIsLoading(true);
     setError(null);
-
     try {
       const data = await nerApi.search(query, filters, page, filters.source || 'europepmc');
       if ('error' in data && data.error) {
         throw new Error(data.error);
       }
-
       setSearchResult({
-        results: data.results || [],
-        pagination: data.pagination || null,
-        currentPage: page,
-        lastQuery: query,
-        lastFilters: filters,
+        results:      data.results || [],
+        pagination:   data.pagination || null,
+        currentPage:  page,
+        lastQuery:    query,
+        lastFilters:  filters,
       });
-
-      // Persist search query in URL for back navigation.
-      // TanStack `search` is a typed object; omitted keys disappear from URL.
       navigate({
         to: '/',
         search: {
-          q: query,
-          oa: filters.open_access ? '1' : undefined,
-          ft: filters.has_full_text ? '1' : undefined,
+          q:    query,
+          oa:   filters.open_access ? '1' : undefined,
+          ft:   filters.has_full_text ? '1' : undefined,
           type: filters.article_type || undefined,
           sort: filters.sort || undefined,
-          src: filters.source && filters.source !== 'europepmc' ? filters.source : undefined,
+          src:  filters.source && filters.source !== 'europepmc' ? filters.source : undefined,
         },
         replace: true,
       });
@@ -125,11 +562,8 @@ const NerPage: React.FC = () => {
       console.error('Search failed:', err);
       setError(err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Search failed. Please try again.');
       setSearchResult({
-        results: [],
-        pagination: null,
-        currentPage: 1,
-        lastQuery: query,
-        lastFilters: filters,
+        results: [], pagination: null, currentPage: 1,
+        lastQuery: query, lastFilters: filters,
       });
     } finally {
       setIsLoading(false);
@@ -137,36 +571,31 @@ const NerPage: React.FC = () => {
   };
 
   const handleSearch = async (query: string, filters: SearchFilters) => {
-    // Detect if query is an identifier pattern (DOI, PMCID, PMID, or URLs)
+    // Detect identifier patterns and short-circuit to the paper viewer.
     const isIdentifier = (q: string) => {
       const trimmed = q.trim();
       return (
-        /^10\.\d{4,}/.test(trimmed) || // DOI
-        /^https?:\/\/(dx\.)?doi\.org\//.test(trimmed) || // DOI URL
-        /^doi:/i.test(trimmed) || // doi: prefix
-        /^PMC\d+/i.test(trimmed) || // PMCID
-        /^https?:\/\/(www\.)?pubmed\.ncbi\.nlm\.nih\.gov\//.test(trimmed) || // PubMed URL
-        /^https?:\/\/www\.ncbi\.nlm\.nih\.gov\/pmc\//.test(trimmed) || // NCBI PMC URL
-        /^https?:\/\/pmc\.ncbi\.nlm\.nih\.gov\/articles\//.test(trimmed) || // PMC NCBI URL
-        /^https?:\/\/europepmc\.org\/article\//.test(trimmed) || // Europe PMC URL
-        /^\d+$/.test(trimmed) // Pure number (PMID)
+        /^10\.\d{4,}/.test(trimmed) ||
+        /^https?:\/\/(dx\.)?doi\.org\//.test(trimmed) ||
+        /^doi:/i.test(trimmed) ||
+        /^PMC\d+/i.test(trimmed) ||
+        /^https?:\/\/(www\.)?pubmed\.ncbi\.nlm\.nih\.gov\//.test(trimmed) ||
+        /^https?:\/\/www\.ncbi\.nlm\.nih\.gov\/pmc\//.test(trimmed) ||
+        /^https?:\/\/pmc\.ncbi\.nlm\.nih\.gov\/articles\//.test(trimmed) ||
+        /^https?:\/\/europepmc\.org\/article\//.test(trimmed) ||
+        /^\d+$/.test(trimmed)
       );
     };
-
-    // If it looks like an identifier, navigate directly to the paper
     if (isIdentifier(query.trim())) {
       let cleanID = query.trim();
-      // DOI URL
       if (cleanID.startsWith('http') && /(dx\.)?doi\.org\//.test(cleanID)) {
         cleanID = cleanID.replace(/^https?:\/\/(dx\.)?doi\.org\//, '');
       } else if (cleanID.toLowerCase().startsWith('doi:')) {
         cleanID = cleanID.substring(4).trim();
       } else if (/(www\.)?pubmed\.ncbi\.nlm\.nih\.gov/.test(cleanID)) {
-        // Extract PMID from PubMed URL
         const m = cleanID.match(/\/(\d+)/);
         if (m) cleanID = m[1];
       } else if (/ncbi\.nlm\.nih\.gov\/pmc/.test(cleanID) || /pmc\.ncbi\.nlm\.nih\.gov/.test(cleanID)) {
-        // Extract PMCID from NCBI URL
         const m = cleanID.match(/PMC\d+/i);
         if (m) cleanID = m[0].toUpperCase();
       } else if (/europepmc\.org\/article\/PMC\//.test(cleanID)) {
@@ -176,11 +605,9 @@ const NerPage: React.FC = () => {
         const m = cleanID.match(/MED\/(\d+)/i);
         if (m) cleanID = m[1];
       }
-      // TanStack params are encoded automatically — don't double-encode.
       navigate({ to: '/paper/$doi', params: { doi: cleanID } });
       return;
     }
-
     doSearch(query, filters, 1);
   };
 
@@ -198,65 +625,126 @@ const NerPage: React.FC = () => {
     }
   };
 
-  return (
-    <div className="w-full pt-6 pb-4 px-0">
-      <SearchForm
-        onSearch={handleSearch}
-        isLoading={isLoading}
-        defaultQuery={search.q ?? ''}
-        defaultFilters={{
-          open_access: search.oa === '1',
-          has_full_text: search.ft === '1',
-          article_type: search.type ?? '',
-          sort: search.sort ?? '',
-          source: search.src ?? 'europepmc',
-        }}
-      />
+  // Filter sidebar wiring — when user toggles a filter, re-run search
+  // with the same query + updated filter set.
+  const handleFilterChange = (next: SearchFilters) => {
+    if (!lastQuery) return;
+    doSearch(lastQuery, next, 1);
+  };
 
-      {/* Results Area */}
-      <div id="ner-result-container" className="w-full">
+  // Sort segmented control — also re-runs the search.
+  const sortValue = useMemo(
+    () => sortFromRaw(lastFilters?.sort),
+    [lastFilters?.sort],
+  );
+  const handleSortChange = (v: { type: SortType; dir: SortDir }) => {
+    if (!lastQuery || !lastFilters) return;
+    const nextFilters: SearchFilters = { ...lastFilters, sort: sortToRaw(v) };
+    doSearch(lastQuery, nextFilters, 1);
+  };
+
+  // ── render ────────────────────────────────────────────────────────────
+  const hasResults = results.length > 0;
+  const noResults  = !isLoading && !error && lastQuery && results.length === 0;
+  const totalCount = pagination?.total ?? (hasResults ? results.length : 0);
+
+  return (
+    <div className="w-full px-8 pt-7 pb-10 results-page">
+      <div className="mx-auto max-w-[1440px]">
+        <SearchForm
+          onSearch={handleSearch}
+          onOpenDatabasePanel={(q) => {
+            // Signal Dashboard to open its drawer with the query
+            // pre-applied. The drawer lives inside Dashboard; this
+            // store is the cross-page bridge (see stores/drawerStore.ts).
+            useDrawerStore.getState().requestOpenWithQuery(q);
+          }}
+          isLoading={isLoading}
+          defaultQuery={search.q ?? ''}
+          defaultFilters={{
+            open_access:   search.oa === '1',
+            has_full_text: search.ft === '1',
+            article_type:  search.type ?? '',
+            sort:          search.sort ?? '',
+            source:        search.src ?? 'europepmc',
+          }}
+        />
+
         {error && (
-          <div className="saas-card p-4 max-w-4xl mx-auto mb-6 bg-red-50 text-red-700 rounded-lg">
+          <div className="mx-auto mb-6 max-w-4xl rounded-lg bg-red-50 p-4 text-red-700">
             {error}
           </div>
         )}
 
-        {isLoading && (
-          <div className="saas-card p-12 text-center max-w-4xl mx-auto">
-            <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-sm text-slate-500 font-medium">Searching publications...</p>
+        {isLoading && !hasResults && (
+          <div className="mx-auto max-w-4xl p-12 text-center">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
+            <p className="text-sm font-medium text-zinc-500">Searching publications...</p>
           </div>
         )}
 
-        {results.length === 0 && !isLoading && !error && (
+        {/* No-results screen — cat-in-a-bag illustration + plain text.
+            Asset lives at frontend/public/404.png (copied from the design
+            bundle). Layout matches the design's results.jsx 404 branch:
+            stacked center, ~70px top padding, image capped at 460px. */}
+        {noResults && (
+          <div className="flex flex-col items-center gap-6 px-5 pt-[70px] pb-10">
+            <img
+              src="/404.png"
+              alt="No results found"
+              className="w-full max-w-[460px] rounded-2xl"
+            />
+            <div className="text-center">
+              <div className="mb-1.5 text-[20px] font-bold text-zinc-900">
+                No publications found
+              </div>
+              <div className="text-[14.5px] text-zinc-500">
+                We couldn't find anything for &ldquo;{lastQuery}&rdquo;. Try different keywords.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Dashboard (when nothing has been searched yet) */}
+        {!lastQuery && !isLoading && !error && (
           <Suspense fallback={
             <div className="flex items-center justify-center py-12">
-              <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
             </div>
           }>
             <Dashboard />
           </Suspense>
         )}
 
-        {results.length > 0 && pagination && (
-          <div className="max-w-4xl mx-auto mb-4 px-2">
-            <span className="text-xs text-slate-500 font-medium">
-              Showing {pagination.total.toLocaleString()} results
-            </span>
-          </div>
-        )}
+        {/* Results view */}
+        {hasResults && lastFilters && (
+          <div
+            className="grid gap-10 mt-1"
+            style={{ gridTemplateColumns: '240px 1fr' }}
+          >
+            <FilterSidebar filters={lastFilters} onChange={handleFilterChange} />
 
-        {results.length > 0 && (
-          <>
-            <div className="space-y-4 max-w-4xl mx-auto">
-              {results.map((result) => (
-                  <div
-                    key={result.id}
-                    onClick={() => {
-                      const paperId = result.doi || result.pmcid || result.pmid;
+            <section>
+              {/* Header row — "1,247 publications found" + SortSegmented */}
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-[15px] text-zinc-900 whitespace-nowrap">
+                  <strong className="font-bold">{totalCount.toLocaleString()}</strong>{' '}
+                  <span className="text-zinc-500">publications found</span>
+                </div>
+                <SortSegmented value={sortValue} onChange={handleSortChange} />
+              </div>
+
+              {/* Result cards */}
+              <div className="flex flex-col gap-4">
+                {results.map((r, i) => (
+                  <ResultCard
+                    key={r.id || i}
+                    result={r}
+                    delayMs={40 + Math.min(i, 7) * 60}
+                    onOpen={() => {
+                      const paperId = r.doi || r.pmcid || r.pmid;
                       if (paperId) {
-                        // Always pass source in URL - convert to lowercase
-                        const src = (result.source || 'Europe PMC').toLowerCase();
+                        const src = (r.source || 'Europe PMC').toLowerCase();
                         navigate({
                           to: '/paper/$doi',
                           params: { doi: paperId },
@@ -264,75 +752,51 @@ const NerPage: React.FC = () => {
                         });
                       }
                     }}
-                  className="saas-card p-6 hover:shadow-md transition-shadow cursor-pointer"
-                >
-                  <h3 
-                    className="text-lg font-semibold text-slate-900 mb-2 title-font"
-                    dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.title) }}
                   />
-                  <p 
-                    className="text-sm text-slate-600 mb-2"
-                    dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.authors) }}
-                  />
-                  <div className="flex items-center gap-4 text-xs text-slate-400">
-                    <span>{result.journal}</span>
-                    <span>•</span>
-                    <span>{result.year}</span>
-                    {result.isOpenAccess && (
-                      <span className="text-green-600">Open Access</span>
-                    )}
-                    {result.citationCount !== undefined && result.citationCount > 0 && (
-                      <>
-                        <span>•</span>
-                        <span>{result.citationCount} citations</span>
-                      </>
-                    )}
-                    {result.doi && (
-                      <>
-                        <span>•</span>
-                        <a
-                          href={`https://doi.org/${result.doi}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline"
-                        >
-                          {result.doi}
-                        </a>
-                      </>
-                    )}
-                  </div>
-                  {result.abstract && (
-                    <p 
-                      className="text-sm text-slate-500 mt-3 line-clamp-3"
-                      dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-            {pagination && pagination.hasMore && (
-              <div className="flex items-center justify-center gap-3 pt-8 pb-4">
-                <div className="flex items-center gap-2">
+                ))}
+              </div>
+
+              {/* Pagination — borderless arrows. Left arrow hidden on page 1. */}
+              {pagination && (
+                <div className="mt-8 mb-4 flex items-center justify-center gap-3">
                   {currentPage > 1 && (
                     <button
+                      type="button"
                       onClick={handlePrevPage}
                       disabled={isLoading}
-                      className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-all disabled:opacity-50"
+                      aria-label="Previous page"
+                      title="Previous page"
+                      className="
+                        grid h-10 w-10 place-items-center rounded-full
+                        bg-transparent text-zinc-900 border-0 cursor-pointer
+                        hover:bg-zinc-100 transition-colors duration-150
+                        disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
+                      "
                     >
-                      Previous
+                      <ArrowLeft size={18} weight="bold" />
                     </button>
                   )}
-                  <button
-                    onClick={handleNextPage}
-                    disabled={isLoading}
-                    className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 transition-all disabled:opacity-50"
-                  >
-                    Next
-                  </button>
+                  {pagination.hasMore && (
+                    <button
+                      type="button"
+                      onClick={handleNextPage}
+                      disabled={isLoading}
+                      aria-label="Next page"
+                      title="Next page"
+                      className="
+                        grid h-10 w-10 place-items-center rounded-full
+                        bg-transparent text-zinc-900 border-0 cursor-pointer
+                        hover:bg-zinc-100 transition-colors duration-150
+                        disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
+                      "
+                    >
+                      <ArrowRight size={18} weight="bold" />
+                    </button>
+                  )}
                 </div>
-              </div>
-            )}
-          </>
+              )}
+            </section>
+          </div>
         )}
       </div>
     </div>

@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { PublicationTimelineChart } from './PublicationTimelineChart';
 import { EntityDonutChart } from './EntityDonutChart';
 import { PlantOriginMap } from './PlantOriginMap';
+import { useDrawerStore } from '../../stores/drawerStore';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,28 @@ const Dashboard: React.FC = () => {
     setDrawerFilter(opts?.filter ?? null);
     setDrawerOpen(true);
   };
+
+  // Cross-page signal: when the user submits the search bar in NerPage
+  // with source=Database, that flow calls drawerStore.requestOpenWithQuery(q).
+  // We watch that field here and open the drawer with the query pushed
+  // in as a paper-tab filter, then clear the signal so it can fire again.
+  const pendingOpenQuery = useDrawerStore((s) => s.pendingOpenQuery);
+  const clearPendingOpenQuery = useDrawerStore((s) => s.clearPendingOpenQuery);
+  useEffect(() => {
+    if (!pendingOpenQuery) return;
+    openDrawer({
+      tab: 'papers',
+      filter: {
+        kind: 'papers',
+        label: `Search: ${pendingOpenQuery}`,
+        value: pendingOpenQuery,
+      },
+    });
+    clearPendingOpenQuery();
+    // openDrawer is stable in this component; the effect should re-run
+    // only when a NEW pendingOpenQuery is published by NerPage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpenQuery]);
 
   // Fetch metrics. World geo + centroids are now handled inside
   // PlantOriginMap (single source of truth, lazy-loaded with the map

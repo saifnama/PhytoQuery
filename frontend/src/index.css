@@ -172,6 +172,59 @@ body {
     animation: typing-dot 1.2s ease-in-out infinite;
 }
 
+/* Header pill ↔ dot transition. Used by layout/Header.tsx when the
+   segmented nav pill collapses to the ph-circle-fill dot (scroll-down
+   past 80px OR 10s idle). */
+@keyframes header-pill-fadein {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Pink "trail-light" that streaks along the bottom inner edge of the
+   search pill when the user submits a query. Used by SearchForm.tsx —
+   the React component mounts the <span class="pq-search-trail" /> for
+   ~650ms (keyed on Date.now() so the CSS animation restarts on every
+   submit). The element is inset 36px from each end so it sits within
+   the flat-bottom portion of the rounded pill, never the curves. */
+@keyframes pq-trail-slide {
+    0%   { transform: translateX(-60%); }
+    100% { transform: translateX(220%); }
+}
+@keyframes pq-trail-fade {
+    0%, 70% { opacity: 1; }
+    100%    { opacity: 0; }
+}
+.pq-search-trail {
+    position: absolute;
+    left: 36px;
+    right: 36px;
+    bottom: 0;
+    height: 2px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: #FFE0EC;
+    pointer-events: none;
+    animation: pq-trail-fade .95s ease-out both;
+    z-index: 1;
+}
+.pq-search-trail::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 38%;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        #F8BBD0   25%,
+        #EC407A   50%,
+        #F8BBD0   75%,
+        transparent 100%
+    );
+    filter: drop-shadow(0 0 5px rgba(236, 64, 122, 0.55));
+    animation: pq-trail-slide .9s cubic-bezier(.4, .0, .2, 1) both;
+}
+
 .animate-slide-up {
     animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
