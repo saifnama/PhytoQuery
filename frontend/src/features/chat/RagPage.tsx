@@ -26,19 +26,8 @@ import {
 } from './assistant/runtime';
 import { MarkdownPreviewPanel } from './MarkdownPreviewPanel';
 import { useUploadStore } from '../../stores/uploadStore';
+import { useChatStore, type UploadedFile } from '../../stores/chatStore';
 import { useIndexedFiles } from '../../hooks/useIndexedFiles';
-
-interface UploadedFile {
-  name: string;
-  fileType: string;
-  chunkCount: number;
-  selected: boolean;
-  parserType: 'pymupdf' | 'docling';
-  authors?: string;
-  doi?: string;
-  journal?: string;
-  summary?: string;
-}
 
 interface RagLocationState {
   importPaperPdf?: {
@@ -107,14 +96,9 @@ function SimplePdfViewer({
 }
 
 // Chat history is persisted by the assistant-ui runtime under
-// `pq_chat_history` (see ./assistant/runtime.ts). The keys below are
-// only for state outside the chat thread itself.
-const SESSION_KEYS = {
-  FILES: 'pq_chat_files',
-  PARSER: 'pq_chat_parser',
-  SIDEBAR: 'pq_chat_sidebar',
-};
-
+// `pq_chat_history` (see ./assistant/runtime.ts). Page UI state
+// (parserType / uploadedFiles / sidebarCollapsed) lives in the Zustand
+// chatStore (key `pq_chat_state`), same sessionStorage backing.
 const RagPage: React.FC = () => {
   const navigate = useNavigate();
   const locationState = useRouterState({
@@ -129,18 +113,16 @@ const RagPage: React.FC = () => {
   const setUploadStatus = useUploadStore((s) => s.setStatus);
   const isUploading = useUploadStore((s) => s.isUploading);
   const setIsUploading = useUploadStore((s) => s.setIsUploading);
-  const [parserType, setParserType] = useState<'pymupdf' | 'docling'>(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.PARSER);
-    return (saved as 'pymupdf' | 'docling' | null) || 'pymupdf';
-  });
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.FILES);
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    const saved = sessionStorage.getItem(SESSION_KEYS.SIDEBAR);
-    return saved === 'true';
-  });
+  // ── Persisted chat page UI state (sessionStorage-backed, per-tab) ───────
+  // Hydration on mount is automatic via the persist middleware; effects
+  // that used to read/write sessionStorage by hand are gone.
+  const parserType = useChatStore((s) => s.parserType);
+  const setParserType = useChatStore((s) => s.setParserType);
+  const uploadedFiles = useChatStore((s) => s.uploadedFiles);
+  const setUploadedFiles = useChatStore((s) => s.setUploadedFiles);
+  const sidebarCollapsed = useChatStore((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useChatStore((s) => s.setSidebarCollapsed);
+  const resetUploadedFiles = useChatStore((s) => s.resetUploadedFiles);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // ``triggerKey`` is bumped on every citation click so the markdown
@@ -276,20 +258,11 @@ const RagPage: React.FC = () => {
     setActivePdfUrl(buildChatFileContentUrl(file.name));
   }, []);
 
-  // Persist state changes to sessionStorage. Chat messages are no
-  // longer persisted here — the assistant-ui runtime owns that via its
-  // ThreadHistoryAdapter, see ./assistant/runtime.ts.
-  useEffect(() => {
-    sessionStorage.setItem(SESSION_KEYS.FILES, JSON.stringify(uploadedFiles));
-  }, [uploadedFiles]);
-
-  useEffect(() => {
-    sessionStorage.setItem(SESSION_KEYS.PARSER, parserType);
-  }, [parserType]);
-
-  useEffect(() => {
-    sessionStorage.setItem(SESSION_KEYS.SIDEBAR, String(sidebarCollapsed));
-  }, [sidebarCollapsed]);
+  // (Per-slice sessionStorage writes that used to live here are gone —
+  // the chatStore's persist middleware handles parserType /
+  // uploadedFiles / sidebarCollapsed automatically. Chat messages are
+  // still owned by the assistant-ui runtime via its ThreadHistoryAdapter,
+  // see ./assistant/runtime.ts — a separate sessionStorage key.)
 
   // The on-mount fetch that used to live here is gone — ``useIndexedFiles``
   // auto-fetches on mount via TanStack Query, so a second refetch here
@@ -460,12 +433,13 @@ const RagPage: React.FC = () => {
       try {
         await ragApi.resetChat();
         closePdfViewer();
-        setUploadedFiles([]);
-        // Clear chat history (runtime-owned) + file list. Hard reload
-        // afterwards so the runtime reinitializes with a fresh empty
-        // thread.
+        // Clear chat history (runtime-owned) + uploaded-files slice in
+        // the chat store. The store action writes through the persist
+        // middleware so sessionStorage is cleared atomically. Hard
+        // reload afterwards so the runtime reinitializes with a fresh
+        // empty thread.
+        resetUploadedFiles();
         clearPersistedChatHistory();
-        sessionStorage.removeItem(SESSION_KEYS.FILES);
         window.location.reload();
       } catch (error) {
         console.error('Reset failed:', error);

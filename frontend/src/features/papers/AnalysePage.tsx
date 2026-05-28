@@ -2,16 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, FlowerLotus, Table, ChartBar, X, DotsThreeVertical, Trash } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import type { Entity } from '../../types';
-
-interface UploadedPaper {
-  id: string;
-  name: string;
-  doi?: string;
-  pdfUrl?: string | null;
-  entities: Record<string, string[]>;
-  entity_counts: Record<string, { text: string; count: number; canonical?: string; aliases?: string[] }[]>;
-  entity_count: number;
-}
+import { useAnalyseStore, type UploadedPaper } from '../../stores/analyseStore';
 
 const ENTITY_GROUP_ORDER = [
   'CHEMICAL',
@@ -43,16 +34,37 @@ const getEntityAccentVar = (label: string) => `--entity-${label.toLowerCase().re
 const getEntityAccentColor = (label: string) => `var(${getEntityAccentVar(label)})`;
 
 const AnalysePage = () => {
-  const [papers, setPapers] = useState<UploadedPaper[]>([]);
-  const [selectedPaper, setSelectedPaper] = useState<UploadedPaper | null>(null);
+  // ── Persisted analyse state (sessionStorage-backed, per-tab) ────────────
+  const papers = useAnalyseStore((s) => s.papers);
+  const selectedPaperId = useAnalyseStore((s) => s.selectedPaperId);
+  const expandedGroups = useAnalyseStore((s) => s.expandedGroups);
+  const isCompareMode = useAnalyseStore((s) => s.isCompareMode);
+  const compareSelection = useAnalyseStore((s) => s.compareSelection);
+  const addPapers = useAnalyseStore((s) => s.addPapers);
+  const removePaper = useAnalyseStore((s) => s.removePaper);
+  const setSelectedPaperId = useAnalyseStore((s) => s.setSelectedPaperId);
+  const setExpandedGroups = useAnalyseStore((s) => s.setExpandedGroups);
+  const toggleGroup = useAnalyseStore((s) => s.toggleGroup);
+  const setIsCompareMode = useAnalyseStore((s) => s.setIsCompareMode);
+  const setCompareSelection = useAnalyseStore((s) => s.setCompareSelection);
+  const toggleCompareSelection = useAnalyseStore((s) => s.toggleCompareSelection);
+  const clearCompareSelection = useAnalyseStore((s) => s.clearCompareSelection);
+
+  // ── Derived: selectedPaper is looked up from id at render time ──────────
+  const selectedPaper = useMemo(
+    () => papers.find((p) => p.id === selectedPaperId) ?? null,
+    [papers, selectedPaperId],
+  );
+
+  // ── Transient state (intentionally NOT persisted) ───────────────────────
+  // viewerSrc is a blob: URL revoked on close → persisting would leave
+  // a dangling reference next tab. Upload progress + click-outside menu
+  // are pure UI affordances.
   const [viewerPaper, setViewerPaper] = useState<UploadedPaper | null>(null);
   const [viewerSrc, setViewerSrc] = useState<string | null>(null);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const [isViewerLoading, setIsViewerLoading] = useState(false);
   const [viewerLoadingPaperId, setViewerLoadingPaperId] = useState<string | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [isCompareMode, setIsCompareMode] = useState(false);
-  const [compareSelection, setCompareSelection] = useState<Set<string>>(new Set());
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [activePaperMenu, setActivePaperMenu] = useState<string | null>(null);
@@ -67,9 +79,10 @@ const AnalysePage = () => {
     try {
       const queued: UploadedPaper[] = JSON.parse(raw);
       if (queued.length > 0) {
-        setPapers(prev => [...queued, ...prev]);
-        if (!selectedPaper) {
-          setSelectedPaper(queued[0]);
+        addPapers(queued);
+        // Only auto-select if nothing is currently selected.
+        if (!selectedPaperId) {
+          setSelectedPaperId(queued[0].id);
         }
         localStorage.removeItem(queueKey);
       }
@@ -143,11 +156,10 @@ const AnalysePage = () => {
 
   const deletePaper = async (paper: UploadedPaper) => {
     if (!paper.pdfUrl) {
-      // Just remove from local state if no backend PDF
-      setPapers(prev => prev.filter(p => p.id !== paper.id));
-      if (selectedPaper?.id === paper.id) {
-        setSelectedPaper(null);
-      }
+      // Just remove from store if no backend PDF — the store action
+      // also drops it from compareSelection and clears selectedPaperId
+      // if this was the selected one.
+      removePaper(paper.id);
       return;
     }
 
@@ -165,10 +177,7 @@ const AnalysePage = () => {
     } catch (err) {
       console.error('Delete paper failed:', err);
     } finally {
-      setPapers(prev => prev.filter(p => p.id !== paper.id));
-      if (selectedPaper?.id === paper.id) {
-        setSelectedPaper(null);
-      }
+      removePaper(paper.id);
       setActivePaperMenu(null);
     }
   };
@@ -182,7 +191,7 @@ const AnalysePage = () => {
     setIsUploading(true);
     setUploadProgress({ current: 0, total: pdfFiles.length });
     setIsCompareMode(false);
-    setCompareSelection(new Set());
+    clearCompareSelection();
 
     const uploadedPapers: UploadedPaper[] = [];
 
@@ -217,8 +226,8 @@ const AnalysePage = () => {
     }
 
     if (uploadedPapers.length > 0) {
-      setPapers(prev => [...uploadedPapers, ...prev]);
-      setSelectedPaper(uploadedPapers[0]);
+      addPapers(uploadedPapers);
+      setSelectedPaperId(uploadedPapers[0].id);
       const initial: Record<string, boolean> = {};
       ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
       setExpandedGroups(initial);
@@ -233,25 +242,10 @@ const AnalysePage = () => {
     e.target.value = ''; // Reset input so same files can be selected again
   };
 
-  const toggleComparePaper = (paperId: string) => {
-    setCompareSelection(prev => {
-      const next = new Set(prev);
-      if (next.has(paperId)) {
-        next.delete(paperId);
-      } else {
-        next.add(paperId);
-      }
-      return next;
-    });
-  };
-
-  const toggleGroup = (label: string) => {
-    setExpandedGroups(prev => ({ ...prev, [label]: !prev[label] }));
-  };
-
   const activePapers = useMemo(() => {
-    if (isCompareMode && compareSelection.size >= 2) {
-      return papers.filter(p => compareSelection.has(p.id));
+    if (isCompareMode && compareSelection.length >= 2) {
+      const selected = new Set(compareSelection);
+      return papers.filter(p => selected.has(p.id));
     }
     return selectedPaper ? [selectedPaper] : [];
   }, [isCompareMode, compareSelection, selectedPaper, papers]);
@@ -363,7 +357,7 @@ const AnalysePage = () => {
   });
 
   const showGraph = graphEntities.length > 0;
-  const isComparing = isCompareMode && compareSelection.size >= 2;
+  const isComparing = isCompareMode && compareSelection.length >= 2;
 
   return (
     <div className="flex h-full">
@@ -383,11 +377,11 @@ const AnalysePage = () => {
               onClick={() => {
                 if (isCompareMode) {
                   setIsCompareMode(false);
-                  setCompareSelection(new Set());
+                  clearCompareSelection();
                 } else {
                   setIsCompareMode(true);
                   if (selectedPaper) {
-                    setCompareSelection(new Set([selectedPaper.id]));
+                    setCompareSelection([selectedPaper.id]);
                   }
                 }
               }}
@@ -437,16 +431,16 @@ const AnalysePage = () => {
         <div className="flex-1 overflow-y-auto">
           {papers.map(paper => {
             const isSelected = selectedPaper?.id === paper.id;
-            const isInCompare = compareSelection.has(paper.id);
+            const isInCompare = compareSelection.includes(paper.id);
 
             return (
               <div
                 key={paper.id}
                 onClick={() => {
                   if (isCompareMode) {
-                    toggleComparePaper(paper.id);
+                    toggleCompareSelection(paper.id);
                   } else {
-                    setSelectedPaper(paper);
+                    setSelectedPaperId(paper.id);
                     const initial: Record<string, boolean> = {};
                     ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
                     setExpandedGroups(initial);

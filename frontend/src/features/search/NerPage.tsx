@@ -1,39 +1,89 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import SearchForm from './SearchForm';
 import { nerApi } from '../../lib/api';
+import { useSearchStore } from '../../stores/searchStore';
 
 const route = getRouteApi('/');
 
 const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.default })));
 import { formatTextWithFormatting } from '../../utils/sanitize';
-import type { SearchFilters, SearchResult } from '../../types';
+import type { SearchFilters } from '../../types';
+
+/** Compare two SearchFilters objects for value equality. Cheap fixed-
+ * shape compare — avoids pulling lodash for one call. */
+function filtersEqual(a: SearchFilters | null, b: SearchFilters): boolean {
+  if (!a) return false;
+  return (
+    a.open_access === b.open_access &&
+    a.has_full_text === b.has_full_text &&
+    (a.article_type ?? '') === (b.article_type ?? '') &&
+    (a.sort ?? '') === (b.sort ?? '') &&
+    (a.source ?? 'europepmc') === (b.source ?? 'europepmc')
+  );
+}
 
 const NerPage: React.FC = () => {
-  const [results, setResults] = useState<SearchResult[]>([]);
+  // ── Persisted search state (sessionStorage-backed, per-tab) ─────────────
+  const results = useSearchStore((s) => s.results);
+  const pagination = useSearchStore((s) => s.pagination);
+  const currentPage = useSearchStore((s) => s.currentPage);
+  const lastQuery = useSearchStore((s) => s.lastQuery);
+  const lastFilters = useSearchStore((s) => s.lastFilters);
+  const scrollY = useSearchStore((s) => s.scrollY);
+  const setSearchResult = useSearchStore((s) => s.setSearchResult);
+  const setScrollY = useSearchStore((s) => s.setScrollY);
+  // ── Transient (NOT persisted — would lock the page on stale spinner) ────
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pagination, setPagination] = useState<{ total: number; page: number; hasMore: boolean; pageSize: number } | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [lastQuery, setLastQuery] = useState('');
-  const [lastFilters, setLastFilters] = useState<SearchFilters | null>(null);
   const navigate = useNavigate();
   const search = route.useSearch();
+  const didInitFromUrl = useRef(false);
 
-  // Restore search from URL params on mount (back navigation)
+  // Restore on mount: if URL query matches what's cached, no fetch —
+  // paint the cached results and restore scroll. Otherwise fetch.
   useEffect(() => {
+    if (didInitFromUrl.current) return;
+    didInitFromUrl.current = true;
+
     const q = search.q;
-    if (q && results.length === 0 && !isLoading) {
-      const filters: SearchFilters = {
-        open_access: search.oa === '1',
-        has_full_text: search.ft === '1',
-        article_type: search.type ?? '',
-        sort: search.sort ?? '',
-        source: search.src ?? 'europepmc',
-      };
-      doSearch(q, filters, 1);
+    if (!q) return;
+    const filters: SearchFilters = {
+      open_access: search.oa === '1',
+      has_full_text: search.ft === '1',
+      article_type: search.type ?? '',
+      sort: search.sort ?? '',
+      source: search.src ?? 'europepmc',
+    };
+    const cacheMatches =
+      results.length > 0 && lastQuery === q && filtersEqual(lastFilters, filters);
+    if (cacheMatches) {
+      // Restore scroll on next paint — wait for the result list to be
+      // measured before we try to set window.scrollY.
+      requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
+      return;
     }
+    doSearch(q, filters, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Track scroll position so navigating back lands where we left off.
+  // Throttled via rAF to avoid hammering the store on every wheel tick.
+  useEffect(() => {
+    let frame: number | null = null;
+    const onScroll = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        setScrollY(window.scrollY);
+        frame = null;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [setScrollY]);
 
   const doSearch = async (
     query: string,
@@ -49,11 +99,13 @@ const NerPage: React.FC = () => {
         throw new Error(data.error);
       }
 
-      setResults(data.results || []);
-      setPagination(data.pagination || null);
-      setCurrentPage(page);
-      setLastQuery(query);
-      setLastFilters(filters);
+      setSearchResult({
+        results: data.results || [],
+        pagination: data.pagination || null,
+        currentPage: page,
+        lastQuery: query,
+        lastFilters: filters,
+      });
 
       // Persist search query in URL for back navigation.
       // TanStack `search` is a typed object; omitted keys disappear from URL.
@@ -72,8 +124,13 @@ const NerPage: React.FC = () => {
     } catch (err: any) {
       console.error('Search failed:', err);
       setError(err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Search failed. Please try again.');
-      setResults([]);
-      setPagination(null);
+      setSearchResult({
+        results: [],
+        pagination: null,
+        currentPage: 1,
+        lastQuery: query,
+        lastFilters: filters,
+      });
     } finally {
       setIsLoading(false);
     }
