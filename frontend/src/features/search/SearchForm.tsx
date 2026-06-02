@@ -505,7 +505,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
           ${expanded ? 'is-focused' : ''}
           transition-[padding] duration-200
         `}
-        style={{ padding: '10px 8px' }}
+        style={{ padding: '14px 8px' }}
       >
         {/* Pink trail-light on submit — keyed by submission time so animation restarts */}
         {searching && <span className="pq-search-trail" key={Date.now()} />}
