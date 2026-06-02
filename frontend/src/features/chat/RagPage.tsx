@@ -38,7 +38,7 @@ interface RagLocationState {
 
 /** Return the correct Phosphor icon for a given file extension. */
 function FileTypeIcon({ ext, size = 20 }: { ext: string; size?: number }) {
-  const className = 'text-blue-500 flex-shrink-0';
+  const className = 'text-primary flex-shrink-0';
   switch (ext) {
     case '.pdf':
       return <FilePdf size={size} weight="duotone" className={className} />;
@@ -70,8 +70,8 @@ function CustomCheckbox({
         transition-all duration-150 border
         ${
           checked
-            ? 'bg-slate-600 border-slate-600 text-white'
-            : 'bg-white border-slate-300 hover:border-slate-500'
+            ? 'bg-teal-600 border-teal-600 text-white'
+            : 'bg-background border-outline hover:border-on-surface-muted'
         }
       `}
     >
@@ -458,7 +458,7 @@ const RagPage: React.FC = () => {
     <div className="h-full flex px-0">
       {/* ─── Sources Sidebar ─── */}
       <aside
-        className={`border-r border-slate-100 bg-white flex flex-col flex-shrink-0 transition-all duration-200 ${
+        className={`border-r border-surface-c bg-background flex flex-col flex-shrink-0 transition-all duration-200 ${
           sidebarCollapsed ? 'w-14' : 'w-72'
         }`}
       >
@@ -468,19 +468,19 @@ const RagPage: React.FC = () => {
             {/* Toggle */}
             <button
               onClick={() => setSidebarCollapsed(false)}
-              className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+              className="p-2 rounded-lg hover:bg-surface-c text-on-surface-variant hover:text-on-surface transition-colors"
               title="Expand sources"
             >
               <SidebarSimple size={18} />
             </button>
 
-            <div className="w-6 border-t border-slate-200" />
+            <div className="w-6 border-t border-surface-c" />
 
             {/* Add */}
             <button
               onClick={handleUploadClick}
               disabled={isUploading}
-              className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors disabled:opacity-50"
+              className="p-2 rounded-lg hover:bg-surface-c text-on-surface-variant hover:text-on-surface transition-colors disabled:opacity-50"
               title="Add sources"
             >
               <Plus size={18} />
@@ -493,10 +493,10 @@ const RagPage: React.FC = () => {
                 onClick={() => openPdfViewer(file)}
                 className={`p-1.5 rounded-lg transition-colors ${
                   activePdfFile?.name === file.name
-                    ? 'bg-blue-50 text-blue-500 ring-1 ring-blue-200'
+                    ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
                     : file.selected
-                      ? 'bg-slate-100 text-blue-500'
-                      : 'text-slate-300 hover:text-slate-500'
+                      ? 'bg-surface-c text-primary'
+                      : 'text-on-surface-muted hover:text-on-surface-variant'
                 }`}
                 title={file.name}
               >
@@ -510,16 +510,16 @@ const RagPage: React.FC = () => {
             {/* Header */}
             <div className="px-5 pt-5 pb-3 flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                <StackSimple size={18} weight="duotone" className="text-slate-400" />
-                <h3 className="text-sm font-bold text-slate-800 tracking-tight">Sources</h3>
+                <StackSimple size={18} weight="duotone" className="text-on-surface-muted" />
+                <h3 className="text-sm font-bold text-on-surface tracking-tight">Sources</h3>
               </div>
               <div className="flex items-center space-x-1">
-                <span className="text-xs text-slate-400 font-medium tabular-nums">
+                <span className="text-xs text-on-surface-muted font-medium tabular-nums">
                   {uploadedFiles.length}
                 </span>
                 <button
                   onClick={() => setSidebarCollapsed(true)}
-                  className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                  className="p-1 rounded hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
                   title="Collapse sidebar"
                 >
                   <SidebarSimple size={16} />
@@ -530,14 +530,14 @@ const RagPage: React.FC = () => {
             {/* Upload controls */}
             <div className="px-4 pb-3 space-y-2">
               {/* Parser type toggle */}
-              <div className="flex items-center bg-slate-100 rounded-lg p-1">
+              <div className="flex items-center bg-surface-c rounded-lg p-1">
                 <button
                   type="button"
                   onClick={() => setParserType('pymupdf')}
                   className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
                     parserType === 'pymupdf'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
+                      ? 'bg-background text-primary shadow-sm'
+                      : 'text-on-surface-variant hover:text-on-surface'
                   }`}
                 >
                   Fast
@@ -547,8 +547,8 @@ const RagPage: React.FC = () => {
                   onClick={() => setParserType('docling')}
                   className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
                     parserType === 'docling'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700'
+                      ? 'bg-background text-primary shadow-sm'
+                      : 'text-on-surface-variant hover:text-on-surface'
                   }`}
                 >
                   Detailed
@@ -566,7 +566,7 @@ const RagPage: React.FC = () => {
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-all font-medium text-sm disabled:opacity-50"
+                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-primary/10 hover:bg-primary/20 text-primary rounded-lg transition-all font-medium text-sm disabled:opacity-50"
               >
                 <Plus size={16} />
                 <span>{isUploading ? 'Uploading...' : 'Add Sources'}</span>
@@ -583,15 +583,15 @@ const RagPage: React.FC = () => {
             </div>
 
             {/* Select All / File List */}
-            <div className="flex-1 overflow-y-auto border-t border-slate-100">
+            <div className="flex-1 overflow-y-auto border-t border-surface-c">
               {uploadedFiles.length > 0 ? (
                 <>
                   {/* Select All */}
                   <button
                     onClick={toggleSelectAll}
-                    className="w-full flex items-center justify-between px-5 py-3 hover:bg-slate-50 transition-colors border-b border-slate-50"
+                    className="w-full flex items-center justify-between px-5 py-3 hover:bg-surface-c transition-colors border-b border-surface-c"
                   >
-                    <span className="text-xs font-medium text-slate-500">Select all sources</span>
+                    <span className="text-xs font-medium text-on-surface-muted">Select all sources</span>
                     <CustomCheckbox checked={allSelected} onChange={toggleSelectAll} />
                   </button>
 
@@ -603,32 +603,32 @@ const RagPage: React.FC = () => {
                         onClick={() => openPdfViewer(file)}
                         className={`w-full flex items-center space-x-3 px-5 py-2.5 transition-colors group cursor-pointer ${
                           activePdfFile?.name === file.name
-                            ? 'bg-blue-50/80 ring-1 ring-inset ring-blue-100'
-                            : 'hover:bg-slate-50'
+                            ? 'bg-primary/10/80 ring-1 ring-inset ring-primary/20'
+                            : 'hover:bg-surface-c'
                         }`}
                       >
                         <FileTypeIcon ext={file.fileType} size={20} />
                         <div className="flex-1 min-w-0 text-left">
-                          <p className="text-sm text-slate-700 truncate leading-tight">
+                          <p className="text-sm text-on-surface truncate leading-tight">
                             {displayName(file.name)}
                           </p>
                           {(file.authors || file.journal) && (
-                            <p className="text-[10px] text-slate-400 truncate leading-tight mt-0.5">
+                            <p className="text-[10px] text-on-surface-muted truncate leading-tight mt-0.5">
                               {file.authors && <span>{file.authors}</span>}
                               {file.authors && file.journal && <span> · </span>}
                               {file.journal && <span className="italic">{file.journal}</span>}
                             </p>
                           )}
                           {file.summary && (
-                            <p className="text-[10px] text-slate-400 line-clamp-2 leading-snug mt-0.5" title={file.summary}>
+                            <p className="text-[10px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
                               {file.summary}
                             </p>
                           )}
                         </div>
-                        <Eye size={14} className={`flex-shrink-0 transition-colors ${activePdfFile?.name === file.name ? 'text-blue-500' : 'text-slate-300 group-hover:text-slate-500'}`} />
+                        <Eye size={14} className={`flex-shrink-0 transition-colors ${activePdfFile?.name === file.name ? 'text-primary' : 'text-on-surface-muted group-hover:text-on-surface-variant'}`} />
                         <button
                           onClick={(e) => handleDeleteFile(file.name, e)}
-                          className="text-slate-300 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
+                          className="text-on-surface-muted hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
                           title={`Remove ${file.name}`}
                         >
                           <Trash size={14} />
@@ -645,8 +645,8 @@ const RagPage: React.FC = () => {
                 </>
               ) : (
                 <div className="text-center py-16 px-4">
-                  <FileText size={36} className="text-slate-200 mx-auto mb-3" />
-                  <p className="text-xs text-slate-400 leading-relaxed">
+                  <FileText size={36} className="text-on-surface-muted/30 mx-auto mb-3" />
+                  <p className="text-xs text-on-surface-muted leading-relaxed">
                     No sources added yet.
                     <br />
                     Upload research papers to get started.
@@ -656,10 +656,10 @@ const RagPage: React.FC = () => {
             </div>
             
             {/* Sidebar Footer: Clear All */}
-            <div className="p-4 border-t border-slate-100 bg-slate-50 mt-auto">
+            <div className="p-4 border-t border-surface-c bg-surface-c/50 mt-auto">
               <button
                 onClick={handleResetAll}
-                className="w-full flex items-center justify-center space-x-2 py-2 px-4 bg-white border border-red-200 hover:bg-red-50 text-red-600 rounded-lg transition-all font-medium text-xs shadow-sm hover:shadow"
+                className="w-full flex items-center justify-center space-x-2 py-2 px-4 bg-background border border-red-200 hover:bg-red-50 text-red-600 rounded-lg transition-all font-medium text-xs shadow-sm hover:shadow"
               >
                 <Warning size={14} weight="bold" />
                 <span>Clear All Data</span>
@@ -693,10 +693,10 @@ const RagPage: React.FC = () => {
       </div>
 
       {activePdfFile && (
-        <aside className="w-[min(32rem,42vw)] min-w-[22rem] border-l border-slate-200 bg-white flex flex-col">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+        <aside className="w-[min(32rem,42vw)] min-w-[22rem] border-l border-surface-c bg-background flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-surface-c">
             <div className="min-w-0">
-              <h3 className="mt-1 text-sm font-semibold text-slate-800 truncate" title={activePdfFile.name}>
+              <h3 className="mt-1 text-sm font-semibold text-on-surface truncate" title={activePdfFile.name}>
                 {displayName(activePdfFile.name)}
               </h3>
             </div>
@@ -706,7 +706,7 @@ const RagPage: React.FC = () => {
                   href={activePdfUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
                   title="Open PDF in new tab"
                 >
                   <ArrowsOutSimple size={18} />
@@ -715,7 +715,7 @@ const RagPage: React.FC = () => {
               <button
                 type="button"
                 onClick={closePdfViewer}
-                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                className="p-1.5 rounded-lg hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
                 title="Close PDF viewer"
               >
                 <X size={18} />
@@ -723,11 +723,11 @@ const RagPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto bg-slate-100 p-2">
+          <div className="flex-1 overflow-auto bg-surface-c p-2">
             {activePdfUrl ? (
               <SimplePdfViewer pdfUrl={activePdfUrl} />
             ) : (
-              <div className="h-full min-h-[16rem] flex items-center justify-center text-sm text-slate-500">
+              <div className="h-full min-h-[16rem] flex items-center justify-center text-sm text-on-surface-muted">
                 Select a PDF to preview it here.
               </div>
             )}

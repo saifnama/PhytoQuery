@@ -77,7 +77,7 @@ const FilterSection: React.FC<FilterSectionProps> = ({ title, defaultOpen = fals
         onClick={() => setOpen((o) => !o)}
         className={`
           flex w-full items-center justify-between bg-transparent border-0 cursor-pointer
-          py-1 text-[12px] font-bold uppercase tracking-[0.14em] text-zinc-900
+          py-1 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface
           ${open ? 'mb-3.5' : 'mb-0'}
           transition-[margin-bottom] duration-200
         `}
@@ -86,12 +86,12 @@ const FilterSection: React.FC<FilterSectionProps> = ({ title, defaultOpen = fals
         <CaretDown
           size={12}
           weight="bold"
-          className="text-zinc-500 transition-transform duration-200"
+          className="text-on-surface-variant transition-transform duration-200"
           style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
         />
       </button>
       {open && (
-        <div className="flex flex-col gap-2.5 animate-in fade-in slide-in-from-top-1 duration-150">
+        <div className="flex flex-col gap-2.5 animate-fade-up">
           {children}
         </div>
       )}
@@ -107,27 +107,13 @@ interface SourcePillProps {
 }
 
 const SourcePill: React.FC<SourcePillProps> = ({ role, label, active, onClick }) => {
-  const tone = {
-    europepmc: 'bg-emerald-50 text-emerald-700',
-    openalex:  'bg-slate-100  text-slate-700',
-    database:  'bg-pink-50    text-pink-500',
-  }[role];
-  const toneActive = {
-    europepmc: 'bg-emerald-100 ring-emerald-700',
-    openalex:  'bg-slate-200   ring-slate-700',
-    database:  'bg-pink-100    ring-pink-500',
-  }[role];
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`
-        inline-flex items-center gap-2 h-[34px] px-4 rounded-full
-        text-[13.5px] font-semibold whitespace-nowrap transition-all duration-150
-        ${tone}
-        ${active ? `${toneActive} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
-      `}
+      className={`pill pill-${role}`}
+      data-active={active ? 'true' : 'false'}
     >
       <span>{label}</span>
     </button>
@@ -143,24 +129,14 @@ interface FilterTogglePillProps {
 }
 
 const FilterTogglePill: React.FC<FilterTogglePillProps> = ({ icon, label, tone, active, onClick }) => {
-  const base = {
-    orange: 'bg-orange-50 text-orange-700',
-    blue:   'bg-blue-50   text-blue-700',
-  }[tone];
-  const activeCls = {
-    orange: 'bg-orange-100 ring-orange-700',
-    blue:   'bg-blue-100   ring-blue-700',
-  }[tone];
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`
-        inline-flex items-center gap-1.5 h-[34px] px-3.5 rounded-full text-[13.5px] font-semibold
-        transition-all duration-150 ${base}
-        ${active ? `${activeCls} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
-      `}
+      className="pill"
+      data-active={active ? 'true' : 'false'}
+      data-tone={tone}
     >
       {icon}
       <span>{label}</span>
@@ -186,7 +162,7 @@ const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
         const Arrow = value.dir === 'asc' ? ArrowUp : ArrowDown;
         return (
           <React.Fragment key={opt}>
-            {i > 0 && <span aria-hidden className="w-px h-3.5 mx-3.5 bg-zinc-200" />}
+            {i > 0 && <span aria-hidden className="w-px h-3.5 mx-3.5 bg-border" />}
             <button
               type="button"
               onClick={() => {
@@ -200,8 +176,8 @@ const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
                 inline-flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer
                 text-sm transition-colors duration-150
                 ${active
-                  ? 'font-bold text-zinc-900'
-                  : 'font-medium text-zinc-500 hover:text-zinc-900'}
+                  ? 'font-bold text-on-surface'
+                  : 'font-medium text-on-surface-variant hover:text-on-surface'}
               `}
             >
               <span>{opt}</span>
@@ -224,16 +200,16 @@ interface CircleCheckProps {
 const CircleCheck: React.FC<CircleCheckProps> = ({ checked, onToggle, label, count }) => (
   <label
     onClick={onToggle}
-    className="flex items-center gap-2.5 cursor-pointer text-sm text-zinc-900"
+    className="flex items-center gap-2.5 cursor-pointer text-sm text-on-surface"
   >
     <Circle
       size={18}
       weight={checked ? 'fill' : 'regular'}
-      className={checked ? 'text-blue-600' : 'text-zinc-400'}
+      className={checked ? 'text-primary' : 'text-on-surface-muted'}
     />
     <span className="flex-1">{label}</span>
     {count != null && (
-      <span className="font-mono text-xs text-zinc-500 tabular-nums">{count}</span>
+      <span className="mono text-xs text-on-surface-muted tabular-nums">{count}</span>
     )}
   </label>
 );
@@ -252,6 +228,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
   const authors = result.authors || '';
   const journal = result.journal || '';
   const isOA = !!result.isOpenAccess;
+  const hasFT = !!result.hasFullText;
   const citationCount = typeof result.citationCount === 'number' ? result.citationCount : null;
 
   return (
@@ -259,9 +236,8 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
       onClick={onOpen}
       style={{ animationDelay: `${delayMs}ms` }}
       className="
-        pq-result-card relative bg-white border border-zinc-200 rounded-2xl px-6 py-5
-        transition-[border-color,box-shadow] duration-150 cursor-pointer
-        hover:border-zinc-400/80 hover:shadow-[0_2px_8px_-2px_rgba(15,23,42,0.08)]
+        pq-result-card card is-hoverable relative px-6 py-5
+        cursor-pointer
       "
     >
       {/* Top row — DOI left, year right */}
@@ -272,26 +248,26 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="text-[13px] font-medium text-blue-700 font-mono no-underline hover:underline"
+            className="mono text-[13px] font-medium text-primary no-underline hover:underline"
           >
             {result.doi}
           </a>
         ) : <span />}
-        <span className="text-[13px] font-medium text-zinc-500">{year}</span>
+        <span className="text-[13px] font-medium text-on-surface-variant">{year}</span>
       </div>
 
       {/* Title — serif, bold */}
       <h3
         className="
           mb-2.5
-          font-bold text-[19px] leading-snug text-zinc-900
+          font-bold text-[19px] leading-snug text-on-surface
         "
-        style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
+        style={{ fontFamily: 'var(--font-serif)' }}
         dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.title || '') }}
       />
 
       {/* Meta — authors • journal (italic) • Open Access (orange) • citations */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-zinc-500 mb-3.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-on-surface-variant mb-3.5">
         {authors && (
           <span
             dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(authors) }}
@@ -299,19 +275,13 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
         )}
         {journal && (
           <>
-            <span className="text-zinc-400">•</span>
+            <span className="text-on-surface-muted">•</span>
             <span className="italic">{journal}</span>
-          </>
-        )}
-        {isOA && (
-          <>
-            <span className="text-zinc-400">•</span>
-            <span className="text-orange-600 font-semibold">Open Access</span>
           </>
         )}
         {citationCount != null && citationCount > 0 && (
           <>
-            <span className="text-zinc-400">•</span>
+            <span className="text-on-surface-muted">•</span>
             <span>{citationCount} citations</span>
           </>
         )}
@@ -320,52 +290,61 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
       {/* Excerpt (abstract) */}
       {result.abstract && (
         <div
-          className="text-sm text-zinc-500 leading-relaxed mb-4 line-clamp-3"
+          className="text-sm text-on-surface-variant leading-relaxed mb-4 line-clamp-3"
           dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
         />
       )}
 
-      {/* Borderless action row — Download · Analyse · Chat (icon + label) */}
-      <div className="flex items-center gap-6">
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          title="Download"
-          className="
-            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
-            text-zinc-500 text-[13.5px] font-medium
-            hover:text-zinc-900 transition-colors duration-150
-          "
-        >
-          <DownloadSimple size={17} weight="regular" />
-          <span>Download</span>
-        </button>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          title="Analyse"
-          className="
-            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
-            text-zinc-500 text-[13.5px] font-medium
-            hover:text-zinc-900 transition-colors duration-150
-          "
-        >
-          <ChartLine size={17} weight="regular" />
-          <span>Analyse</span>
-        </button>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          title="Chat"
-          className="
-            inline-flex items-center gap-2 bg-transparent border-0 cursor-pointer
-            text-zinc-500 text-[13.5px] font-medium
-            hover:text-zinc-900 transition-colors duration-150
-          "
-        >
-          <ChatCircle size={17} weight="regular" />
-          <span>Chat</span>
-        </button>
+      {/* Borderless action row — Download · Analyse · Chat | right: OA + FT indicators */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-6">
+          <button
+            type="button"
+            onClick={(e) => e.stopPropagation()}
+            title="Download"
+            className="result-action"
+          >
+            <DownloadSimple size={17} weight="regular" />
+            <span>Download</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => e.stopPropagation()}
+            title="Analyse"
+            className="result-action"
+          >
+            <ChartLine size={17} weight="regular" />
+            <span>Analyse</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => e.stopPropagation()}
+            title="Chat"
+            className="result-action"
+          >
+            <ChatCircle size={17} weight="regular" />
+            <span>Chat</span>
+          </button>
+        </div>
+        {/* Access / full-text indicators — right side, matching mockup */}
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          {isOA && (
+            <span
+              title="Open Access"
+              className="grid place-items-center w-7 h-7 rounded-lg text-orange-500"
+            >
+              <LockSimpleOpen size={16} weight="fill" />
+            </span>
+          )}
+          {hasFT && (
+            <span
+              title="Full Text Available"
+              className="grid place-items-center w-7 h-7 rounded-lg text-emerald-600"
+            >
+              <Article size={16} weight="fill" />
+            </span>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -397,10 +376,10 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
       className="
         sticky top-[100px] mt-[92px] h-fit
         flex flex-col gap-5 pr-6
-        border-r border-zinc-200
+        border-r border-border
       "
     >
-      <div className="text-[15px] font-bold tracking-[-0.005em] text-zinc-900">
+      <div className="text-[15px] font-bold tracking-[-0.005em] text-on-surface">
         Filter by
       </div>
 
@@ -678,8 +657,8 @@ const NerPage: React.FC = () => {
 
         {isLoading && !hasResults && (
           <div className="mx-auto max-w-4xl p-12 text-center">
-            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
-            <p className="text-sm font-medium text-zinc-500">Searching publications...</p>
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-teal-200 border-t-teal-500" />
+            <p className="text-sm font-medium text-on-surface-variant">Searching publications...</p>
           </div>
         )}
 
@@ -695,10 +674,10 @@ const NerPage: React.FC = () => {
               className="w-full max-w-[460px] rounded-2xl"
             />
             <div className="text-center">
-              <div className="mb-1.5 text-[20px] font-bold text-zinc-900">
+              <div className="mb-1.5 text-[20px] font-bold text-on-surface">
                 No publications found
               </div>
-              <div className="text-[14.5px] text-zinc-500">
+              <div className="text-[14.5px] text-on-surface-variant">
                 We couldn't find anything for &ldquo;{lastQuery}&rdquo;. Try different keywords.
               </div>
             </div>
@@ -709,7 +688,7 @@ const NerPage: React.FC = () => {
         {!lastQuery && !isLoading && !error && (
           <Suspense fallback={
             <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600" />
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-200 border-t-teal-500" />
             </div>
           }>
             <Dashboard />
@@ -727,9 +706,9 @@ const NerPage: React.FC = () => {
             <section>
               {/* Header row — "1,247 publications found" + SortSegmented */}
               <div className="flex items-center justify-between mb-5">
-                <div className="text-[15px] text-zinc-900 whitespace-nowrap">
+                <div className="text-[15px] text-on-surface whitespace-nowrap">
                   <strong className="font-bold">{totalCount.toLocaleString()}</strong>{' '}
-                  <span className="text-zinc-500">publications found</span>
+                  <span className="text-on-surface-variant">publications found</span>
                 </div>
                 <SortSegmented value={sortValue} onChange={handleSortChange} />
               </div>
@@ -768,8 +747,8 @@ const NerPage: React.FC = () => {
                       title="Previous page"
                       className="
                         grid h-10 w-10 place-items-center rounded-full
-                        bg-transparent text-zinc-900 border-0 cursor-pointer
-                        hover:bg-zinc-100 transition-colors duration-150
+                        bg-transparent text-on-surface border-0 cursor-pointer
+                        hover:bg-surface-c transition-colors duration-150
                         disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
                       "
                     >
@@ -785,8 +764,8 @@ const NerPage: React.FC = () => {
                       title="Next page"
                       className="
                         grid h-10 w-10 place-items-center rounded-full
-                        bg-transparent text-zinc-900 border-0 cursor-pointer
-                        hover:bg-zinc-100 transition-colors duration-150
+                        bg-transparent text-on-surface border-0 cursor-pointer
+                        hover:bg-surface-c transition-colors duration-150
                         disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
                       "
                     >

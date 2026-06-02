@@ -4,10 +4,9 @@ import {
   Compass,
   ListMagnifyingGlass,
   Chats,
-  FlowerTulip,
   Circle,
 } from '@phosphor-icons/react';
-import { useTheme } from '../lib/theme';
+import { TulipLogo } from '../components/icons/TulipLogo';
 import { useSearchStore } from '../stores/searchStore';
 
 interface HeaderProps {
@@ -30,23 +29,17 @@ const IDLE_COLLAPSE_MS = 10_000;
 const SCROLL_COLLAPSE_PX = 80;
 
 /**
- * Header — tulip + PhytoQuery brand on the left, segmented pill nav on
- * the right. The pill collapses to a single solid black ``ph-circle``
- * dot after the user scrolls down past 80px OR after 10s of no
- * scrolling/expand activity. Hovering the dot — or clicking it — pops
- * the pill back open.
+ * Header — TulipLogo + PhytoQuery brand on the left, segmented pill nav on
+ * the right. The pill collapses to a single solid black circle dot after
+ * the user scrolls down past 80px OR after 10s of no scrolling/expand
+ * activity. Hovering the dot — or clicking it — pops the pill back open.
  *
  * The sliding indicator behind the active tab is positioned by measuring
  * each Link's bounding box relative to the rail. Resizing observes both
  * the rail and the individual Links so font-loading / window resize
  * never leaves the indicator off the active tab.
- *
- * Theme-toggle on the tulip click is preserved from the previous
- * Header — the design treats the tulip as purely decorative but the app
- * relies on it for light/dark switching.
  */
 const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
-  const { theme, toggleTheme } = useTheme();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   // Which item is the active tab? — derived from the route.
@@ -148,20 +141,9 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   }, [resetIdleTimer]);
 
   return (
-    <header className="h-16 flex items-center px-8 bg-white border-b border-zinc-200 sticky top-0 z-30 justify-between">
-      <div className="flex items-center space-x-3">
-        <button
-          onClick={toggleTheme}
-          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="theme-toggle grid place-items-center rounded-lg p-1 hover:bg-zinc-100 transition-colors"
-        >
-          <FlowerTulip
-            size={32}
-            color="#db1f83"
-            weight={theme === 'dark' ? 'fill' : 'regular'}
-          />
-        </button>
+    <header className="app-header">
+      <div className="flex items-center gap-3">
+        <TulipLogo size={32} />
         {/* Clicking the brand resets the persisted search store AND
             clears URL search params, so NerPage's `!lastQuery` branch
             kicks in and the Dashboard surfaces. Without the reset,
@@ -173,7 +155,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
           onClick={() => useSearchStore.getState().resetSearch()}
           className="hover:opacity-80 transition-opacity"
         >
-          <span className="text-xl font-bold text-zinc-900 title-font">
+          <span className="text-[22px] font-bold" style={{ fontFamily: 'var(--font-roboto)' }}>
             PhytoQuery
           </span>
         </Link>
@@ -181,7 +163,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
 
       <div className="flex items-center space-x-4">
         {isLoading && (
-          <div className="animate-spin rounded-full h-4 w-4 border-2 border-zinc-200 border-t-blue-600" />
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-teal-200 border-t-primary" />
         )}
 
         {collapsed ? (
@@ -190,7 +172,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
             onMouseEnter={expandManual}
             title={NAV_ITEMS[activeIndex].label}
             aria-label={`Expand navigation — current: ${NAV_ITEMS[activeIndex].label}`}
-            className="grid h-8 w-8 place-items-center bg-transparent text-zinc-900 border-0 cursor-pointer transition-all duration-200"
+            className="grid h-8 w-8 place-items-center bg-transparent text-on-surface border-0 cursor-pointer transition-all duration-200"
             style={{ animation: 'header-pill-fadein .22s ease both' }}
           >
             <Circle size={28} weight="fill" />
@@ -205,13 +187,13 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
               }
             }}
             onMouseLeave={handlePillLeave}
-            className="relative inline-flex items-center gap-0.5 p-1 bg-white border border-zinc-200 rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+            className="relative inline-flex items-center gap-0.5 p-1 bg-background border border-border rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
             aria-label="Primary"
           >
             {/* Sliding indicator behind the active tab */}
             <span
               aria-hidden
-              className="absolute top-1 bottom-1 bg-zinc-100 rounded-full pointer-events-none"
+              className="absolute top-1 bottom-1 bg-surface-c rounded-full pointer-events-none"
               style={{
                 left: indicator.left,
                 width: indicator.width,
@@ -232,7 +214,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
                   className={[
                     'relative z-[1] inline-flex items-center gap-2 h-10 px-[18px] rounded-full',
                     'text-sm cursor-pointer no-underline transition-colors duration-200',
-                    isActive ? 'text-zinc-900 font-semibold' : 'text-zinc-500 font-medium hover:text-zinc-700',
+                    isActive ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium hover:text-on-surface',
                   ].join(' ')}
                 >
                   <Icon size={18} weight={isActive ? 'bold' : 'regular'} />

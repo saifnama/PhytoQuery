@@ -104,7 +104,7 @@ const Kbd: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     className="
       pointer-events-none select-none inline-flex items-center justify-center
       h-6 min-w-6 px-1.5 rounded
-      bg-zinc-100 border border-zinc-200 text-zinc-500
+      bg-surface-c border border-border text-on-surface-muted
       font-mono text-[14px] font-medium leading-none
     "
   >
@@ -122,14 +122,9 @@ interface SourcePillProps {
 
 const SourcePill: React.FC<SourcePillProps> = ({ role, label, count, active, onClick }) => {
   const tone = {
-    europepmc: 'bg-emerald-50 text-emerald-700',
-    openalex:  'bg-slate-100  text-slate-700',
-    database:  'bg-pink-50    text-pink-500',
-  }[role];
-  const toneActive = {
-    europepmc: 'bg-emerald-100 ring-emerald-700',
-    openalex:  'bg-slate-200   ring-slate-700',
-    database:  'bg-pink-100    ring-pink-500',
+    europepmc: 'pill-europepmc',
+    openalex:  'pill-openalex',
+    database:  'pill-database',
   }[role];
   return (
     <button
@@ -137,17 +132,14 @@ const SourcePill: React.FC<SourcePillProps> = ({ role, label, count, active, onC
       onClick={onClick}
       aria-pressed={active}
       className={`
-        inline-flex items-center gap-2 h-[34px]
-        ${count != null ? 'pl-4 pr-[10px]' : 'px-4'}
-        rounded-full text-[13.5px] font-semibold whitespace-nowrap
-        transition-all duration-150
-        ${tone}
-        ${active ? `${toneActive} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
+        pill ${tone}
+        ${active ? 'data-[active=true]' : ''}
       `}
+      data-active={active ? 'true' : 'false'}
     >
       <span>{label}</span>
       {count != null && (
-        <span className="grid place-items-center min-w-[28px] h-5 px-1.5 rounded-full bg-white/70 text-[11px] font-bold">
+        <span className="grid place-items-center min-w-[28px] h-5 px-1.5 rounded-full bg-background/70 text-[11px] font-bold">
           {count}
         </span>
       )}
@@ -164,25 +156,14 @@ interface FilterPillProps {
 }
 
 const FilterPill: React.FC<FilterPillProps> = ({ icon, label, tone, active, onClick }) => {
-  const base = {
-    orange: 'bg-orange-50 text-orange-700',
-    blue:   'bg-blue-50   text-blue-700',
-  }[tone];
-  const activeCls = {
-    orange: 'bg-orange-100 ring-orange-700',
-    blue:   'bg-blue-100   ring-blue-700',
-  }[tone];
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`
-        inline-flex items-center gap-1.5 h-[34px] px-3.5 rounded-full
-        text-[13.5px] font-semibold transition-all duration-150
-        ${base}
-        ${active ? `${activeCls} ring-[1.5px] opacity-100` : 'opacity-85 hover:opacity-100'}
-      `}
+      className="pill"
+      data-active={active ? 'true' : 'false'}
+      data-tone={tone}
     >
       {icon}
       <span>{label}</span>
@@ -216,20 +197,20 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
         onClick={() => setOpen((o) => !o)}
         className={`
           inline-flex items-center justify-between gap-2 h-[34px] px-3 rounded-full
-          ${open ? 'bg-zinc-100' : 'bg-transparent'}
-          border border-zinc-200 text-zinc-900 text-[13.5px] font-medium
+          ${open ? 'bg-surface-c' : 'bg-transparent'}
+          border border-border text-on-surface text-[13.5px] font-medium
           transition-colors
         `}
       >
         <span>{display}</span>
-        <CaretDown size={11} weight="bold" className="text-zinc-500" />
+        <CaretDown size={11} weight="bold" className="text-on-surface-variant" />
       </button>
       {open && (
         <div
           className="
             absolute top-[calc(100%+6px)] left-0 z-[100]
             min-w-[220px] max-h-[320px] overflow-y-auto
-            bg-white border border-zinc-200 rounded-xl shadow-lg p-1.5
+            bg-background border border-border rounded-xl shadow-lg p-1.5
             animate-in fade-in slide-in-from-top-1 duration-150
           "
         >
@@ -242,8 +223,8 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
                 onClick={() => { onChange(opt.key); setOpen(false); }}
                 className={`
                   w-full text-left px-3 py-2 rounded-md text-[13.5px]
-                  ${active ? 'bg-zinc-100 font-semibold' : 'hover:bg-zinc-100 font-normal'}
-                  text-zinc-900 transition-colors
+                  ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
+                  text-on-surface transition-colors
                 `}
               >
                 {opt.display_name}
@@ -282,21 +263,21 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
         onClick={() => setOpen((o) => !o)}
         className={`
           inline-flex items-center gap-1.5 h-[34px] px-3 rounded-full
-          ${open ? 'bg-zinc-100' : 'bg-transparent'}
-          border border-zinc-200 text-zinc-900 text-[13.5px] font-medium
+          ${open ? 'bg-surface-c' : 'bg-transparent'}
+          border border-border text-on-surface text-[13.5px] font-medium
           transition-colors
         `}
       >
         <span>{value.type}</span>
         {isDate && <Arrow size={12} weight="bold" />}
-        <CaretDown size={11} weight="bold" className="ml-0.5 text-zinc-500" />
+        <CaretDown size={11} weight="bold" className="ml-0.5 text-on-surface-muted" />
       </button>
       {open && (
         <div
           className="
             absolute top-[calc(100%+6px)] right-0 z-[100]
             min-w-[200px] max-h-[280px] overflow-y-auto
-            bg-white border border-zinc-200 rounded-xl shadow-lg p-1.5
+            bg-background border border-border rounded-xl shadow-lg p-1.5
             animate-in fade-in slide-in-from-top-1 duration-150
           "
         >
@@ -314,8 +295,8 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
                 className={`
                   flex w-full items-center justify-between
                   px-3 py-2 rounded-md text-[13.5px]
-                  ${active ? 'bg-zinc-100 font-semibold' : 'hover:bg-zinc-100 font-normal'}
-                  text-zinc-900 transition-colors
+                  ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
+                  text-on-surface transition-colors
                 `}
               >
                 <span>{opt}</span>
@@ -327,7 +308,7 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
                       e.stopPropagation();
                       onChange({ ...value, dir: value.dir === 'asc' ? 'desc' : 'asc' });
                     }}
-                    className="grid place-items-center p-1 rounded text-zinc-900 cursor-pointer hover:bg-zinc-200"
+                    className="grid place-items-center p-1 rounded text-on-surface cursor-pointer hover:bg-surface-high"
                   >
                     <Arrow size={13} weight="bold" />
                   </span>
@@ -504,33 +485,58 @@ const SearchForm: React.FC<SearchFormProps> = ({
   const showSort         = expanded && filters.source !== 'database';
 
   return (
-    <div ref={containerRef} className="mb-8 w-full">
+    <div ref={containerRef} className="relative z-0 mb-8 w-full">
+      {/* Ambient halo glow — static, only active on expand (no continuous GPU hit) */}
+      {expanded && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -inset-x-8 -top-10 -z-10 h-56 opacity-60 blur-3xl"
+          style={{
+            background: `
+              radial-gradient(50% 60% at 25% 40%, color-mix(in oklab, var(--primary) 28%, transparent) 0%, transparent 70%),
+              radial-gradient(50% 60% at 75% 30%, color-mix(in oklab, var(--cyan-500) 22%, transparent) 0%, transparent 70%)
+            `,
+          }}
+        />
+      )}
       <div
         className={`
-          relative bg-white border rounded-full transition-all duration-200
-          ${expanded
-            ? 'rounded-[28px] border-blue-600 shadow-[0_0_0_4px_rgba(41,98,255,0.14),0_12px_32px_-18px_rgba(41,98,255,0.35)]'
-            : 'border-zinc-200 shadow-[0_2px_14px_-4px_rgba(15,23,42,0.06)]'}
+          search-shell
+          ${expanded ? 'is-focused' : ''}
+          transition-[padding] duration-200
         `}
+        style={{ padding: '10px 8px' }}
       >
         {/* Pink trail-light on submit — keyed by submission time so animation restarts */}
         {searching && <span className="pq-search-trail" key={Date.now()} />}
 
         <form onSubmit={submit}>
-          {/* Row 1 — input */}
+          {/* Row 1 — icon (left corner) | input | clear / ⌘K (right corner) */}
           <div
             role="search"
             onClick={() => {
               setExpanded(true);
               inputRef.current?.focus();
             }}
-            className={`
-              flex items-center gap-3.5
-              ${expanded ? 'px-3 py-2.5' : 'pl-[22px] pr-2.5 py-2.5'}
-              transition-[padding] duration-200
-            `}
+            className="flex items-center gap-2.5 transition-[padding] duration-200"
           >
-            <MagnifyingGlass size={22} weight="regular" className="shrink-0 text-zinc-500" />
+            {/* Search icon — clickable, at left corner of pill */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                submit();
+              }}
+              aria-label="Search"
+              className="
+                grid place-items-center shrink-0 w-10 h-10
+                text-on-surface-variant hover:text-primary
+                transition-colors rounded-full
+              "
+            >
+              <MagnifyingGlass size={22} weight="regular" />
+            </button>
             <input
               ref={inputRef}
               type="text"
@@ -543,7 +549,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               className="
                 flex-1 min-w-0 h-11
                 bg-transparent border-none outline-none
-                text-[15px] text-zinc-900 placeholder:text-zinc-400 caret-blue-600
+                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-teal-500
                 tracking-[-0.003em]
               "
             />
@@ -553,95 +559,107 @@ const SearchForm: React.FC<SearchFormProps> = ({
                 onClick={(e) => { e.stopPropagation(); clear(); }}
                 aria-label="Clear search"
                 title="Clear"
-                className="grid place-items-center p-1 rounded text-zinc-500 hover:text-zinc-900 bg-transparent transition-colors"
+                className="grid place-items-center p-1.5 rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
               >
                 <X size={16} weight="bold" />
               </button>
             )}
-            {!expanded && (
-              <span className="inline-flex items-center gap-1 mr-1.5">
+            {!expanded && !query && (
+              <span className="inline-flex items-center gap-1 mr-1 shrink-0">
                 <Kbd>⌘</Kbd><Kbd>K</Kbd>
               </span>
             )}
           </div>
 
-          {/* Row 2 — SOURCES | AVAILABILITY */}
-          {expanded && (
-            <div
-              className="
-                flex items-center gap-6 flex-wrap
-                border-t border-zinc-200 mt-2.5
-                px-4 pt-3.5 pb-1.5
-                animate-in fade-in slide-in-from-top-1 duration-200
-              "
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-500 min-w-[78px]">
-                  Sources
-                </span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <SourcePill role="europepmc" label="Europe PMC"
-                    active={filters.source === 'europepmc'}
-                    onClick={() => handleSourceChange('europepmc')} />
-                  <SourcePill role="openalex"  label="OpenAlex"
-                    active={filters.source === 'openalex'}
-                    onClick={() => handleSourceChange('openalex')} />
-                  <SourcePill role="database"  label="Database"
-                    active={filters.source === 'database'}
-                    onClick={() => handleSourceChange('database')} />
+          {/* Filter rows — animated expand/collapse via grid-rows */}
+          <div
+            className="grid transition-[grid-template-rows,opacity] duration-300 ease-out"
+            style={{
+              gridTemplateRows: expanded ? '1fr' : '0fr',
+              opacity: expanded ? 1 : 0,
+            }}
+          >
+            <div className="min-h-0 overflow-hidden">
+              {/* Row 2 — SOURCES | AVAILABILITY */}
+              <div
+                className="
+                  flex items-center gap-6 flex-wrap
+                  border-t border-border mt-2.5
+                  px-4 pt-3.5 pb-1.5
+                  animate-spring-in
+                "
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
+                    Sources
+                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <SourcePill role="europepmc" label="Europe PMC"
+                      active={filters.source === 'europepmc'}
+                      onClick={() => handleSourceChange('europepmc')} />
+                    <SourcePill role="openalex"  label="OpenAlex"
+                      active={filters.source === 'openalex'}
+                      onClick={() => handleSourceChange('openalex')} />
+                    <SourcePill role="database"  label="Database"
+                      active={filters.source === 'database'}
+                      onClick={() => handleSourceChange('database')} />
+                  </div>
                 </div>
+
+                {showAvailability && (
+                  <>
+                    <span aria-hidden className="w-px h-6 bg-surface-c" />
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-muted">
+                        Availability
+                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <FilterPill
+                          icon={filters.open_access
+                            ? <LockSimpleOpen size={14} weight="fill" />
+                            : <LockSimple size={14} weight="regular" />}
+                          label="Open Access"
+                          tone="orange"
+                          active={filters.open_access}
+                          onClick={() => setFilters((p) => ({ ...p, open_access: !p.open_access }))}
+                        />
+                        <FilterPill
+                          icon={<Article size={14} weight={filters.has_full_text ? 'fill' : 'regular'} />}
+                          label="Full Text"
+                          tone="blue"
+                          active={filters.has_full_text}
+                          onClick={() => setFilters((p) => ({ ...p, has_full_text: !p.has_full_text }))}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
 
-              {showAvailability && (
-                <>
-                  <span aria-hidden className="w-px h-6 bg-zinc-200" />
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-500">
-                      Availability
-                    </span>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <FilterPill
-                        icon={filters.open_access
-                          ? <LockSimpleOpen size={14} weight="fill" />
-                          : <LockSimple size={14} weight="regular" />}
-                        label="Open Access"
-                        tone="orange"
-                        active={filters.open_access}
-                        onClick={() => setFilters((p) => ({ ...p, open_access: !p.open_access }))}
-                      />
-                      <FilterPill
-                        icon={<Article size={14} weight={filters.has_full_text ? 'fill' : 'regular'} />}
-                        label="Full Text"
-                        tone="blue"
-                        active={filters.has_full_text}
-                        onClick={() => setFilters((p) => ({ ...p, has_full_text: !p.has_full_text }))}
-                      />
-                    </div>
+              {/* Row 3 — SORT BY */}
+              {showSort && (
+                <div
+                  className="flex items-center gap-3 px-4 pb-2 animate-spring-in"
+                  style={{ animationDelay: '0.05s' }}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-muted min-w-[78px]">
+                    Sort by
+                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Dropdown
+                      label="Type"
+                      value={filters.article_type}
+                      options={typesLoading
+                        ? [{ key: '', display_name: 'Loading…', count: null }]
+                        : typeOptions}
+                      onChange={(k) => setFilters((p) => ({ ...p, article_type: k }))}
+                    />
+                    <SortControl value={sortValue} onChange={setSortValue} />
                   </div>
-                </>
+                </div>
               )}
             </div>
-          )}
-
-          {/* Row 3 — SORT BY */}
-          {showSort && (
-            <div className="flex items-center gap-3 px-4 pb-2 animate-in fade-in slide-in-from-top-1 duration-300">
-              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-500 min-w-[78px]">
-                Sort by
-              </span>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Dropdown
-                  label="Type"
-                  value={filters.article_type}
-                  options={typesLoading
-                    ? [{ key: '', display_name: 'Loading…', count: null }]
-                    : typeOptions}
-                  onChange={(k) => setFilters((p) => ({ ...p, article_type: k }))}
-                />
-                <SortControl value={sortValue} onChange={setSortValue} />
-              </div>
-            </div>
-          )}
+          </div>
 
           {/* Loading shimmer when an outer fetch is in flight */}
           {isLoading && (
@@ -649,7 +667,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               aria-hidden
               className="
                 absolute left-4 right-4 bottom-0 h-px rounded-full
-                bg-gradient-to-r from-transparent via-blue-500/50 to-transparent
+                bg-gradient-to-r from-transparent via-primary/50 to-transparent
                 animate-pulse
               "
             />

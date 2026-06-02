@@ -13,7 +13,7 @@ import { Link } from '@tanstack/react-router';
 export function DefaultPending() {
   return (
     <div className="w-full flex justify-center py-12">
-      <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+      <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
     </div>
   );
 }
@@ -42,18 +42,18 @@ export function DefaultError({ error }: { error: Error }) {
 export function DefaultNotFound() {
   return (
     <div className="w-full max-w-2xl mx-auto px-6 py-24 text-center">
-      <p className="text-xs font-mono uppercase tracking-[0.18em] text-slate-400 mb-3">
+      <p className="text-xs font-mono uppercase tracking-[0.18em] text-on-surface-muted mb-3">
         404
       </p>
-      <h1 className="text-2xl font-semibold text-slate-900 title-font mb-3">
+      <h1 className="text-2xl font-semibold text-on-surface title-font mb-3">
         Page not found
       </h1>
-      <p className="text-sm text-slate-500 mb-6">
+      <p className="text-sm text-on-surface-variant mb-6">
         The URL you followed does not match any route in this app.
       </p>
       <Link
         to="/"
-        className="inline-flex items-center px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+        className="inline-flex items-center px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors"
       >
         Back to Search
       </Link>

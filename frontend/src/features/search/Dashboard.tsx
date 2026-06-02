@@ -13,6 +13,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { dashboardApi } from '../../lib/api';
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
@@ -57,15 +58,20 @@ interface DashboardMetrics {
 // a separate stylesheet, while leaving the shadcn Card's own structural
 // classes (bg-card, ring-foreground/10, rounded-2xl, etc.) intact.
 
-const statCardVariants = cva('gap-0 py-5 transition-shadow', {
+// Accent variants now read straight from the design tokens declared in
+// index.css (--role-papers / --role-entities / --role-journals + their
+// "-under" companions for the divider). This pulls the screenshot's
+// vivid Material teal / purple / green hues into the cards instead of
+// the previous pastels.
+const statCardVariants = cva('gap-0 py-5 transition-all duration-200', {
   variants: {
     accent: {
-      aqua: '[--stat-accent:#4DD0E1] [--stat-divider:#B2EBF2]',
-      lavender: '[--stat-accent:#9575CD] [--stat-divider:#D1C4E9]',
-      sage: '[--stat-accent:#81C784] [--stat-divider:#C8E6C8]',
+      papers:   '[--stat-accent:var(--role-papers)]   [--stat-divider:var(--role-papers-under)]',
+      entities: '[--stat-accent:var(--role-entities)] [--stat-divider:var(--role-entities-under)]',
+      journals: '[--stat-accent:var(--role-journals)] [--stat-divider:var(--role-journals-under)]',
     },
   },
-  defaultVariants: { accent: 'aqua' },
+  defaultVariants: { accent: 'papers' },
 });
 
 interface StatCardProps extends VariantProps<typeof statCardVariants> {
@@ -81,7 +87,9 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
     <Card
       className={cn(
         statCardVariants({ accent }),
-        clickable && 'cursor-pointer hover:ring-foreground/20',
+        // Hover lift mirrors main.jsx's StatCard: -2px translate, accent
+        // border, elevation-1 shadow.
+        clickable && 'cursor-pointer hover:-translate-y-0.5 hover:[border-color:var(--stat-accent)] hover:shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]',
       )}
       onClick={onClick}
       role={clickable ? 'button' : undefined}
@@ -97,23 +105,27 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
           : undefined
       }
     >
-      <CardHeader className="px-5">
+      <CardHeader className="px-6">
         <span
-          className="text-[9px] font-medium uppercase tracking-[0.12em]"
+          className="text-[12px] font-semibold uppercase tracking-[0.12em]"
           style={{ color: 'var(--stat-accent)' }}
         >
           {label}
         </span>
       </CardHeader>
-      <CardContent className="px-5">
-        <div className="text-[52px] font-medium font-mono leading-[0.9] tracking-[-0.04em]">
+      <CardContent className="px-6">
+        {/* 64px / weight 700 / -0.02em — matches main.jsx's .stat-num.
+            font-mono dropped so the numerals render in the inherited
+            sans (Roboto when present, system sans otherwise) per the
+            design's Roboto type system. */}
+        <div className="text-[64px] font-bold leading-none tracking-[-0.02em] text-on-surface">
           {value.toLocaleString()}
         </div>
       </CardContent>
       <Separator
-        className="mx-5 my-2 [&]:bg-[var(--stat-divider)]"
+        className="mx-6 my-3 opacity-55 [&]:bg-[var(--stat-divider)]"
       />
-      <CardFooter className="px-5 text-[11px] text-muted-foreground leading-[1.5]">
+      <CardFooter className="px-6 text-[12.5px] text-on-surface-muted leading-[1.5]">
         {footer}
       </CardFooter>
     </Card>
@@ -121,6 +133,9 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
 }
 
 // ─── Chart Card — shadcn Card composition ────────────────────────────────────
+// Title bumped to design spec: ``font-size: 18px, font-weight: 600`` per
+// main.jsx's ``.card-title`` declaration. Card padding stays at shadcn's
+// 24px default which matches the design's ``padding: 24``.
 function ChartCard({
   title,
   children,
@@ -131,7 +146,9 @@ function ChartCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="text-[18px] font-semibold text-on-surface">
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -144,6 +161,7 @@ function ChartCard({
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -241,17 +259,20 @@ const Dashboard: React.FC = () => {
   // wires data through them.
 
   return (
-    <div className="w-full max-w-6xl mx-auto px-4 py-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="flex items-center justify-between mb-8">
+    <div
+      className="w-full mx-auto px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700"
+      style={{ maxWidth: 'var(--content-max)' }}
+    >
+      <div className="flex items-center justify-between mb-5 mt-14">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 title-font tracking-tight">Database metrics</h2>
+          <h2 className="text-[28px] font-bold text-on-surface leading-tight tracking-[-0.005em]">Database metrics</h2>
         </div>
       </div>
 
       {/* KPI Cards — shadcn Card with cva accent variants */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
         <StatCard
-          accent="aqua"
+          accent="papers"
           label="Papers indexed"
           value={papersTotal}
           footer={
@@ -266,7 +287,7 @@ const Dashboard: React.FC = () => {
           onClick={() => openDrawer({ tab: 'papers', filter: null })}
         />
         <StatCard
-          accent="lavender"
+          accent="entities"
           label="Entities extracted"
           value={entitiesTotal}
           footer={
@@ -277,7 +298,7 @@ const Dashboard: React.FC = () => {
           onClick={() => openDrawer({ tab: 'entities', filter: null })}
         />
         <StatCard
-          accent="sage"
+          accent="journals"
           label="Journals indexed"
           value={journalsTotal}
           footer={
@@ -289,8 +310,9 @@ const Dashboard: React.FC = () => {
         />
       </div>
 
-      {/* Row 1: Journal Distribution Widget (full-width) */}
-      <div className="mt-8">
+      {/* Row 1: Journal Distribution Widget (full-width). 24px gap to
+          the stat cards above (design's ``marginTop: 24``). */}
+      <div className="mt-6">
         <ChartCard title="Top Journals">
           <JournalDistributionWidget
             journals={metrics.charts.papers_by_journal}
@@ -304,8 +326,11 @@ const Dashboard: React.FC = () => {
           />
         </ChartCard>
 
-        {/* Row 2: Entity Distribution + Publication Timeline */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        {/* Row 2: Entity Distribution + Publication Timeline.
+            Asymmetric 1fr / 1.2fr grid — donut gets the smaller column,
+            timeline gets the wider column for the x-axis labels.
+            (Design's ``gridTemplateColumns: "1fr 1.2fr"``.) */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.2fr] gap-6 mt-6">
           <ChartCard title="Entity Distribution">
             <EntityDonutChart
               data={metrics.charts.entity_distribution}
@@ -348,6 +373,14 @@ const Dashboard: React.FC = () => {
         onClearFilter={() => setDrawerFilter(null)}
         entities={metrics.charts.entity_distribution}
         journals={metrics.charts.papers_by_journal}
+        onOpenPaper={(doi) => {
+          setDrawerOpen(false);
+          navigate({
+            to: '/paper/$doi',
+            params: { doi },
+            search: { src: 'database' },
+          });
+        }}
       />
     </div>
   );

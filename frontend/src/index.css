@@ -1,206 +1,460 @@
-/* Google Fonts — Lora only (Inter ships via @fontsource-variable/inter below) */
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+/* =============================================================================
+   PhytoQuery — design system
+   ============================================================================= */
+
+/* Typography: Roboto (UI) + JetBrains Mono (DOIs / code).
+   Loaded once at app boot via this single @import. */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;0,500;0,700;0,900;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @import "tailwindcss";
-
 @import "tw-animate-css";
-
 @import "shadcn/tailwind.css";
-
 @import "@fontsource-variable/inter";
 @plugin "@tailwindcss/typography";
-/* shadcn/ui CSS variables (@theme inline block) will be inserted here by
-   `bunx shadcn@latest init` on first run. After that, every shadcn component
-   pulls its colours from these tokens. */
 
-/* Tailwind v4 dark variant — class-based, opt-in via <html class="dark">.
-   Driven by the useTheme() hook in src/lib/theme.ts (flower-icon click). */
-@custom-variant dark (&:where(.dark, .dark *));
+/* Tailwind v4 theme registration — maps CSS vars to utility classes */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 
-/* CSS Variables - SaaS Dashboard Palette */
+  /* Teal palette */
+  --color-teal-50: var(--teal-50);
+  --color-teal-100: var(--teal-100);
+  --color-teal-200: var(--teal-200);
+  --color-teal-300: var(--teal-300);
+  --color-teal-400: var(--teal-400);
+  --color-teal-500: var(--teal-500);
+  --color-teal-600: var(--teal-600);
+  --color-teal-700: var(--teal-700);
+  --color-teal-800: var(--teal-800);
+
+  /* Cyan palette */
+  --color-cyan-50: var(--cyan-50);
+  --color-cyan-100: var(--cyan-100);
+  --color-cyan-200: var(--cyan-200);
+  --color-cyan-400: var(--cyan-400);
+  --color-cyan-500: var(--cyan-500);
+  --color-cyan-600: var(--cyan-600);
+  --color-cyan-700: var(--cyan-700);
+
+  /* Blue palette */
+  --color-blue-50: var(--blue-50);
+  --color-blue-100: var(--blue-100);
+
+  /* Surface palette */
+  --color-surface-low: var(--surface-low);
+  --color-surface-c: var(--surface-c);
+  --color-surface-high: var(--surface-high);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-on-surface-muted: var(--on-surface-muted);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+
+  /* Role colors */
+  --color-role-chemical: var(--role-chemical);
+  --color-role-species: var(--role-species);
+  --color-role-plant-part: var(--role-plant-part);
+  --color-role-extraction-method: var(--role-extraction-method);
+  --color-role-development-stage: var(--role-development-stage);
+  --color-role-season: var(--role-season);
+  --color-role-location: var(--role-location);
+  --color-role-bioactivity: var(--role-bioactivity);
+  --color-role-analytical-technique: var(--role-analytical-technique);
+  --color-role-isolation-method: var(--role-isolation-method);
+  --color-role-disease: var(--role-disease);
+
+  /* Typography */
+  --font-display: var(--font-roboto);
+  --font-serif: 'Georgia', 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Border radius */
+  --radius-lg: var(--radius);
+
+  /* Animation */
+  --animate-fade-up: fade-up 0.35s ease-out both;
+  --animate-bar-grow: barGrow 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-spring-in: springIn 0.34s cubic-bezier(0.34, 1.4, 0.5, 1) both;
+  --animate-pulse-ring: pulseRing 2s ease-out infinite;
+  --animate-panel-slide: panelSlide 0.25s ease-out both;
+  --animate-draw-line: drawLine 1.2s ease-out forwards;
+  --animate-load-fill: loadFill 0.8s ease-out both;
+  --animate-paper-enter: paperEnter 0.35s cubic-bezier(.2, .7, .2, 1) both;
+  --animate-paper-fade: paperFade 0.35s ease both;
+  --animate-pulse: pulse 2s ease-in-out infinite;
+  --animate-result-in: resultIn 0.32s ease both;
+}
+
+/* =============================================================================
+   DESIGN TOKENS — color / type / shape / role
+   ============================================================================= */
 :root {
-    --font-inter: 'Inter', sans-serif;
-    --font-lora: 'Lora', serif;
+    /* Typography */
+    --font-roboto: 'Roboto', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-serif:  'Georgia', 'Times New Roman', serif;
+    --font-mono:   'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-    /* SaaS Dashboard Palette */
-    --accent-blue: #2563eb;
-    --accent-blue-soft: #eff6ff;
-    --bg-neutral: #f9fafb;
-    --card-bg: #ffffff;
-    --border-soft: #f1f5f9;
-    --text-primary: #1f2937;
-    --text-secondary: #6b7280;
-    --header-bg: #ffffff;
-    --sidebar-bg: #ffffff;
-    --tab-inactive: #94a3b8;
-    /* Reader entity palette: single source of truth */
+    /* Layout */
+    --content-max: 1440px;
+    --rail-w:      80px;
+
+    /* Neutrals (zinc-flavored) — matches the design's pure-white + zinc ladder */
+    --bg:                   #FFFFFF;
+    --surface:              #FFFFFF;
+    --surface-lowest:       #FFFFFF;
+    --surface-low:          #FAFAFA;
+    --surface-c:            #F4F4F5;
+    --surface-high:         #E4E4E7;
+    --foreground:           #18181B;
+    --on-surface:           #18181B;
+    --on-surface-variant:   #71717A;
+    --on-surface-muted:     #A1A1AA;
+    --outline:              #A1A1AA;
+    --outline-variant:      #E4E4E7;
+
+    /* Material accent palette — sampled from the design screenshots */
+    --teal-50:  #E0F2F1;
+    --teal-100: #B2DFDB;
+    --teal-200: #80CBC4;
+    --teal-300: #4DB6AC;
+    --teal-400: #26A69A;
+    --teal-500: #009688;
+    --teal-600: #00897B;
+    --teal-700: #00796B;
+    --teal-800: #00695C;
+
+    --cyan-50:  #E0F7FA;
+    --cyan-100: #B2EBF2;
+    --cyan-200: #80DEEA;
+    --cyan-400: #26C6DA;
+    --cyan-500: #00BCD4;
+    --cyan-600: #00ACC1;
+    --cyan-700: #0097A7;
+
+    --blue-50:   #E3F2FD;
+    --blue-100:  #BBDEFB;
+    --blue-400:  #42A5F5;
+    --blue-500:  #2196F3;
+    --blue-600:  #1E88E5;
+    --blue-700:  #1976D2;
+    --blue-800:  #1565C0;
+    --blue-900:  #0D47A1;
+    --blue-A700: #2962FF;
+
+    --green-400: #66BB6A;
+    --green-500: #4CAF50;
+    --green-600: #43A047;
+    --green-700: #388E3C;
+    --green-800: #2E7D32;
+
+    --purple-400: #AB47BC;
+    --purple-500: #9C27B0;
+    --purple-600: #8E24AA;
+    --purple-700: #7B1FA2;
+
+    --orange-300: #FFB74D;
+    --orange-400: #FFA726;
+    --orange-500: #FF9800;
+    --pink-400:   #EC407A;
+    --pink-500:   #E91E63;
+    --pink-600:   #D81B60;
+
+    /* Role colors — driven by the screenshots' teal / purple / green caps */
+    --role-papers:        var(--teal-500);
+    --role-papers-soft:   var(--teal-50);
+    --role-papers-under:  var(--teal-200);
+    --role-entities:      var(--purple-500);
+    --role-entities-soft: #F3E5F5;
+    --role-entities-under:var(--purple-400);
+    --role-journals:      var(--green-600);
+    --role-journals-soft: #E8F5E9;
+    --role-journals-under:var(--green-400);
+
+    /* Entity role colors (used in charts, legends, filters) */
+    --role-chemical:           #2563EB;
+    --role-species:            #16A34A;
+    --role-plant-part:         #84CC16;
+    --role-extraction-method:  #7C3AED;
+    --role-development-stage:  #F97316;
+    --role-season:             #EAB308;
+    --role-location:           #06B6D4;
+    --role-bioactivity:        #EC4899;
+    --role-analytical-technique: #64748B;
+    --role-isolation-method:   #8B5CF6;
+    --role-disease:            #DC2626;
+
+    /* MD3 shape scale */
+    --radius-xs:   4px;
+    --radius-sm:   8px;
+    --radius-md:   12px;
+    --radius-lg:   16px;
+    --radius-xl:   28px;
+    --radius-full: 9999px;
+
+    /* Reader entity palette — single source of truth (lighter / cooler for a
+       white-only app, no dark mode in scope). */
     --entity-highlight-alpha: 0.18;
     --entity-highlight-border-alpha: 0.24;
-    --entity-default: #374151;
-    --entity-default-rgb: 55 65 81;
-    --entity-chemical: #2563EB;
-    --entity-chemical-rgb: 37 99 235;
-    --entity-species: #16A34A;
-    --entity-species-rgb: 22 163 74;
-    --entity-plant-part: #84CC16;
-    --entity-plant-part-rgb: 132 204 22;
-    --entity-extraction-method: #7C3AED;
+    --entity-default:         #374151;
+    --entity-default-rgb:     55 65 81;
+    --entity-chemical:           #2563EB;   /* blue-600 */
+    --entity-chemical-rgb:       37 99 235;
+    --entity-species:            #16A34A;   /* green-600 */
+    --entity-species-rgb:        22 163 74;
+    --entity-plant-part:         #84CC16;   /* lime-500 */
+    --entity-plant-part-rgb:     132 204 22;
+    --entity-extraction-method:  #7C3AED;   /* violet-600 */
     --entity-extraction-method-rgb: 124 58 237;
-    --entity-development-stage: #F97316;
+    --entity-development-stage:  #F97316;   /* orange-500 */
     --entity-development-stage-rgb: 249 115 22;
-    --entity-season: #EAB308;
-    --entity-season-rgb: 234 179 8;
-    --entity-location: #06B6D4;
-    --entity-location-rgb: 6 182 212;
-    --entity-bioactivity: #EC4899;
-    --entity-bioactivity-rgb: 236 72 153;
-    --entity-analytical-technique: #64748B;
+    --entity-season:             #EAB308;   /* yellow-500 */
+    --entity-season-rgb:         234 179 8;
+    --entity-location:           #06B6D4;   /* cyan-500 */
+    --entity-location-rgb:       6 182 212;
+    --entity-bioactivity:        #EC4899;   /* pink-500 */
+    --entity-bioactivity-rgb:    236 72 153;
+    --entity-analytical-technique: #64748B; /* slate-500 */
     --entity-analytical-technique-rgb: 100 116 139;
-    --entity-disease: #DC2626;
-    --entity-disease-rgb: 220 38 38;
+    --entity-isolation-method:   #7C3AED;   /* violet-600 */
+    --entity-isolation-method-rgb: 124 58 237;
+    --entity-disease:            #DC2626;   /* red-600 */
+    --entity-disease-rgb:        220 38 38;
 
-    /* Typography & Sizing Tokens (design-system-friendly) */
-    --heading-h2-size: 1.75rem;
-    --heading-h3-size: 1.35rem;
-    --heading-weight-bold: 700;
-    --heading-weight-semibold: 600;
-    --section-gap: 2rem;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    /* Coastal palette — preserves the original Journal Distribution
-       widget look (aqua / sage / teal / peach / aqua-repeat). The
-       Publication Timeline overrides this with a cyan accent locally;
-       the Entity Donut uses semantic per-entity colours from
-       ENTITY_COLORS. These five variables are the default any new
-       chart inherits. */
-    --chart-1: #A0E4F1;
-    --chart-2: #B9EDB9;
-    --chart-3: #86CFBF;
-    --chart-4: #FFCBA5;
-    --chart-5: #A0E4F1;
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    /* shadcn tokens (kept so existing shadcn components resolve) */
+    --background:  #FFFFFF;
+    --foreground:  #18181B;
+    --card:        #FFFFFF;
+    --card-foreground: #18181B;
+    --popover:     #FFFFFF;
+    --popover-foreground: #18181B;
+    --primary:     #009688;
+    --primary-foreground: #FFFFFF;
+    --secondary:   #F4F4F5;
+    --secondary-foreground: #18181B;
+    --muted:       #F4F4F5;
+    --muted-foreground: #71717A;
+    --accent:      #F4F4F5;
+    --accent-foreground: #18181B;
+    --destructive: #DC2626;
+    --destructive-foreground: #FFFFFF;
+    --border:      #E4E4E7;
+    --input:       #E4E4E7;
+    --ring:        #009688;
+    --radius:      12px;
+    --sidebar:            #FAFAFA;
+    --sidebar-foreground: #18181B;
+    --sidebar-primary:    #009688;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent:     #F4F4F5;
+    --sidebar-accent-foreground: #18181B;
+    --sidebar-border:     #E4E4E7;
+    --sidebar-ring:       #009688;
+
+    /* shadcn chart palette — consumed by JournalBarsChart, EntityDonutChart, etc.
+       Colors intentionally match the screenshot's teal/green/cyan/orange/purple arc. */
+    --chart-1: #009688;   /* teal-500 — primary brand */
+    --chart-2: #26A69A;   /* teal-400 */
+    --chart-3: #4CAF50;   /* green-500 */
+    --chart-4: #FF9800;   /* orange-500 */
+    --chart-5: #9C27B0;   /* purple-500 */
 }
 
-/* Base Styles */
-body {
-    background-color: var(--bg-neutral);
-    color: var(--text-primary);
-    font-family: var(--font-inter);
-    letter-spacing: -0.01em;
+/* =============================================================================
+   BASE — typography + body + scrollbar
+   ============================================================================= */
+* {
+    border-color: var(--outline-variant);
+}
+
+html {
+    font-family: var(--font-roboto);
+    font-size: 14px;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    color: var(--on-surface);
+    background: var(--bg);
+    color-scheme: light;
 }
 
-/* Typography */
-.title-font {
-    font-family: var(--font-lora);
+body {
+    font-family: var(--font-roboto);
+    color: var(--on-surface);
+    background: var(--bg);
+    margin: 0;
+    min-height: 100vh;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
 }
 
-.font-display {
-    font-family: var(--font-inter) !important;
-    letter-spacing: -0.01em;
+/* Type scale */
+h1, h2, h3, h4, h5, h6 { color: var(--on-surface); margin: 0; }
+h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.005em; }
+h4 { font-size: 16px; font-weight: 600; }
+h5 { font-size: 14px; font-weight: 600; }
+
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; }
+input, textarea, select { font-family: inherit; font-size: inherit; }
+
+::selection { background: rgba(0, 150, 136, 0.18); color: var(--on-surface); }
+
+/* Scrollbar */
+.nice-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.nice-scroll::-webkit-scrollbar-track { background: transparent; }
+.nice-scroll::-webkit-scrollbar-thumb {
+    background: var(--surface-high);
+    border-radius: var(--radius-full);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+.nice-scroll::-webkit-scrollbar-thumb:hover { background: var(--on-surface-muted); background-clip: padding-box; border: 2px solid transparent; }
+
+/* =============================================================================
+   DESIGN SYSTEM UTILITY CLASSES — match PhytoQuery.html
+   ============================================================================= */
+
+/* ── Card ─────────────────────────────────────────────────────────── */
+.card {
+    background: var(--bg);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-lg);
+    transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+.card.is-hoverable:hover {
+    border-color: color-mix(in oklab, var(--on-surface) 22%, var(--outline-variant));
+    box-shadow: var(--md-sys-elevation-level1);
 }
 
-/* SaaS Card & Layout Elements */
-.saas-card {
-    background: var(--card-bg);
-    border-radius: 1rem;
-    --border-soft: 1px solid var(--border-color);
+.card.is-flat { box-shadow: none; }
+.card.is-elevated:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04); }
+
+/* ── MD3 elevation — exact mockup values ─────────────────────────── */
+.md-sys-elevation-level1 {
+    box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+}
+.md-sys-elevation-level2 {
+    box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
 }
 
-@keyframes slide-up {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+/* ── Buttons ──────────────────────────────────────────────────────── */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: var(--radius-full);
+    border: 1px solid transparent;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--on-surface);
+    background: var(--bg);
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 80ms ease;
+    user-select: none;
+    white-space: nowrap;
 }
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--teal-500); outline-offset: 2px; }
 
-/* Plant Origin Map — ripple rings on each country marker. THREE
-   concentric rings render per marker, all running this same 2.1s
-   cycle but with animation-delays of 0, -0.7s, -1.4s so a new ring
-   starts every 0.7s. At any moment three rings are visible at
-   different scales/opacities — the raindrop-on-water effect. A
-   single-ring animation left visible dead gaps between cycles.
+.btn-primary { background: var(--teal-500); color: #fff; }
+.btn-primary:hover { background: var(--teal-600); }
 
-   Opacity holds longer at the start, fades only after 60% — that's
-   what gives the ring its "expand while staying bright, then fade
-   only at the edge" character. Linear interpolation from 0.85 → 0
-   over the full cycle looks washy.
+.btn-ghost { background: transparent; }
+.btn-ghost:hover { background: var(--surface-c); }
 
-   transform-box: fill-box keeps the scale centred on the circle
-   itself rather than the SVG root's (0,0). */
-@keyframes map-ripple {
-    0%   { transform: scale(0.7); opacity: 0.85; }
-    60%  {                         opacity: 0.35; }
-    100% { transform: scale(2.6); opacity: 0;    }
-}
-.map-ripple {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: map-ripple 2.1s ease-out infinite;
-}
+.btn-outline { background: var(--bg); border-color: var(--outline-variant); }
+.btn-outline:hover { background: var(--surface-low); border-color: var(--outline); }
 
-/* Typing-indicator dots — used by the chat thread's TypingIndicator.
-   Three dots receive the same animation with staggered animation-delay
-   so they bounce in sequence. */
-@keyframes typing-dot {
-    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-    30%           { transform: translateY(-4px); opacity: 1; }
+.btn-icon {
+    width: 40px; height: 40px;
+    padding: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
 }
-.animate-typing-dot {
-    animation: typing-dot 1.2s ease-in-out infinite;
-}
+.btn-icon.btn-sm { width: 32px; height: 32px; }
+.btn-icon.btn-xs { width: 24px; height: 24px; }
 
-/* Header pill ↔ dot transition. Used by layout/Header.tsx when the
-   segmented nav pill collapses to the ph-circle-fill dot (scroll-down
-   past 80px OR 10s idle). */
-@keyframes header-pill-fadein {
-    from { opacity: 0; transform: translateY(2px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
+.btn-sm { height: 32px; padding: 0 14px; font-size: 13px; }
+.btn-xs { height: 26px; padding: 0 10px; font-size: 12px; gap: 4px; }
 
-/* Pink "trail-light" that streaks along the bottom inner edge of the
-   search pill when the user submits a query. Used by SearchForm.tsx —
-   the React component mounts the <span class="pq-search-trail" /> for
-   ~650ms (keyed on Date.now() so the CSS animation restarts on every
-   submit). The element is inset 36px from each end so it sits within
-   the flat-bottom portion of the rounded pill, never the curves. */
-@keyframes pq-trail-slide {
-    0%   { transform: translateX(-60%); }
-    100% { transform: translateX(220%); }
+/* ── Search shell (collapsed pill → focused squircle) ────────────── */
+.search-shell {
+    position: relative;
+    background: var(--bg);
+    border: 1px solid var(--outline-variant);
+    /* Fixed 38px = half collapsed height (~76px). Gives a pill silhouette
+       at rest, but unlike 9999px it's a fixed value — no dynamic clamp
+       that shifts when height changes → no sloshing. */
+    border-radius: 38px;
+    transition:
+        box-shadow .25s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color .25s cubic-bezier(0.4, 0, 0.2, 1),
+        border-radius .2s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: text;
 }
-@keyframes pq-trail-fade {
-    0%, 70% { opacity: 1; }
-    100%    { opacity: 0; }
+.search-shell.is-focused {
+    border-radius: 24px;
+    border-color: var(--blue-A700) !important;
+    box-shadow:
+        0 0 0 4px color-mix(in oklab, var(--blue-A700) 14%, transparent),
+        0 12px 32px -18px rgba(41,98,255,.35);
 }
+.search-shell:focus-within:not(.is-focused) {
+    border-color: var(--blue-700);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--blue-700) 14%, transparent);
+}
+.search-shell.is-focused .search-trail { opacity: 1; }
+.search-shell input {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    font-size: 15px;
+    color: var(--on-surface);
+    min-width: 0;
+}
+.search-shell input::placeholder { color: var(--on-surface-muted); }
+
+.search-trail { opacity: 0; transition: opacity 200ms ease; }
+
+/* Pink trail-light on submit */
 .pq-search-trail {
     position: absolute;
     left: 36px;
     right: 36px;
     bottom: 0;
     height: 2px;
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     overflow: hidden;
     background: #FFE0EC;
     pointer-events: none;
@@ -210,223 +464,572 @@ body {
 .pq-search-trail::before {
     content: "";
     position: absolute;
-    top: 0;
-    bottom: 0;
+    top: 0; bottom: 0;
     width: 38%;
-    background: linear-gradient(
-        90deg,
-        transparent 0%,
-        #F8BBD0   25%,
-        #EC407A   50%,
-        #F8BBD0   75%,
-        transparent 100%
-    );
+    background: linear-gradient(90deg, transparent 0%, #F8BBD0 25%, #EC407A 50%, #F8BBD0 75%, transparent 100%);
     filter: drop-shadow(0 0 5px rgba(236, 64, 122, 0.55));
     animation: pq-trail-slide .9s cubic-bezier(.4, .0, .2, 1) both;
 }
 
-.animate-slide-up {
-    animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+/* ── Kbd (keyboard shortcut chip) ─────────────────────────────────── */
+.kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 22px;
+    padding: 0 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--on-surface-variant);
+    background: var(--surface-c);
+    border: 1px solid var(--outline-variant);
+    border-radius: 6px;
+    line-height: 1;
 }
 
-.scrollbar-hide::-webkit-scrollbar {
-    display: none;
-}
+/* ── Mono (DOI / code) ────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-.scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+/* ── Pill (source / filter) ──────────────────────────────────────── */
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 14px;
+    border-radius: var(--radius-full);
+    font-size: 13.5px;
+    font-weight: 600;
+    background: var(--surface-c);
+    color: var(--on-surface-variant);
+    border: 1.5px solid transparent;
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+    opacity: 0.85;
 }
-
-/* Tab Styles */
-.saas-tab-active {
-    color: var(--accent-blue) !important;
-    background-color: var(--accent-blue-soft) !important;
-    border-radius: 0.75rem;
+.pill:hover { opacity: 1; }
+.pill[data-active="true"] {
+    opacity: 1;
+    background: var(--teal-100);
+    color: var(--teal-800);
+    border-color: var(--teal-500);
 }
+.pill[data-active="true"][data-tone="orange"] { background: #FFE0B2; color: #E65100; border-color: #E65100; }
+.pill[data-active="true"][data-tone="blue"]   { background: #BBDEFB; color: #1565C0; border-color: #1565C0; }
 
-.saas-tab-inactive {
-    color: var(--tab-inactive) !important;
-}
+/* Source pill variants — exact mockup colors */
+.pill-europepmc { background: #ECFDF5; color: #059669; opacity: 0.85; }
+.pill-europepmc:hover { opacity: 1; }
+.pill-europepmc[data-active="true"] { background: #D1FAE5; color: #059669; border-color: #059669; opacity: 1; }
+.pill-openalex  { background: #F1F5F9; color: #334155; opacity: 0.85; }
+.pill-openalex:hover  { opacity: 1; }
+.pill-openalex[data-active="true"]  { background: #E2E8F0; color: #334155; border-color: #334155; opacity: 1; }
+.pill-database  { background: #FCE4EC; color: #EC407A; opacity: 0.85; }
+.pill-database:hover  { opacity: 1; }
+.pill-database[data-active="true"]  { background: #F8BBD0; color: #EC407A; border-color: #EC407A; opacity: 1; }
 
-/* Layout Overrides */
-aside {
-    background-color: var(--sidebar-bg) !important;
-    border-right: 1px solid var(--border-soft) !important;
-}
-
-main {
-}
-
-header {
-    background-color: var(--header-bg) !important;
-}
-
-#main-content {
-    background-color: transparent;
-    margin: 0 auto;
-    width: 100%;
-    max-width: 1400px;
-    min-height: calc(100vh - 4rem);
-}
-
-/* Custom Scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
+/* ── Result action / icon (ResultCard) ──────────────────────────── */
+.result-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 2px;
+    border-radius: 6px;
     background: transparent;
+    color: var(--on-surface-variant);
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color .12s;
+    border: none;
 }
+.result-action:hover { color: var(--on-surface); }
 
-.custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #e2e8f0;
+.result-icon {
+    display: inline-grid; place-items: center;
+    width: 36px; height: 36px;
+    background: transparent;
+    border: 1px solid var(--outline-variant);
     border-radius: 10px;
+    cursor: pointer;
+    color: var(--on-surface-variant);
+    transition: background .15s, color .15s, border-color .15s;
+}
+.result-icon:hover {
+    background: var(--surface-c);
+    color: var(--on-surface);
+    border-color: color-mix(in oklab, var(--on-surface) 22%, var(--outline-variant));
 }
 
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #cbd5e1;
-}
-
-/* JATS Table Styling */
-.jats-table table {
-    width: 100%;
-    border-collapse: collapse;
-    font-family: var(--font-inter);
+/* ── Rail item (paper-page sticky nav) ──────────────────────────── */
+.rail-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    color: var(--on-surface-variant);
     font-size: 13px;
-    color: #334155;
-    table-layout: fixed;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+}
+.rail-item:hover { background: var(--surface-c); color: var(--on-surface); }
+.rail-item[data-active="true"] {
+    background: var(--teal-50);
+    color: var(--teal-700);
 }
 
-.jats-table th {
-    background: #f8fafc;
-    text-align: left;
-    padding: 12px 16px;
-    border-bottom: 2px solid #e2e8f0;
-    font-weight: 700;
+/* ── Entity index (paper rail accordion) ───────────────────────── */
+.ent-cat {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--on-surface);
+    transition: background 140ms ease;
+}
+.ent-cat:hover { background: var(--surface-c); }
+.ent-caret { transition: transform 180ms ease; color: var(--on-surface-variant); }
+.ent-cat[data-open="true"] .ent-caret { transform: rotate(90deg); }
+.ent-count {
+    font-size: 11px;
+    color: var(--on-surface-variant);
+    font-family: var(--font-mono);
+    margin-left: auto;
+    margin-right: 8px;
+}
+
+/* ── Paper tool (paper-page action row) ──────────────────────────── */
+.paper-tool {
+    display: inline-grid; place-items: center;
+    width: 38px; height: 38px;
+    background: transparent;
+    border: 1px solid var(--outline-variant);
+    border-radius: 10px;
+    cursor: pointer;
+    color: var(--on-surface-variant);
+    transition: background .15s, color .15s, border-color .15s;
+}
+.paper-tool:hover {
+    background: var(--surface-c);
+    color: var(--on-surface);
+    border-color: color-mix(in oklab, var(--on-surface) 22%, var(--outline-variant));
+}
+
+.paper-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--on-surface-variant);
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 140ms ease;
+}
+.paper-back:hover { color: var(--on-surface) !important; }
+
+/* ── Status icon (OA / full-text badge on result cards) ────────── */
+.status-ic {
+    display: inline-grid; place-items: center;
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    cursor: default;
+    transition: background .15s;
+}
+.status-ic:hover { background: var(--surface-c); }
+
+/* ── Dual range slider track ──────────────────────────────────── */
+.dual-range {
+    position: relative;
+    width: 100%;
+    height: 24px;
+}
+.dual-range input[type="range"] {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    pointer-events: none;
+    margin: 0;
+}
+.dual-range input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--teal-500);
+    border: 2px solid #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    cursor: grab;
+    pointer-events: auto;
+    margin-top: -7px;
+}
+.dual-range input[type="range"]::-webkit-slider-runnable-track {
+    height: 2px;
+    background: var(--outline-variant);
+    border-radius: var(--radius-full);
+}
+.dual-range .dual-track {
+    position: absolute;
+    top: 11px; left: 0; right: 0;
+    height: 2px;
+    background: var(--outline-variant);
+    border-radius: var(--radius-full);
+    pointer-events: none;
+}
+.dual-range .dual-track-progress {
+    position: absolute;
+    height: 100%;
+    background: var(--teal-500);
+    border-radius: var(--radius-full);
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────────── */
+.skel {
+    background: linear-gradient(
+        90deg,
+        var(--surface-c) 0%,
+        var(--surface-high) 50%,
+        var(--surface-c) 100%
+    );
+    background-size: 200% 100%;
+    border-radius: var(--radius-sm);
+    animation: skelShimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Bar fill (stat-card / journal bars) ─────────────────────── */
+.bar-fill {
+    transform-origin: left;
+    animation: barGrow 0.9s cubic-bezier(.2, .7, .2, 1) both;
+    border-radius: var(--radius-full);
+}
+
+/* ── Export option (paper-page modal) ───────────────────────── */
+.export-opt {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background 140ms ease;
+}
+.export-opt:hover { background: var(--surface-c); }
+
+/* ── Entity flash / pulse (search results hover) ────────────── */
+.entity-flash {
+    animation: entityFlash 1.5s ease-out !important;
+    border-radius: 3px;
+}
+.entity-pulse {
+    animation: entityPulse 1s ease-in-out infinite !important;
+    border-radius: 3px;
+}
+
+/* When the user has toggled "eye off" on the paper, dim marks. */
+.hl-off .article-prose .ent-chemical,
+.hl-off .article-prose .ent-species,
+.hl-off .article-prose .ent-plant-part,
+.hl-off .article-prose .ent-extraction-method,
+.hl-off .article-prose .ent-development-stage,
+.hl-off .article-prose .ent-season,
+.hl-off .article-prose .ent-location,
+.hl-off .article-prose .ent-bioactivity,
+.hl-off .article-prose .ent-analytical-technique,
+.hl-off .article-prose .ent-isolation-method,
+.hl-off .article-prose .ent-disease,
+.hl-off .article-prose mark.ner-default {
+    background-color: transparent !important;
+    color: inherit !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    cursor: default;
+    font-weight: inherit !important;
+}
+
+/* =============================================================================
+   KEYFRAMES
+   ============================================================================= */
+@keyframes pq-trail-slide {
+    0%   { transform: translateX(-60%); }
+    100% { transform: translateX(220%); }
+}
+@keyframes pq-trail-fade {
+    0%, 70% { opacity: 1; }
+    100%    { opacity: 0; }
+}
+@keyframes barGrow {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(1); }
+}
+@keyframes pulseRing {
+    0%, 100% { transform: scale(1);   opacity: .55; }
+    50%      { transform: scale(1.7); opacity: 0;   }
+}
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes panelSlide {
+    from { transform: translateX(100%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes springIn {
+    0%   { opacity: 0; transform: translateY(-6px) scale(0.985); }
+    60%  { opacity: 1; transform: translateY(1px) scale(1.004); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes entityFlash {
+    0%   { background: #FDE68A !important; }
+    100% { background: var(--entity-flash-bg, transparent) !important; }
+}
+@keyframes entityPulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50%      { box-shadow: 0 0 0 3px var(--hl-bd, #8B5CF6); }
+}
+@keyframes skelShimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes mapRipple {
+    0%   { transform: scale(0.4); opacity: 0.55; }
+    60%  { opacity: 0.35; }
+    100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes typingDot {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30%           { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes headerPillFadein {
+    from { opacity: 0; transform: translateY(2px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── HTML template missing animations ───────────────────────────── */
+@keyframes drawLine {
+    from { stroke-dashoffset: 1000; }
+    to   { stroke-dashoffset: 0; }
+}
+@keyframes loadFill {
+    from { width: 0; }
+    to   { width: var(--fill-pct, 100%); }
+}
+@keyframes paperEnter {
+    from { opacity: 0; transform: translateY(12px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes paperFade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+}
+@keyframes resultIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes halo-drift {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(2%, -2%) scale(1.08); }
+}
+
+/* ── Design-system class selectors (from HTML template) ────────── */
+.card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--on-surface);
+    line-height: 1.4;
+}
+.card-title.sm { font-size: 14px; }
+.card-title.lg { font-size: 18px; }
+
+.section-title {
+    font-size: 13px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    font-size: 11px;
-    white-space: nowrap;
-    max-width: 300px;
+    color: var(--on-surface-variant);
+    margin-bottom: 12px;
 }
 
-.jats-table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid #f1f5f9;
-    line-height: 1.5;
-    max-width: 300px;
-    white-space: normal;
-    word-break: break-word;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.stat-num {
+    font-size: 32px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: var(--on-surface);
+    line-height: 1;
+}
+.stat-num.sm { font-size: 24px; }
+.stat-num.lg { font-size: 40px; }
+
+.page-arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px; height: 32px;
+    border-radius: var(--radius-full);
+    background: var(--surface-c);
+    color: var(--on-surface-variant);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+    font-size: 16px;
+}
+.page-arrow:hover { background: var(--surface-high); color: var(--on-surface); }
+.page-arrow:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.paper-enter {
+    animation: paperEnter 0.35s cubic-bezier(.2, .7, .2, 1) both;
 }
 
-.jats-table tr:hover {
-    background: #fdfdfd;
+.is-open { display: block; }
+
+/* Keyframe utility animation classes — matching HTML template naming */
+.entity-hl {
+    border-radius: 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    cursor: pointer;
+    transition: all 0.15s;
 }
 
-/* Removed dark-mode table styling */
+/* Helpers (animate-* utility) */
+.animate-fade-up     { animation: fadeUp 0.32s cubic-bezier(.2, .7, .2, 1) both; }
+.animate-panel-slide { animation: panelSlide 0.32s cubic-bezier(.2, .7, .2, 1) both; }
+.animate-spring-in   { animation: springIn 0.34s cubic-bezier(0.34, 1.4, 0.5, 1) both; }
+.animate-slide-up    { animation: slideUp 0.4s cubic-bezier(.16, 1, 0.3, 1) forwards; }
+.animate-pulse-ring  { animation: pulseRing 2.1s ease-out infinite; }
+.animate-map-ripple  { animation: mapRipple 2.1s ease-out infinite; }
+.animate-typing-dot  { animation: typingDot 1.2s ease-in-out infinite; }
+.animate-header-pill { animation: headerPillFadein .22s ease both; }
+.animate-bar-grow    { animation: barGrow .9s cubic-bezier(.2, .7, .2, 1) both; }
+.animate-draw-line   { animation: drawLine 1.2s ease-out forwards; }
+.animate-load-fill   { animation: loadFill 0.8s ease-out both; }
+.animate-paper-enter { animation: paperEnter 0.35s cubic-bezier(.2, .7, .2, 1) both; }
+.animate-paper-fade  { animation: paperFade 0.35s ease both; }
+.animate-pulse       { animation: pulse 2s ease-in-out infinite; }
+.animate-result-in   { animation: resultIn 0.32s ease both; }
+.animate-halo        { animation: halo-drift 12s ease-in-out infinite; }
 
-/* Table Overflow Container */
-.table-scroll-container {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    position: relative;
-}
+/* Staggered results entry — each .result-row fades up with a small delay. */
+.results-page > * { animation: fadeUp 0.45s cubic-bezier(.2, .7, .2, 1) both; }
+.results-page > *:nth-child(1)  { animation-delay: 0.00s; }
+.results-page > *:nth-child(2)  { animation-delay: 0.03s; }
+.results-page > *:nth-child(3)  { animation-delay: 0.06s; }
+.results-page > *:nth-child(4)  { animation-delay: 0.09s; }
+.results-page > *:nth-child(5)  { animation-delay: 0.12s; }
+.results-page > *:nth-child(6)  { animation-delay: 0.15s; }
+.results-page > *:nth-child(7)  { animation-delay: 0.18s; }
+.results-page > *:nth-child(8)  { animation-delay: 0.21s; }
+.results-page > *:nth-child(9)  { animation-delay: 0.24s; }
+.results-page > *:nth-child(10) { animation-delay: 0.27s; }
 
-.table-scroll-container::before,
-.table-scroll-container::after {
-    content: '';
-    position: absolute;
+/* =============================================================================
+   STRUCTURAL — header / sidebar / main / app shell
+   ============================================================================= */
+header.app-header {
+    height: 64px;
+    display: flex;
+    align-items: center;
+    padding: 0 32px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--outline-variant);
+    position: sticky;
     top: 0;
-    bottom: 0;
-    width: 24px;
-    pointer-events: none;
-    z-index: 1;
+    z-index: 30;
+    justify-content: space-between;
 }
 
-.table-scroll-container::before {
-    left: 0;
-    background: linear-gradient(to right, rgba(255,255,255,0.9), transparent);
+#main-content-display {
+    width: 100%;
+    height: calc(100vh - 64px);
+    overflow-y: auto;
 }
 
-.table-scroll-container::after {
-    right: 0;
-    background: linear-gradient(to left, rgba(255,255,255,0.9), transparent);
-}
-
-.table-scroll-container.is-scrolled::before { opacity: 0; }
-
-/* Removed dark-mode table scroll shadows */
-
-/* Entity highlight palette wiring: legend + inline spans/marks share the same color tokens */
+/* =============================================================================
+   ENTITY HIGHLIGHT PALETTE (search + reader)
+   ============================================================================= */
 .ent-chemical,
 mark.ner-chemical,
 .legend-chemical {
     --entity-accent: var(--entity-chemical);
     --entity-accent-rgb: var(--entity-chemical-rgb);
 }
-
 .ent-species,
 mark.ner-species,
 .legend-species {
     --entity-accent: var(--entity-species);
     --entity-accent-rgb: var(--entity-species-rgb);
 }
-
 .ent-plant-part,
 mark.ner-plant-part,
 .legend-plant-part {
     --entity-accent: var(--entity-plant-part);
     --entity-accent-rgb: var(--entity-plant-part-rgb);
 }
-
 .ent-extraction-method,
 mark.ner-extraction-method,
 .legend-extraction-method {
     --entity-accent: var(--entity-extraction-method);
     --entity-accent-rgb: var(--entity-extraction-method-rgb);
 }
-
 .ent-development-stage,
 mark.ner-development-stage,
 .legend-development-stage {
     --entity-accent: var(--entity-development-stage);
     --entity-accent-rgb: var(--entity-development-stage-rgb);
 }
-
 .ent-season,
 mark.ner-season,
 .legend-season {
     --entity-accent: var(--entity-season);
     --entity-accent-rgb: var(--entity-season-rgb);
 }
-
 .ent-location,
 mark.ner-location,
 .legend-location {
     --entity-accent: var(--entity-location);
     --entity-accent-rgb: var(--entity-location-rgb);
 }
-
 .ent-bioactivity,
 mark.ner-bioactivity,
 .legend-bioactivity {
     --entity-accent: var(--entity-bioactivity);
     --entity-accent-rgb: var(--entity-bioactivity-rgb);
 }
-
 .ent-analytical-technique,
 mark.ner-analytical-technique,
-.legend-analytical-technique,
-.ent-isolation-method,
-mark.ner-isolation-method,
-.legend-isolation-method {
+.legend-analytical-technique {
     --entity-accent: var(--entity-analytical-technique);
     --entity-accent-rgb: var(--entity-analytical-technique-rgb);
 }
-
+.ent-isolation-method,
+mark.ner-isolation-method,
+.legend-isolation-method {
+    --entity-accent: var(--entity-isolation-method);
+    --entity-accent-rgb: var(--entity-isolation-method-rgb);
+}
 .ent-disease,
 mark.ner-disease,
 .legend-disease {
@@ -434,42 +1037,8 @@ mark.ner-disease,
     --entity-accent-rgb: var(--entity-disease-rgb);
 }
 
-.legend-chemical,
-.legend-species,
-.legend-plant-part,
-.legend-extraction-method,
-.legend-development-stage,
-.legend-season,
-.legend-location,
-.legend-bioactivity,
-.legend-analytical-technique,
-.legend-isolation-method,
-.legend-disease,
-.article-prose :is(
-    .ent-chemical,
-    .ent-species,
-    .ent-plant-part,
-    .ent-extraction-method,
-    .ent-development-stage,
-    .ent-season,
-    .ent-location,
-    .ent-bioactivity,
-    .ent-analytical-technique,
-    .ent-isolation-method,
-    .ent-disease,
-    mark.ner-chemical,
-    mark.ner-species,
-    mark.ner-plant-part,
-    mark.ner-extraction-method,
-    mark.ner-development-stage,
-    mark.ner-season,
-    mark.ner-location,
-    mark.ner-bioactivity,
-    mark.ner-analytical-technique,
-    mark.ner-isolation-method,
-    mark.ner-disease
-),
-.title-font :is(
+/* Inline color in compact contexts (search results / tooltips) */
+:is(
     .ent-chemical,
     .ent-species,
     .ent-plant-part,
@@ -496,6 +1065,7 @@ mark.ner-disease,
     color: var(--entity-accent, var(--entity-default)) !important;
 }
 
+/* Highlight in prose / paper body */
 .article-prose :is(
     .ent-chemical,
     .ent-species,
@@ -545,13 +1115,14 @@ mark.ner-disease,
     mark.ner-disease
 ) {
     background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;
-    border-radius: 3px;
+    border-bottom: 2px solid var(--entity-accent, var(--entity-default)) !important;
+    border-radius: 2px;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
     cursor: pointer;
-    font-weight: 600;
+    font-weight: 500;
     line-height: inherit;
-    padding: 1px 5px;
+    padding: 0 2px;
     text-decoration: none;
     transition: all 0.15s;
 }
@@ -570,601 +1141,150 @@ mark.ner-default {
     transition: all 0.15s;
 }
 
-/* Reading Progress Bar */
-.progress-bar-fill {
-    background-color: #2563eb;
-    height: 2px;
-    transition: width 0.15s ease-out;
-}
-
-/* Removed dark-mode progress bar color override */
-
-/* TOC Heading Anchors - scroll target only */
-.toc-anchor {
-    display: inline-block;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    position: absolute;
-    visibility: hidden;
-}
-
-/* Small Caps & Underline */
-.small-caps {
-    font-variant: small-caps;
-    text-transform: lowercase;
-}
-
-.underline {
-    text-decoration: underline;
-}
-
-/* ============================================
-   ARTICLE READER STYLES (PubTator3-Inspired)
-   ============================================ */
-
-/* Article prose container */
+/* =============================================================================
+   ARTICLE PROSE — JATS reader (kept from prior implementation)
+   ============================================================================= */
 .article-prose {
-    font-family: var(--font-lora);
-    font-size: 17px;
-    line-height: 1.85;
-    color: var(--text-primary);
-}
-
-/* Spacing rhythm for paper sections: provide clear separation between top-level sections in the article blob */
-.article-prose > section {
-  margin-bottom: var(--section-gap);
-}
-
-/* Heading styles inside the article prose to establish visual hierarchy */
-.article-prose h2 {
-    font-family: var(--font-lora);
-    font-size: var(--heading-h2-size);
-    font-weight: var(--heading-weight-bold);
-    line-height: 1.25;
-    margin: 1.75em 0 0.75em;
-    border-bottom: 1px solid var(--border-soft);
-    padding-bottom: 0.5rem;
-}
-
-.article-prose h2:first-child {
-    margin-top: 0;
-}
-
-.article-prose h3 {
-    font-family: var(--font-inter);
-    font-size: var(--heading-h3-size);
-    font-weight: var(--heading-weight-semibold);
-    line-height: 1.4;
-    color: var(--text-primary);
-    margin: 1em 0 0.5em;
-}
-
-/* Removed dark-mode robustness rules */
-.article-prose p {
-    margin-bottom: 1.25em;
-    orphans: 3;
-    widows: 3;
-}
-
-.article-prose p:last-child {
-    margin-bottom: 0;
-}
-
-/* Section sub-headers (h3) - PubTator3 style */
-.article-prose .article-h3 {
-    font-family: var(--font-inter);
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-top: 2.5em;
-    margin-bottom: 0.75em;
-    padding-bottom: 0.4em;
-    border-bottom: 1px solid var(--border-soft);
-    letter-spacing: -0.01em;
-    line-height: 1.4;
-    scroll-margin-top: 100px;
-}
-
-.article-prose .article-h3:first-child {
-    margin-top: 0;
-}
-
-/* Citations */
-.article-prose .citation {
-    color: var(--accent-blue);
-    cursor: help;
-    border-bottom: 1px dotted var(--accent-blue);
-    text-decoration: none;
-    font-weight: 600;
-    transition: all 0.15s ease;
-}
-
-.article-prose .citation:hover {
-    background-color: var(--accent-blue-soft);
-}
-
-/* Cross-references */
-.article-prose .xref-link {
-    color: var(--accent-blue);
-    text-decoration: none;
-    font-weight: 500;
-}
-
-.article-prose .xref-link:hover {
-    text-decoration: underline;
-}
-
-/* Tables */
-.article-table-wrap {
-    margin: 2em 0;
-    padding: 1.25rem;
-    background: #f8fafc;
-    border: 1px solid var(--border-soft);
-    border-radius: 0.75rem;
-    overflow: hidden;
-}
-
-.article-table-wrap .table-label {
-    display: block;
-    font-family: var(--font-inter);
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--accent-blue);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: 0.75rem;
-}
-
-.article-table-wrap .table-caption {
-    font-family: var(--font-inter);
-    font-size: 13px;
-    color: var(--text-secondary);
-    font-style: italic;
-    margin-top: 0.75rem;
-    line-height: 1.5;
-}
-
-/* Figures */
-.article-figure {
-    margin: 2.5em 0;
-    text-align: center;
-}
-
-.article-figure img {
-    max-width: 100%;
-    height: auto;
-    border-radius: 0.5rem;
-    border: 1px solid var(--border-soft);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-
-.article-figure figcaption {
-    font-family: var(--font-inter);
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-top: 0.75rem;
-    text-align: left;
-    line-height: 1.6;
-}
-
-.article-figure .fig-label {
-    font-weight: 700;
-    color: var(--accent-blue);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 11px;
-}
-
-/* Lists */
-.article-prose ul,
-.article-prose ol {
-    margin: 1em 0;
-    padding-left: 1.75em;
-}
-
-.article-prose ul li,
-.article-prose ol li {
-    margin-bottom: 0.5em;
+    color: var(--foreground);
     line-height: 1.7;
+    font-size: 16px;
+    font-family: var(--font-serif);
 }
-
-.article-prose ul {
-    list-style-type: disc;
+.article-prose h1,
+.article-prose h2,
+.article-prose h3,
+.article-prose h4 {
+    font-family: var(--font-roboto);
+    color: var(--foreground);
+    margin-top: 1.6em;
+    margin-bottom: 0.6em;
+    line-height: 1.3;
 }
-
-/* Respect HTML type attribute for ordered lists (a, A, i, I from Europe PMC) */
-.article-prose ol {
-    list-style-type: decimal;
-}
-
-.article-prose ol[type="a" s] {
-    list-style-type: lower-alpha !important;
-}
-
-.article-prose ol[type="A" s] {
-    list-style-type: upper-alpha !important;
-}
-
-.article-prose ol[type="i" s] {
-    list-style-type: lower-roman !important;
-}
-
-.article-prose ol[type="I" s] {
-    list-style-type: upper-roman !important;
-}
-
-/* Verbatim list labels from source XML (a., b., c., etc.) */
+.article-prose h1 { font-size: 1.6em; }
+.article-prose h2 { font-size: 1.35em; }
+.article-prose h3 { font-size: 1.15em; }
+.article-prose h4 { font-size: 1em; }
+.article-prose p { margin: 1em 0; }
+.article-prose ul,
+.article-prose ol { margin: 1em 0; padding-left: 1.5em; }
+.article-prose li { margin: 0.3em 0; }
+.article-prose ol { list-style-type: decimal; }
+.article-prose ol[type="a" s] { list-style-type: lower-alpha !important; }
+.article-prose ol[type="A" s] { list-style-type: upper-alpha !important; }
+.article-prose ol[type="i" s] { list-style-type: lower-roman !important; }
+.article-prose ol[type="I" s] { list-style-type: upper-roman !important; }
 .article-prose .list-label {
     display: inline-block;
     min-width: 1.5em;
     font-weight: 400;
-    color: var(--text-primary);
+    color: var(--foreground);
 }
-
-/* Blockquotes */
 .article-prose blockquote {
-    border-left: 3px solid var(--accent-blue);
+    border-left: 3px solid var(--teal-500);
     padding: 0.75em 1.25em;
     margin: 1.5em 0;
-    background: var(--accent-blue-soft);
+    background: var(--teal-50);
     border-radius: 0 0.5rem 0.5rem 0;
     font-style: italic;
 }
-
-/* Inline formatting */
-.article-prose em {
-    font-style: italic;
-}
-
-.article-prose strong {
-    font-weight: 700;
-}
-
+.article-prose em { font-style: italic; }
+.article-prose strong { font-weight: 700; }
 .article-prose code {
-    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-family: var(--font-mono);
     font-size: 0.88em;
-    background: #f1f5f9;
+    background: var(--surface-c);
     padding: 0.15em 0.35em;
     border-radius: 0.25rem;
 }
-
-/* External links */
 .article-prose a[target="_blank"] {
-    color: var(--accent-blue);
+    color: var(--blue-700);
     text-decoration: none;
     border-bottom: 1px solid transparent;
     transition: border-color 0.15s;
 }
+.article-prose a[target="_blank"]:hover { border-bottom-color: var(--blue-700); }
 
-.article-prose a[target="_blank"]:hover {
-    border-bottom-color: var(--accent-blue);
+/* =============================================================================
+   JATS TABLES
+   ============================================================================= */
+.jats-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    color: var(--foreground);
+    table-layout: fixed;
+}
+.jats-table th {
+    background: var(--surface-low);
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--outline-variant);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 11px;
+    white-space: nowrap;
+    max-width: 300px;
+}
+.jats-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--surface-c);
+    line-height: 1.5;
+    max-width: 300px;
+    white-space: normal;
+    word-break: break-word;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.jats-table tr:hover { background: var(--surface-low); }
+
+.table-scroll-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+}
+.table-scroll-container::before,
+.table-scroll-container::after {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 24px;
+    pointer-events: none;
+    z-index: 1;
+}
+.table-scroll-container::before {
+    left: 0;
+    background: linear-gradient(to right, rgba(255,255,255,0.9), transparent);
+}
+.table-scroll-container::after {
+    right: 0;
+    background: linear-gradient(to left, rgba(255,255,255,0.9), transparent);
 }
 
-/* Removed dark-mode article styles */
+/* =============================================================================
+   UTILITY OVERRIDES
+   ============================================================================= */
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* NotebookLM specific palette */
-.bg-notebook-blue {
-    background-color: #f0f4f9 !important;
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--surface-high);
+    border-radius: 10px;
 }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--outline); }
 
-.hover\:bg-notebook-blue-hover:hover {
-    background-color: #e1e9f1 !important;
-}
+.title-font { font-family: var(--font-roboto); }
 
-/* Removed dark mode overrides */
-
-/* ============================================
-   DARK MODE
-   ============================================ */
-
-/* True-black palette (OLED-friendly). Pure #000 body, near-black surfaces
-   for subtle elevation, neutral grays for borders/secondary text — no
-   slate/blue tint anywhere. Overrides the CSS variables declared in :root
-   so all chrome (header, sidebar, cards, body, article reader) flips. */
-:root.dark {
-    --bg-neutral: #000000;        /* pure black body */
-    --card-bg: #0a0a0a;           /* near-black surfaces, just off body */
-    --border-soft: #1a1a1a;       /* very subtle dividers */
-    --text-primary: #fafafa;      /* near-white */
-    --text-secondary: #a1a1aa;    /* zinc-400 */
-    --header-bg: #000000;         /* header sits flush with body */
-    --sidebar-bg: #000000;
-    --tab-inactive: #71717a;      /* zinc-500 */
-    --accent-blue: #60a5fa;       /* slightly lighter blue for legibility on black */
-    --accent-blue-soft: #1e40af33;/* translucent blue for hovers/highlights */
-    /* Entity-highlight alpha bumped so colored marks stay readable on black. */
-    --entity-highlight-alpha: 0.32;
-    --entity-highlight-border-alpha: 0.42;
-    --entity-default: #d4d4d8;
-    --entity-default-rgb: 212 212 216;
-}
-
-/* Smooth animation for the toggle. Kept narrow (color/background/border)
-   so we don't accidentally animate layout properties. */
-html, body, header, aside, main, nav, button, input, textarea,
-.saas-card, .article-prose, .article-table-wrap, .article-figure {
-    transition: background-color 220ms ease,
-                color 220ms ease,
-                border-color 220ms ease,
-                box-shadow 220ms ease;
-}
-
-/* Flower-icon rotation feedback when toggling. Lives on the .theme-toggle
-   button in Header.tsx; the SVG flips a half-turn so it visually "blooms". */
-.theme-toggle svg {
-    transition: transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-:root.dark .theme-toggle svg {
-    transform: rotate(180deg);
-}
-
-/* ----- Tailwind utility overrides under .dark -----
-   Components across the app use raw Tailwind classes like `bg-white`,
-   `text-slate-900`, `border-slate-100`. We map the most common ones to
-   dark equivalents using `:where()` so the specificity is 0 — components
-   that explicitly opt out (e.g. by adding their own `dark:bg-...`) keep
-   winning. */
-
-/* Backgrounds — pure black body, near-black for elevated surfaces. */
-:root.dark :where(.bg-white)        { background-color: #0a0a0a !important; }
-:root.dark :where(.bg-slate-50)     { background-color: #000000 !important; }
-:root.dark :where(.bg-slate-100)    { background-color: #141414 !important; }
-:root.dark :where(.bg-slate-200)    { background-color: #1f1f1f !important; }
-:root.dark :where(.bg-gray-50)      { background-color: #000000 !important; }
-:root.dark :where(.bg-gray-100)     { background-color: #141414 !important; }
-:root.dark :where(.bg-gray-200)     { background-color: #1f1f1f !important; }
-:root.dark :where(.bg-notebook-blue){ background-color: #0a0a0a !important; }
-
-/* Text colors — near-white down through neutral grays. */
-:root.dark :where(.text-slate-900)  { color: #fafafa !important; }
-:root.dark :where(.text-slate-800)  { color: #f4f4f5 !important; }
-:root.dark :where(.text-slate-700)  { color: #e4e4e7 !important; }
-:root.dark :where(.text-slate-600)  { color: #a1a1aa !important; }
-:root.dark :where(.text-slate-500)  { color: #a1a1aa !important; }
-:root.dark :where(.text-slate-400)  { color: #a1a1aa !important; }
-:root.dark :where(.text-gray-900)   { color: #fafafa !important; }
-:root.dark :where(.text-gray-800)   { color: #f4f4f5 !important; }
-:root.dark :where(.text-gray-700)   { color: #e4e4e7 !important; }
-:root.dark :where(.text-gray-600)   { color: #a1a1aa !important; }
-:root.dark :where(.text-gray-500)   { color: #a1a1aa !important; }
-:root.dark :where(.text-black)      { color: #fafafa !important; }
-
-/* Borders — subtle, neutral. */
-:root.dark :where(.border-slate-100){ border-color: #1a1a1a !important; }
-:root.dark :where(.border-slate-200){ border-color: #262626 !important; }
-:root.dark :where(.border-slate-300){ border-color: #404040 !important; }
-:root.dark :where(.border-gray-100) { border-color: #1a1a1a !important; }
-:root.dark :where(.border-gray-200) { border-color: #262626 !important; }
-
-/* Hovers — perceptible elevation without going gray. */
-:root.dark :where(.hover\:bg-slate-50:hover)  { background-color: #141414 !important; }
-:root.dark :where(.hover\:bg-slate-100:hover) { background-color: #1a1a1a !important; }
-:root.dark :where(.hover\:bg-white:hover)     { background-color: #1a1a1a !important; }
-:root.dark :where(.hover\:bg-gray-50:hover)   { background-color: #141414 !important; }
-:root.dark :where(.hover\:bg-gray-100:hover)  { background-color: #1a1a1a !important; }
-
-/* Shadows on pure black — pure black drop shadows are invisible, so use
-   a faint white inner edge instead via box-shadow inset. */
-:root.dark :where(.shadow-sm) { box-shadow: 0 0 0 1px rgba(255,255,255,0.04) !important; }
-:root.dark :where(.shadow)    { box-shadow: 0 0 0 1px rgba(255,255,255,0.06) !important; }
-:root.dark :where(.shadow-md) { box-shadow: 0 0 0 1px rgba(255,255,255,0.08) !important; }
-
-/* Native form controls + scrollbars follow color-scheme set by useTheme(). */
-:root.dark { color-scheme: dark; }
-
-/* Citation superscript badges — produced by Thread.tsx's
-   MarkdownText preprocess that converts inline ``[<chunk_id>]``
-   markers into clickable ``[<sup>N</sup>](#cite-<chunk_id>)`` links.
-   Sized to sit inline with prose without disrupting line height. */
-.citation-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.25rem;
-  height: 1.1rem;
-  padding: 0 0.3rem;
-  margin: 0 0.1rem;
-  border-radius: 9999px;
-  background-color: #ffecf6;
-  color: #c2185b;
-  font-size: 0.7rem;
-  font-weight: 600;
-  line-height: 1;
-  vertical-align: super;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: background-color 0.12s ease, color 0.12s ease,
-              border-color 0.12s ease, transform 0.12s ease;
-  text-decoration: none;
-}
-.citation-badge:hover {
-  background-color: #ff6dba;
-  color: #ffffff;
-  border-color: #ff4fa3;
-  transform: translateY(-1px);
-}
-.citation-badge:focus-visible {
-  outline: 2px solid #ff6dba;
-  outline-offset: 2px;
-}
-.citation-badge sup {
-  vertical-align: baseline;
-  font-size: inherit;
-  line-height: inherit;
-}
-
-/* Markdown-preview panel highlights — applied by
-   MarkdownPreviewPanel.tsx when rendering an extracted paper with a
-   cited chunk + verbatim quote. The highlight is a *transient flash*:
-   strong yellow on activation, fading to transparent over the
-   configured duration. The panel re-mounts the markdown container
-   (via React key on a click counter) every time the user clicks a
-   citation, restarting the animation — so re-clicking the same [N]
-   re-fires the flash.
-
-   All values are exposed as CSS custom properties on :root so the
-   timing, easing, breakpoints, and colors can be retuned in one
-   place without touching the keyframes. Dark mode overrides only
-   the *-active-rgb variables; the keyframes themselves are shared. */
-:root {
-  --citation-flash-duration: 1.6s;
-  --citation-flash-easing: ease-out;
-  --citation-flash-chunk-rgb: 255, 230, 0;
-  --citation-flash-quote-rgb: 255, 200, 0;
-  --citation-flash-chunk-opacity-start: 0.45;
-  --citation-flash-chunk-opacity-mid: 0.18;
-  --citation-flash-quote-opacity-start: 0.95;
-  --citation-flash-quote-opacity-mid: 0.55;
-}
-:root.dark {
-  --citation-flash-chunk-opacity-start: 0.30;
-  --citation-flash-chunk-opacity-mid: 0.18;
-  --citation-flash-quote-opacity-start: 0.80;
-  --citation-flash-quote-opacity-mid: 0.55;
-}
-@keyframes citation-chunk-flash {
-  0% {
-    background-color: rgba(
-      var(--citation-flash-chunk-rgb),
-      var(--citation-flash-chunk-opacity-start)
-    );
-  }
-  60% {
-    background-color: rgba(
-      var(--citation-flash-chunk-rgb),
-      var(--citation-flash-chunk-opacity-mid)
-    );
-  }
-  100% {
-    background-color: rgba(var(--citation-flash-chunk-rgb), 0);
-  }
-}
-@keyframes citation-quote-flash {
-  0% {
-    background-color: rgba(
-      var(--citation-flash-quote-rgb),
-      var(--citation-flash-quote-opacity-start)
-    );
-  }
-  60% {
-    background-color: rgba(
-      var(--citation-flash-quote-rgb),
-      var(--citation-flash-quote-opacity-mid)
-    );
-  }
-  100% {
-    background-color: rgba(var(--citation-flash-quote-rgb), 0);
-  }
-}
-.chunk-highlight {
-  padding: 0.05rem 0.1rem;
-  border-radius: 0.25rem;
-  scroll-margin-top: 4rem;
-  animation: citation-chunk-flash var(--citation-flash-duration)
-    var(--citation-flash-easing) forwards;
-}
-.quote-highlight {
-  padding: 0.05rem 0.15rem;
-  border-radius: 0.2rem;
-  animation: citation-quote-flash var(--citation-flash-duration)
-    var(--citation-flash-easing) forwards;
-}
-
-/* Dashboard stat cards are now built with shadcn Card + cva accent
-   variants in frontend/src/features/search/Dashboard.tsx — the
-   previous .stats-strip / .stat-card / .stat-* / [data-accent] CSS
-   has been deleted. */
-
-@theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Inter Variable', sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
-    --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-.dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    /* Dark-mode chart palette — kept identical to light mode because
-       the original ECharts theme was always-light; carrying the same
-       Coastal hues into dark backgrounds preserves brand cohesion
-       without per-mode branching. */
-    --chart-1: #A0E4F1;
-    --chart-2: #B9EDB9;
-    --chart-3: #86CFBF;
-    --chart-4: #FFCBA5;
-    --chart-5: #A0E4F1;
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
-}
-
+/* =============================================================================
+   TAILWIND v4 LAYER BASE (must come AFTER :root tokens for utilities to win)
+   ============================================================================= */
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+  }
   body {
     @apply bg-background text-foreground;
-    }
-  html {
-    @apply font-sans;
-    }
+  }
 }

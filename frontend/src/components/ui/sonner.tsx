@@ -1,16 +1,11 @@
-// Use the project's own theme hook (class-driven via <html class="dark">)
-// instead of next-themes — the CLI generates this with next-themes by default,
-// but this project doesn't use it.
-import { useTheme } from "@/lib/theme"
+// Simplified Toaster — always light theme (dark mode removed).
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon, SpinnerIcon } from "@phosphor-icons/react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = "system" } = useTheme()
-
   return (
     <Sonner
-      theme={theme as ToasterProps["theme"]}
+      theme="light"
       className="toaster group"
       icons={{
         success: (

@@ -403,7 +403,7 @@ const AssistantActionBar: FC = () => (
         tooltip="Copy answer"
       >
         <MessagePrimitive.If copied>
-          <Check size={14} weight="bold" className="text-emerald-600" />
+          <Check size={14} weight="bold" className="text-teal-600" />
         </MessagePrimitive.If>
         <MessagePrimitive.If copied={false}>
           <CopySimple size={14} weight="regular" />

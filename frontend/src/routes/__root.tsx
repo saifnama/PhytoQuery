@@ -36,10 +36,10 @@ function RootLayout() {
   return (
     <TooltipProvider delayDuration={250}>
       <UploadStatusListener />
-      <div className="bg-gray-50 flex h-screen overflow-hidden">
+      <div className="bg-background flex h-screen overflow-hidden">
         <main className="flex-1 flex flex-col min-w-0 relative z-10">
           <Header />
-          <div className="flex-1 overflow-y-auto relative h-full" id="main-content-display">
+          <div className="flex-1 overflow-y-auto relative h-full nice-scroll" id="main-content-display">
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>

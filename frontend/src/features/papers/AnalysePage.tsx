@@ -362,13 +362,13 @@ const AnalysePage = () => {
   return (
     <div className="flex h-full">
       {/* Left Sidebar */}
-      <div className="w-56 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col">
-        <div className="p-3 border-b border-slate-100">
-          <h2 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-            <FlowerLotus size={18} className="text-pink-600" />
+      <div className="w-56 flex-shrink-0 border-r border-border bg-background flex flex-col">
+        <div className="p-3 border-b border-surface-c">
+          <h2 className="text-sm font-semibold text-on-surface flex items-center gap-2">
+            <FlowerLotus size={18} className="text-primary" />
             Analyse
           </h2>
-          <p className="text-xs text-slate-400 mt-0.5">Upload PDFs · Extract entities</p>
+          <p className="text-xs text-on-surface-muted mt-0.5">Upload PDFs · Extract entities</p>
         </div>
 
         <div className="px-3 py-2 space-y-2">
@@ -388,7 +388,7 @@ const AnalysePage = () => {
               className={`flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-lg text-xs font-medium transition-colors ${
                 isCompareMode
                   ? 'bg-violet-100 text-violet-700 border border-violet-200'
-                  : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  : 'border border-border text-on-surface-variant hover:bg-surface-c'
               }`}
             >
               {isCompareMode ? <X size={14} /> : <ChartBar size={14} />}
@@ -407,12 +407,12 @@ const AnalysePage = () => {
             />
             <div className={`flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed rounded-lg cursor-pointer transition-colors text-xs font-medium ${
               isUploading
-                ? 'border-blue-300 bg-blue-50 text-blue-700'
-                : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50 text-blue-600'
+                ? 'border-primary/30 bg-primary/10 text-primary'
+                : 'border-primary/20 hover:border-primary hover:bg-primary/10 text-primary'
             }`}>
               {isUploading ? (
                 <>
-                  <svg className="animate-spin h-3.5 w-3.5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <svg className="animate-spin h-3.5 w-3.5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
@@ -448,15 +448,15 @@ const AnalysePage = () => {
                 }}
                 className={`group flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors ${
                   isSelected && !isCompareMode
-                    ? 'border-blue-500 bg-blue-50'
+                    ? 'border-primary bg-primary/10'
                     : isInCompare && isCompareMode
                     ? 'border-violet-500 bg-violet-50'
-                    : 'border-transparent hover:bg-slate-50'
+                    : 'border-transparent hover:bg-surface-c'
                 }`}
               >
                 {isCompareMode && (
                   <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                    isInCompare ? 'bg-violet-600 border-violet-600' : 'border-slate-300'
+                    isInCompare ? 'bg-violet-600 border-violet-600' : 'border-outline'
                   }`}>
                     {isInCompare && (
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -476,7 +476,7 @@ const AnalysePage = () => {
                   className={`w-6 h-7 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-colors ${
                     paper.pdfUrl
                       ? 'bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer'
-                      : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                      : 'bg-surface-c/50 text-on-surface-muted cursor-not-allowed'
                   }`}
                 >
                   {viewerLoadingPaperId === paper.id ? (
@@ -486,8 +486,8 @@ const AnalysePage = () => {
                   )}
                 </button>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-slate-900 truncate">{paper.name}</p>
-                  <p className="text-[10px] text-slate-400 truncate">{paper.doi || 'No DOI'}</p>
+                  <p className="text-xs font-medium text-on-surface truncate">{paper.name}</p>
+                  <p className="text-[10px] text-on-surface-muted truncate">{paper.doi || 'No DOI'}</p>
                 </div>
 
                 {/* Three-dots menu */}
@@ -498,7 +498,7 @@ const AnalysePage = () => {
                       event.stopPropagation();
                       setActivePaperMenu(activePaperMenu === paper.id ? null : paper.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 inline-flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-opacity hover:text-slate-600"
+                    className="opacity-0 group-hover:opacity-100 inline-flex h-6 w-6 items-center justify-center rounded text-on-surface-muted transition-opacity hover:text-on-surface-variant"
                     title="Paper options"
                   >
                     <DotsThreeVertical size={16} weight="bold" />
@@ -507,7 +507,7 @@ const AnalysePage = () => {
                   {activePaperMenu === paper.id && (
                     <div
                       ref={menuRef}
-                      className="absolute right-0 top-7 z-20 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                      className="absolute right-0 top-7 z-20 w-44 rounded-lg border border-border bg-background py-1 shadow-lg"
                     >
                       <button
                         type="button"
@@ -527,7 +527,7 @@ const AnalysePage = () => {
             );
           })}
           {papers.length === 0 && (
-            <p className="text-xs text-slate-400 text-center py-8">No papers uploaded</p>
+            <p className="text-xs text-on-surface-muted text-center py-8">No papers uploaded</p>
           )}
         </div>
       </div>
@@ -536,10 +536,10 @@ const AnalysePage = () => {
       <div className="flex-1 flex flex-col overflow-hidden">
         {activePapers.length > 0 ? (
           <>
-            <div className="border-b border-slate-200 p-4">
+            <div className="border-b border-border p-4">
               {isComparing ? (
                 <div>
-                  <h3 className="text-base font-semibold text-slate-900 font-serif">
+                  <h3 className="text-base font-semibold text-on-surface font-serif">
                     Comparing {activePapers.length} Papers
                   </h3>
                   <div className="flex flex-wrap gap-2 mt-2">
@@ -552,33 +552,33 @@ const AnalysePage = () => {
                 </div>
               ) : (
                 <>
-                  <h3 className="text-base font-semibold text-slate-900 font-serif">{activePapers[0]?.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1 font-mono">{activePapers[0]?.doi || 'No DOI'}</p>
+                  <h3 className="text-base font-semibold text-on-surface font-serif">{activePapers[0]?.name}</h3>
+                  <p className="text-xs text-on-surface-variant mt-1 font-mono">{activePapers[0]?.doi || 'No DOI'}</p>
                 </>
               )}
             </div>
 
             <div className="flex-1 flex overflow-hidden">
               {/* Entity Index */}
-              <div className="w-[380px] flex-shrink-0 border-r border-slate-200 flex flex-col bg-slate-50/20 overflow-hidden">
+              <div className="w-[380px] flex-shrink-0 border-r border-border flex flex-col bg-surface-c/20 overflow-hidden">
                 <div className="flex flex-col flex-1 p-8 space-y-6 overflow-y-auto custom-scrollbar">
                   <button
                     onClick={exportCSV}
-                    className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-100 cursor-pointer"
+                    className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-teal-600 hover:bg-teal-700 text-white shadow-teal-100 cursor-pointer"
                   >
                     <Table size={16} weight="bold" />
                     <span>Export Entities</span>
                   </button>
 
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                    <span className="text-[14px] font-semibold text-slate-900 font-display">Entity Index</span>
-                    <span className="text-[10px] text-slate-400">
+                  <div className="flex items-center justify-between pb-3 border-b border-border">
+                    <span className="text-[14px] font-semibold text-on-surface font-display">Entity Index</span>
+                    <span className="text-[10px] text-on-surface-muted">
                       {activePapers.reduce((sum, p) => sum + p.entity_count, 0).toLocaleString()} entities
                     </span>
                   </div>
 
                   <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-                    <div className="flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                    <div className="flex flex-col bg-background rounded-xl border border-border overflow-hidden shadow-sm">
                       {groupedEntities.map((group) => {
                         const isExpanded = expandedGroups[group.label] !== false;
                         const accentColor = getEntityAccentColor(group.label);
@@ -587,11 +587,11 @@ const AnalysePage = () => {
                         return (
                           <div
                             key={group.label}
-                            className="relative border-b-[0.5px] border-slate-200 last:border-0"
+                            className="relative border-b-[0.5px] border-border last:border-0"
                             style={{ borderLeft: isExpanded ? `2.5px solid ${accentColor}` : '2.5px solid transparent' }}
                           >
                             <div
-                              className="flex items-center gap-3 py-2.5 px-3 cursor-pointer transition-colors hover:bg-slate-50"
+                              className="flex items-center gap-3 py-2.5 px-3 cursor-pointer transition-colors hover:bg-surface-c"
                               onClick={() => toggleGroup(group.label)}
                             >
                               <div
@@ -600,7 +600,7 @@ const AnalysePage = () => {
                               />
                               <div className="flex-1 flex flex-col gap-[2px] min-w-0">
                                 <span 
-                                  className="text-[11px] font-semibold text-slate-800 font-display truncate"
+                                  className="text-[11px] font-semibold text-on-surface font-display truncate"
                                   style={{ color: isExpanded ? accentColor : undefined }}
                                 >
                                   {LABEL_NAMES[group.label] || group.label}
@@ -625,7 +625,7 @@ const AnalysePage = () => {
                                 {group.termCount > 0 && (
                                   <button
                                     type="button"
-                                    className={`text-[9px] text-slate-300 transition-transform duration-200 px-1.5 py-1 hover:text-slate-500 ${isExpanded ? 'rotate-90' : ''}`}
+                                    className={`text-[9px] text-on-surface-muted transition-transform duration-200 px-1.5 py-1 hover:text-on-surface-variant ${isExpanded ? 'rotate-90' : ''}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       toggleGroup(group.label);
@@ -637,28 +637,28 @@ const AnalysePage = () => {
                               </div>
                             </div>
 
-                            <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out bg-white ${isExpanded && group.items.length > 0 ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                            <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out bg-background ${isExpanded && group.items.length > 0 ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
                               <div className="overflow-hidden min-h-0">
-                                <div className="flex flex-col py-1 border-t-[0.5px] border-slate-100">
+                                <div className="flex flex-col py-1 border-t-[0.5px] border-surface-c">
                                   {group.items.map((ent, eIdx) => (
-                                    <div key={eIdx} className="flex flex-col border-b-[0.5px] border-slate-50 last:border-0">
-                                      <div className="flex items-center gap-2 py-1.5 pr-3 pl-8 transition-colors hover:bg-slate-50">
+                                    <div key={eIdx} className="flex flex-col border-b-[0.5px] border-surface-c last:border-0">
+                                      <div className="flex items-center gap-2 py-1.5 pr-3 pl-8 transition-colors hover:bg-surface-c">
                                         <div className="w-[6px] h-[6px] rounded-full shrink-0" style={{ backgroundColor: accentColor }} />
                                         <div className="flex-1 min-w-0 pr-2">
                                           <span 
-                                            className="text-[11px] font-display block truncate text-slate-600"
+                                            className="text-[11px] font-display block truncate text-on-surface-variant"
                                           >
                                             {ent.text}
                                           </span>
                                         </div>
-                                        <span className="text-[9px] font-mono text-slate-900 font-semibold">{ent.count}</span>
+                                        <span className="text-[9px] font-mono text-on-surface font-semibold">{ent.count}</span>
                                       </div>
                                       {isComparing && ent.papers.size > 0 && (
                                         <div className="pl-8 pr-3 pb-1 flex flex-wrap gap-1">
                                           {activePapers
                                             .filter(p => ent.papers.has(p.id))
                                             .map(p => (
-                                              <span key={p.id} className="text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded truncate max-w-[120px]" title={p.name}>
+                                              <span key={p.id} className="text-[9px] bg-surface-c text-on-surface-variant px-1.5 py-0.5 rounded truncate max-w-[120px]" title={p.name}>
                                                 {p.name}
                                               </span>
                                             ))}
@@ -679,11 +679,11 @@ const AnalysePage = () => {
 
               {/* Knowledge Graph — Right Side */}
               {showGraph && (
-                <div className="flex-1 bg-white overflow-hidden flex flex-col">
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-slate-100">
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Entity View</span>
+                <div className="flex-1 bg-background overflow-hidden flex flex-col">
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-surface-c">
+                    <span className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">Entity View</span>
                     {isComparing && (
-                      <span className="text-[10px] text-slate-400">Compare mode</span>
+                      <span className="text-[10px] text-on-surface-muted">Compare mode</span>
                     )}
                   </div>
 
@@ -701,7 +701,7 @@ const AnalysePage = () => {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
+          <div className="flex-1 flex items-center justify-center text-on-surface-muted text-sm">
             {isCompareMode
               ? 'Select at least 2 papers to compare'
               : 'Select a paper or upload a new PDF'}
@@ -710,42 +710,42 @@ const AnalysePage = () => {
       </div>
 
       {viewerPaper && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" onClick={closeViewer}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/70 p-4" onClick={closeViewer}>
           <div
-            className="flex h-[min(92vh,56rem)] w-[min(96vw,72rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            className="flex h-[min(92vh,56rem)] w-[min(96vw,72rem)] flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <div className="min-w-0">
-                <h3 className="truncate text-sm font-semibold text-slate-900">{viewerPaper.name}</h3>
+                <h3 className="truncate text-sm font-semibold text-on-surface">{viewerPaper.name}</h3>
               </div>
               <button
                 type="button"
                 onClick={closeViewer}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition-colors hover:border-slate-300 hover:text-slate-700"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-on-surface-variant transition-colors hover:border-outline hover:text-on-surface"
                 title="Close PDF viewer"
               >
                 <X size={18} weight="bold" />
               </button>
             </div>
 
-            <div className="flex-1 bg-slate-100 p-3">
+            <div className="flex-1 bg-surface-c p-3">
               {isViewerLoading ? (
-                <div className="flex h-full items-center justify-center rounded-xl border border-slate-200 bg-white text-sm text-slate-500">
+                <div className="flex h-full items-center justify-center rounded-xl border border-border bg-background text-sm text-on-surface-variant">
                   <div className="flex items-center gap-3">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-teal-200 border-t-teal-500" />
                     <span>Loading PDF preview...</span>
                   </div>
                 </div>
               ) : viewerError ? (
-                <div className="flex h-full items-center justify-center rounded-xl border border-red-100 bg-white px-6 text-center text-sm text-red-500">
+                <div className="flex h-full items-center justify-center rounded-xl border border-red-100 bg-background px-6 text-center text-sm text-red-500">
                   {viewerError}
                 </div>
               ) : (
                 <iframe
                   src={viewerSrc || undefined}
                   title={`PDF viewer for ${viewerPaper.name}`}
-                  className="h-full w-full rounded-xl border border-slate-200 bg-white"
+                  className="h-full w-full rounded-xl border border-border bg-background"
                 />
               )}
             </div>

@@ -669,15 +669,15 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
 
   return (
     <div className="mt-8 flex flex-col">
-      <h2 className="text-[14px] font-semibold text-slate-900 font-display mb-3 px-2">
+      <h2 className="text-[14px] font-semibold text-on-surface font-display mb-3 px-2">
         Graph View
       </h2>
 
       <div
         className={
           isFullscreen
-            ? 'fixed inset-0 z-[100] bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 transition-all duration-200'
-            : 'relative bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200'
+            ? 'fixed inset-0 z-[100] bg-on-surface/30 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 transition-all duration-200'
+            : 'relative bg-background border border-border rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200'
         }
       >
         {isFullscreen && (
@@ -690,7 +690,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
         <div
           className={
             isFullscreen
-              ? 'relative bg-white w-full max-w-5xl h-[85vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-10'
+              ? 'relative bg-background w-full max-w-5xl h-[85vh] rounded-2xl shadow-2xl border border-border flex flex-col overflow-hidden z-10'
               : 'relative w-full flex flex-col'
           }
         >
@@ -702,11 +702,11 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search node…"
-                  className="text-[11px] px-2.5 py-1.5 rounded-md border border-slate-200 bg-white/90 text-slate-700 outline-none focus:border-slate-400 w-36"
+                  className="text-[11px] px-2.5 py-1.5 rounded-md border border-border bg-background/90 text-on-surface-variant outline-none focus:border-on-surface-muted w-36"
                 />
                 <button
                   onClick={resetLayout}
-                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
+                  className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
                   title="Reset layout"
                 >
                   <ArrowCounterClockwise weight="bold" size={16} />
@@ -715,8 +715,8 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                   onClick={() => setShowLabels((v) => !v)}
                   className={`text-[11px] px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
                     showLabels
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      ? 'bg-on-surface text-background border-on-surface'
+                      : 'bg-background text-on-surface-variant border-border hover:bg-surface-c'
                   }`}
                   title="Toggle labels"
                 >
@@ -724,7 +724,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                 </button>
                 <button
                   onClick={downloadHTML}
-                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
+                  className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
                   title="Download Graph as HTML"
                 >
                   <DownloadSimple weight="bold" size={18} />
@@ -733,7 +733,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
             )}
             <button
               onClick={() => setIsFullscreen(!isFullscreen)}
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer focus:outline-none"
+              className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
               title={isFullscreen ? 'Close fullscreen' : 'Expand to fullscreen'}
             >
               <Graph weight="regular" size={20} />
@@ -742,7 +742,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
 
           {/* Legend with counts — top-left, fullscreen only */}
           {isFullscreen && presentTypes.length > 0 && (
-            <div className="absolute top-3 left-3 z-10 bg-white border border-slate-200 rounded-xl px-3.5 py-3 shadow-md min-w-[185px]">
+            <div className="absolute top-3 left-3 z-10 bg-background border border-border rounded-xl px-3.5 py-3 shadow-md min-w-[185px]">
               {presentTypes.map(([type, info]) => {
                 const on = activeTypes.has(type);
                 return (
@@ -756,10 +756,10 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                       className="w-3 h-3 rounded-sm flex-shrink-0"
                       style={{ background: info.color }}
                     />
-                    <span className="text-[11px] text-slate-700 flex-1 truncate" title={info.name}>
+                    <span className="text-[11px] text-on-surface-variant flex-1 truncate" title={info.name}>
                       {info.name}
                     </span>
-                    <span className="font-mono text-[9px] text-slate-400">{info.count}</span>
+                    <span className="font-mono text-[9px] text-on-surface-muted">{info.count}</span>
                   </div>
                 );
               })}

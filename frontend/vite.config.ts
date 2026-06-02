@@ -20,6 +20,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/search': {
+        target: 'http://localhost:8000',
+        timeout: 600000,
+      },
+      '/paper': {
+        target: 'http://localhost:8000',
+        timeout: 600000,
+      },
       '/ner': {
         target: 'http://localhost:8000',
         timeout: 600000,

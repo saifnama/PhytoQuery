@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { ListMagnifyingGlass, Chats, Download, PencilSimple, Table } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, ArrowLeft } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -73,7 +73,7 @@ const ENTITY_GROUP_CONFIG: Record<EntityGroupLabel, {
 
 const createInitialExpandedGroups = () => {
   return ENTITY_GROUP_ORDER.reduce<Record<EntityGroupLabel, boolean>>((acc, label) => {
-    acc[label] = false;
+    acc[label] = label === 'CHEMICAL' || label === 'SPECIES';
     return acc;
   }, {} as Record<EntityGroupLabel, boolean>);
 };
@@ -257,6 +257,7 @@ interface PaperViewerProps {
   onSendPdfToRag?: () => void;
   onAddToAnalyse?: () => void;
   onExtract?: () => void;
+  onBack?: () => void;
 }
 
 interface GroupedEntities {
@@ -292,23 +293,21 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   paperAuthors = [],
   paperJournal,
   paperDate,
-  canUsePdfActions = false,
   isDownloadingPdf = false,
   isUploadingToRag = false,
   isAddingToAnalyse = false,
-  pdfActionError = null,
-  analyseActionError = null,
   onDownloadPdf,
   onSendPdfToRag,
   onAddToAnalyse,
   onExtract,
+  onBack,
 }) => {
   const identifierValue = paperIdentifier?.value || 'paper';
-  const pdfToolbarError = analyseActionError || pdfActionError;
 
-  const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
+  const [activeHeading, setActiveHeading] = useState<string | null>(null);
   const [expandedChemical, setExpandedChemical] = useState<string | null>(null);
+  void activeHeading;
   const [expandedGroups, setExpandedGroups] = useState<Record<EntityGroupLabel, boolean>>(() => createInitialExpandedGroups());
   const [enabledHighlightGroups, setEnabledHighlightGroups] = useState<Record<EntityGroupLabel, boolean>>(() => createInitialEnabledHighlightGroups());
   const [activeSpeciesPopup, setActiveSpeciesPopup] = useState<SpeciesPopupState | null>(null);
@@ -325,6 +324,32 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const chemicalPopupRequestIdRef = useRef(0);
   const [isRenderingChemicalStructure, setIsRenderingChemicalStructure] = useState(false);
   const [chemicalStructureError, setChemicalStructureError] = useState(false);
+
+  const [tab, setTab] = useState<'entity' | 'graph'>('entity');
+  const [hoverTab, setHoverTab] = useState<'entity' | 'graph' | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+  const [showHL, setShowHL] = useState(true);
+
+  const [nav, setNav] = useState<{ name: string; idx: number; total: number } | null>(null);
+  const mentionsRef = useRef<HTMLElement[]>([]);
+
+  // A map of lowercase entity name/aliases to its uppercase category group
+  const entityToGroupMap = useMemo(() => {
+    const map = new Map<string, EntityGroupLabel>();
+    entities.forEach((entity) => {
+      if (entity.text) {
+        map.set(entity.text.toLowerCase().replace(/\s+/g, ' '), entity.label as EntityGroupLabel);
+      }
+      if (entity.canonical) {
+        map.set(entity.canonical.toLowerCase().replace(/\s+/g, ' '), entity.label as EntityGroupLabel);
+      }
+      if (entity.aliases) {
+        entity.aliases.forEach(a => map.set(a.toLowerCase().replace(/\s+/g, ' '), entity.label as EntityGroupLabel));
+      }
+    });
+    return map;
+  }, [entities]);
 
   const getInteractiveRoots = useCallback(() => {
     const roots: HTMLElement[] = [];
@@ -351,6 +376,82 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setActiveChemicalPopup(null);
   }, []);
 
+  const activateEntity = useCallback((name: string) => {
+    const key = name.toLowerCase().replace(/\s+/g, ' ');
+    const group = entityToGroupMap.get(key);
+    if (group) {
+      setExpandedGroups(prev => ({ ...prev, [group]: true }));
+    }
+
+    const els = Array.from(document.querySelectorAll(`[data-entity="${key}"]`)) as HTMLElement[];
+    mentionsRef.current = els;
+    if (els.length > 0) {
+      setNav({ name, idx: 0, total: els.length });
+      
+      const rect = els[0].getBoundingClientRect();
+      const scrollContainer = document.getElementById('main-content-display');
+      if (scrollContainer) {
+        scrollContainer.scrollTo({
+          top: rect.top + scrollContainer.scrollTop - 160,
+          behavior: 'smooth'
+        });
+      } else {
+        window.scrollTo({
+          top: rect.top + window.scrollY - 160,
+          behavior: 'smooth'
+        });
+      }
+      
+      els.forEach(el => el.classList.remove('entity-flash'));
+      void els[0].offsetWidth; // force reflow
+      els[0].classList.add('entity-flash');
+      setTimeout(() => els[0].classList.remove('entity-flash'), 1600);
+    }
+  }, [entityToGroupMap]);
+
+  const gotoMention = useCallback((i: number, total: number) => {
+    const els = mentionsRef.current;
+    if (!els.length) return;
+    const idx = (i + total) % total;
+    const el = els[idx];
+    
+    const scrollContainer = document.getElementById('main-content-display');
+    if (scrollContainer) {
+      scrollContainer.scrollTo({
+        top: el.getBoundingClientRect().top + scrollContainer.scrollTop - 160,
+        behavior: 'smooth'
+      });
+    } else {
+      window.scrollTo({
+        top: el.getBoundingClientRect().top + window.scrollY - 160,
+        behavior: 'smooth'
+      });
+    }
+    
+    els.forEach(e => e.classList.remove('entity-flash'));
+    void el.offsetWidth; // force reflow
+    el.classList.add('entity-flash');
+    
+    setNav(n => n ? { ...n, idx } : n);
+  }, []);
+
+  const pulseEntity = useCallback((name: string) => {
+    const key = name.toLowerCase().replace(/\s+/g, ' ');
+    const group = entityToGroupMap.get(key);
+    const accentVar = group ? ENTITY_GROUP_CONFIG[group].accentVar : '--entity-default';
+    
+    document.querySelectorAll(`[data-entity="${key}"]`).forEach(el => {
+      el.classList.add('entity-pulse');
+      (el as HTMLElement).style.setProperty('--hl-bd', `var(${accentVar})`);
+    });
+  }, [entityToGroupMap]);
+
+  const clearPulse = useCallback(() => {
+    document.querySelectorAll('.entity-pulse').forEach(el => {
+      el.classList.remove('entity-pulse');
+    });
+  }, []);
+
   const toggleExpandedChemical = useCallback((key: string) => {
     setExpandedChemical(prev => prev === key ? null : key);
   }, []);
@@ -361,28 +462,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       [label]: !current[label],
     }));
   }, []);
-
-  const toggleHighlightGroup = useCallback((label: EntityGroupLabel) => {
-    setEnabledHighlightGroups((current) => ({
-      ...current,
-      [label]: !current[label],
-    }));
-  }, []);
-
-  const toggleAllHighlightGroups = useCallback(() => {
-    setEnabledHighlightGroups((current) => {
-      const allEnabled = ENTITY_GROUP_ORDER.every(label => current[label]);
-      const nextState = {} as Record<EntityGroupLabel, boolean>;
-      ENTITY_GROUP_ORDER.forEach(label => {
-        nextState[label] = !allEnabled;
-      });
-      return nextState;
-    });
-  }, []);
-
-  const activeGroupsCount = Object.values(enabledHighlightGroups).filter(Boolean).length;
-  const isAllEnabled = activeGroupsCount === ENTITY_GROUP_ORDER.length;
-  const isNoneEnabled = activeGroupsCount === 0;
 
   const isExpandedChemical = activeChemicalPopup && expandedChemical === activeChemicalPopup.chemical.primaryName;
 
@@ -776,6 +855,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [entities, html]);
 
   const groupedEntityMap = useMemo(() => groupedEntities(), [groupedEntities]);
+  const sanitizedHtml = useMemo(() => sanitizeHtml(html), [html]);
 
   const visibleGroupedEntities = useMemo(() => {
     return ENTITY_GROUP_ORDER.map((label) => {
@@ -803,7 +883,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setEnabledHighlightGroups(createInitialEnabledHighlightGroups());
     closeSpeciesPopup();
     closeChemicalPopup();
-  }, [isExtracted, groupedEntityMap, closeSpeciesPopup, closeChemicalPopup]);
+  }, [closeSpeciesPopup, closeChemicalPopup]);
 
   useEffect(() => {
     const resetTimer = window.setTimeout(() => {
@@ -812,6 +892,78 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
     return () => window.clearTimeout(resetTimer);
   }, [identifierValue, html, resetReaderUiState]);
+
+  // close the export menu on outside click
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [exportOpen]);
+
+  const triggerExportCsv = useCallback(() => {
+    const escape = (val: string | number | undefined | null) => {
+      if (val == null) return '';
+      const str = String(val);
+      return str.includes(',') || str.includes('"') || str.includes('\n')
+        ? `"${str.replace(/"/g, '""')}"`
+        : str;
+    };
+    // Build grouped data from existing grouping logic
+    const grouped = groupedEntityMap;
+    // Sort groups alphabetically (already alphabetical by label names)
+    const sortedLabels = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
+    const rows: string[] = [];
+    for (const label of sortedLabels) {
+      const items = [...grouped[label]].sort((a, b) => a.text.localeCompare(b.text));
+      for (const item of items) {
+        rows.push(
+          [label, item.text, String(item.count), item.aliases.slice(0, 5).join('; ')].map(escape).join(',')
+        );
+      }
+    }
+    const csv = `# ${paperIdentifier?.type?.toUpperCase() || 'PAPER'}: ${identifierValue}\nType,Name,Count,Variants\n${rows.join('\n')}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `entities-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [groupedEntityMap, paperIdentifier, identifierValue]);
+
+  const triggerExportGraph = useCallback(() => {
+    const nodes = entities.map((e) => ({
+      id: `${e.label}-${e.text.toLowerCase()}`,
+      label: e.text,
+      type: e.label,
+      count: (e as Entity & { count?: number }).count || 1
+    }));
+    const edges = entities.map((e) => ({
+      from: `paper-${identifierValue}`,
+      to: `${e.label}-${e.text.toLowerCase()}`
+    }));
+    const graphData = {
+      paper: {
+        type: paperIdentifier?.type,
+        value: identifierValue,
+        title: title
+      },
+      nodes,
+      edges
+    };
+    const blob = new Blob([JSON.stringify(graphData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `graph-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [entities, paperIdentifier, identifierValue, title]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -843,7 +995,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         node.setAttribute('title', species.primaryName);
       });
     });
-  }, [getInteractiveRoots, html, speciesLookup, activeSpeciesPopup]);
+  }, [
+    getInteractiveRoots,
+    html,
+    speciesLookup,
+    activeSpeciesPopup,
+    tab,
+    showHL,
+    nav,
+    expandedGroups,
+    activeChemicalPopup
+  ]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -987,7 +1149,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         node.setAttribute('title', chemicalFallback.primaryName);
       });
     });
-  }, [getInteractiveRoots, html, chemicalLookup, activeChemicalPopup]);
+  }, [
+    getInteractiveRoots,
+    html,
+    chemicalLookup,
+    activeChemicalPopup,
+    tab,
+    showHL,
+    nav,
+    expandedGroups,
+    activeSpeciesPopup
+  ]);
 
   // Chemical popup click/key handlers
   useEffect(() => {
@@ -1096,6 +1268,95 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     };
   }, [activeChemicalPopup, closeChemicalPopup]);
 
+  // Unified effect to dynamically label and bind click events to all inline highlight tags
+  useEffect(() => {
+    const container = htmlContainerRef.current;
+    const titleContainer = titleContainerRef.current;
+
+    // Debug logging
+    (window as any).__phytoquery_debug = {
+      mounted: true,
+      containerExists: !!container,
+      titleContainerExists: !!titleContainer,
+      isExtracted,
+      htmlLength: html?.length || 0,
+      nodesFound: 0
+    };
+
+    if (!isExtracted) return;
+
+    const selector = [
+      '.ent-species, mark.ner-species',
+      '.ent-chemical, mark.ner-chemical',
+      '.ent-plant-part, mark.ner-plant-part',
+      '.ent-development-stage, mark.ner-development-stage',
+      '.ent-extraction-method, mark.ner-extraction-method',
+      '.ent-analytical-technique, mark.ner-analytical-technique, .ent-isolation-method, mark.ner-isolation-method',
+      '.ent-bioactivity, mark.ner-bioactivity',
+      '.ent-disease, mark.ner-disease',
+      '.ent-season, mark.ner-season',
+      '.ent-location, mark.ner-location'
+    ].join(', ');
+
+    const nodes: HTMLElement[] = [];
+    if (container) {
+      nodes.push(...Array.from(container.querySelectorAll<HTMLElement>(selector)));
+    }
+    if (titleContainer) {
+      nodes.push(...Array.from(titleContainer.querySelectorAll<HTMLElement>(selector)));
+    }
+
+    (window as any).__phytoquery_debug.nodesFound = nodes.length;
+    (window as any).__phytoquery_debug.matchedTags = nodes.slice(0, 5).map(n => ({
+      tag: n.tagName,
+      text: n.textContent?.trim(),
+      classes: n.className,
+      hasDataEntity: n.hasAttribute('data-entity'),
+      dataEntityVal: n.getAttribute('data-entity')
+    }));
+
+    const clickHandlers: { node: HTMLElement; handler: (e: MouseEvent) => void }[] = [];
+
+    nodes.forEach((node) => {
+      const name = node.textContent?.trim();
+      if (!name) return;
+      
+      const lowerName = name.toLowerCase().replace(/\s+/g, ' ');
+      node.setAttribute('data-entity', lowerName);
+      node.style.cursor = 'pointer';
+
+      const handler = () => {
+        activateEntity(name);
+      };
+      
+      node.addEventListener('click', handler);
+      clickHandlers.push({ node, handler });
+    });
+
+    if (nodes.length > 0) {
+      (window as any).__phytoquery_debug.node1_outerHTML_after_setAttribute = nodes[0].outerHTML;
+    }
+
+    return () => {
+      clickHandlers.forEach(({ node, handler }) => {
+        if (node.isConnected) {
+          node.removeEventListener('click', handler);
+        }
+      });
+    };
+  }, [
+    html,
+    isExtracted,
+    entities,
+    activateEntity,
+    tab,
+    showHL,
+    nav,
+    expandedGroups,
+    activeSpeciesPopup,
+    activeChemicalPopup
+  ]);
+
   // Setup scroll spy for section headings
   useEffect(() => {
     if (!htmlContainerRef.current) return;
@@ -1138,626 +1399,721 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   // Citation click handler - REMOVED (references section no longer displayed)
 
-  return (
-    <div className="flex flex-col lg:flex-row min-h-screen bg-white w-full max-w-full overflow-x-hidden">
-      {/* Left Sidebar: Table of Contents */}
-<aside className="hidden lg:flex flex-col w-[260px] border-r border-slate-100 p-6 space-y-6 h-screen sticky top-0 overflow-y-auto shrink-0 bg-white custom-scrollbar">
-          <div className="mb-4">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] title-font">
-              Sections
-            </h3>
-          </div>
+  const miniNavStyle: React.CSSProperties = {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    display: "grid",
+    placeItems: "center",
+    background: "var(--surface-c)",
+    color: "var(--on-surface)",
+    border: "none",
+    cursor: "pointer",
+    fontSize: 8,
+    fontWeight: "bold"
+  };
 
-          <nav className="flex flex-col space-y-0.5">
-            {toc.map((item, idx) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setCurrentSectionIdx(idx);
-                  setActiveHeading(null);
-                  scrollToId(item.id);
-                }}
-                data-toc-id={`toc-${item.id}`}
-                className={`toc-lnk w-full text-left text-[11px] font-semibold uppercase tracking-wider transition-all duration-200 py-2.5 px-4 rounded-xl relative
-                  ${
-                    idx === currentSectionIdx && !activeHeading
-                      ? 'toc-item-active bg-blue-50 text-blue-600'
-                      : idx === currentSectionIdx
-                      ? 'text-blue-500'
-                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-                  }`}
-                style={{ paddingLeft: `${(item.level || 1) * 0.5 + 1}rem` }}
-              >
-                {idx === currentSectionIdx && !activeHeading && (
-                  <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-blue-600 rounded-r" />
-                )}
-                {item.text}
-              </button>
-            ))}
+  return (
+    <div className="w-full max-w-[1440px] mx-auto px-6 lg:px-14 py-8 paper-enter">
+      {/* Back Link */}
+      <button 
+        onClick={onBack} 
+        className="paper-back hover:text-on-surface flex items-center gap-2 bg-transparent border-0 cursor-pointer text-on-surface-variant text-[14px] font-medium p-1 mb-5 transition-colors"
+      >
+        <ArrowLeft size={16} weight="bold" /> Back to results
+      </button>
+
+      <div className={`grid grid-cols-1 lg:grid-cols-[190px_minmax(0,1fr)_300px] gap-14 items-start w-full ${showHL ? '' : 'hl-off'}`}>
+        
+        {/* Left Sidebar: Table of Contents */}
+        <aside 
+          style={{
+            width: 220, flexShrink: 0,
+            position: "sticky", top: 232, height: "fit-content",
+            paddingRight: 8, marginTop: 39, marginLeft: -12
+          }} 
+          className="hidden lg:block shrink-0"
+        >
+          <div style={{
+            fontSize: 15, fontWeight: 500, color: "var(--on-surface)",
+            marginBottom: 18, paddingLeft: 19
+          }}>Sections</div>
+
+          <nav style={{ display: "flex", flexDirection: "column" }}>
+            {toc.map((item, idx) => {
+              const active = idx === currentSectionIdx;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setCurrentSectionIdx(idx);
+                    setActiveHeading(null);
+                    scrollToId(item.id);
+                  }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 16,
+                    width: "100%", textAlign: "left",
+                    background: "transparent", border: "none", cursor: "pointer",
+                    padding: "9px 0"
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) {
+                      const span = e.currentTarget.querySelector('span:last-child') as HTMLElement;
+                      if (span) span.style.color = "var(--on-surface)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) {
+                      const span = e.currentTarget.querySelector('span:last-child') as HTMLElement;
+                      if (span) span.style.color = "var(--on-surface-variant)";
+                    }
+                  }}
+                >
+                  <span style={{
+                    width: 3, alignSelf: "stretch", borderRadius: 999,
+                    background: active ? "var(--on-surface)" : "transparent",
+                    flexShrink: 0
+                  }} />
+                  <span style={{
+                    fontSize: 15.5,
+                    fontWeight: active ? 700 : 400,
+                    color: active ? "var(--on-surface)" : "var(--on-surface-variant)",
+                    transition: "color .15s"
+                  }}>{item.text}</span>
+                </button>
+              );
+            })}
           </nav>
         </aside>
 
         {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-white border-r border-slate-100 relative">
-        {/* Header */}
-        <div className="p-10 lg:p-14 border-b border-slate-50 flex justify-between items-center bg-white sticky top-0 z-20">
-          <div>
-            <div className="flex items-center mb-2">
-              <div className="flex items-center space-x-3">
-                 <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full uppercase tracking-widest">
-                   {mode}
-                 </span>
-                  {fallbackSource && (
-                    <span
-                      className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest ${
-                        fallbackSource.source.toLowerCase().includes('openalex')
-                          ? 'bg-slate-100 text-slate-700'
-                          : fallbackSource.source.toLowerCase().includes('semantic')
-                          ? 'bg-yellow-50 text-yellow-700'
-                          : fallbackSource.source.toLowerCase().includes('europe')
-                          ? 'bg-emerald-50 text-emerald-600'
-                          : 'bg-slate-100 text-slate-700'
-                      }`}
-                    >
-                      {fallbackSource.source}
-                    </span>
-                  )}
-                 {paperIdentifier && (
-                  <a
-                    href={paperIdentifier.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[9px] text-slate-400 font-medium tracking-wider uppercase hover:text-blue-600 transition-colors"
-                  >
-                    {paperIdentifier.type.toUpperCase()}: {paperIdentifier.value}
-                  </a>
-                )}
-              </div>
-              {paperDate && (
-                <span className="text-[9px] text-slate-400 font-medium tracking-wider ml-auto">
-                  {paperDate}
-                </span>
-              )}
-            </div>
-              <h1
-                ref={titleContainerRef}
-                data-disabled-entity-groups={disabledHighlightGroupData}
-                className="text-3xl font-bold text-slate-900 tracking-tight title-font"
-                dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(title) || 'Untitled Paper' }}
-              />
-            {(paperAuthors.length > 0 || paperJournal) && (
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                {paperAuthors.length > 0 && (
-                  <span className="truncate max-w-md" title={paperAuthors.join(', ')}>
-                    {paperAuthors.slice(0, 3).join(', ')}{paperAuthors.length > 3 ? ' et al.' : ''}
-                  </span>
-                )}
-                {paperJournal && (
-                  <>
-                    <span className="text-slate-300">•</span>
-                    <span>{paperJournal}</span>
-                  </>
-                )}
-              </div>
+        <main className="w-full max-w-[990px] min-w-0 flex flex-col bg-background relative">
+          
+          {/* Metadata Row */}
+          <div className="flex items-center gap-2.5 mb-[18px] text-[12.5px] text-on-surface-variant">
+            <span style={{
+              height: 22, padding: "0 11px", borderRadius: 999,
+              background: "#ECFDF3", color: "#16794C",
+              fontSize: 10.5, fontWeight: 600, letterSpacing: ".04em",
+              display: "inline-flex", alignItems: "center"
+            }} className="uppercase">
+              {fallbackSource ? fallbackSource.source : mode}
+            </span>
+            {paperIdentifier && (
+              <a
+                href={paperIdentifier.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-on-surface-variant hover:text-primary transition-colors uppercase"
+              >
+                {paperIdentifier.type.toUpperCase()}: {paperIdentifier.value}
+              </a>
             )}
-            {canUsePdfActions && (
-              <>
-                <div className="mt-4 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={onDownloadPdf}
-                    disabled={isDownloadingPdf}
-                    title="Download"
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
-                      isDownloadingPdf ? 'cursor-wait opacity-60' : ''
-                    }`}
-                  >
-                    {isDownloadingPdf ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <Download size={18} weight="bold" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={onAddToAnalyse}
-                    disabled={isAddingToAnalyse}
-                    title="Analyse"
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
-                      isAddingToAnalyse ? 'cursor-wait opacity-60' : ''
-                    }`}
-                  >
-                    {isAddingToAnalyse ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <ListMagnifyingGlass size={18} weight="bold" />
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={onSendPdfToRag}
-                    disabled={isUploadingToRag}
-                    title="Chat"
-                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:text-slate-700 ${
-                      isUploadingToRag ? 'cursor-wait opacity-60' : ''
-                    }`}
-                  >
-                    {isUploadingToRag ? (
-                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-                    ) : (
-                      <Chats size={18} weight="bold" />
-                    )}
-                  </button>
-                </div>
-
-                {pdfToolbarError && (
-                  <p className="mt-2 text-xs text-red-500">{pdfToolbarError}</p>
-                )}
-              </>
+            {paperDate && (
+              <span className="ml-auto">
+                {paperDate}
+              </span>
             )}
           </div>
-        </div>
 
-        {/* Section Content - Continuous Scroll (HTML blob) */}
-         <div
+          {/* Title */}
+          <h1
+            ref={titleContainerRef}
+            data-disabled-entity-groups={disabledHighlightGroupData}
+            id="abstract"
+            className="text-3xl lg:text-[38px] font-bold text-on-surface tracking-tight leading-[1.18] mb-5"
+            style={{ fontFamily: 'Georgia, "Times New Roman", serif', letterSpacing: "-0.01em" }}
+          >
+            <span dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(title) || 'Untitled Paper' }} />
+          </h1>
+
+          {/* Authors & Journal Byline */}
+          <div className="flex items-center gap-2.5 mb-[18px] flex-wrap text-[14.5px] text-on-surface-variant">
+            {paperAuthors.length > 0 && (
+              <span className="text-on-surface">
+                <strong>{paperAuthors.slice(0, 3).join(', ')}</strong>
+                {paperAuthors.length > 3 ? ' et al.' : ''}
+              </span>
+            )}
+            {paperAuthors.length > 0 && paperJournal && <span className="text-outline">•</span>}
+            {paperJournal && <span className="italic">{paperJournal}</span>}
+            
+            {/* Quiet Status Icons on the right */}
+            <span className="ml-auto flex items-center gap-1">
+              <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
+                <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
+                  <path d="M208,80H96V56a32,32,0,0,1,64,0,8,8,0,0,0,16,0,48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80Zm0,128H48V96H208V208Z" />
+                </svg>
+              </span>
+              <span className="status-ic" title="Full text available" style={{ color: "#15803D" }}>
+                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
+                  <path d="M224,48H32a8,8,0,0,0-8,8V200a8,8,0,0,0,8,8H224a8,8,0,0,0,8-8V56a8,8,0,0,0-8-8Zm-8,144H40V64H216V192Z" />
+                </svg>
+              </span>
+            </span>
+          </div>
+
+          {/* Action Row */}
+          <div className="flex items-center gap-6 mb-7">
+            <button 
+              onClick={onDownloadPdf} 
+              disabled={isDownloadingPdf} 
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              title="Download"
+            >
+              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
+                <path d="M224,144v48a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V144a8,8,0,0,1,16,0v48H208V144a8,8,0,0,1,16,0Zm-88,0V48a8,8,0,0,0-16,0v96L88,112a8,8,0,0,0-11.31,11.31l48,48a8,8,0,0,0,11.31,0l48-48a8,8,0,0,0-11.31-11.31Z" />
+              </svg>
+              Download
+            </button>
+
+            <button 
+              onClick={onAddToAnalyse} 
+              disabled={isAddingToAnalyse} 
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              title="Analyse"
+            >
+              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
+                <path d="M224,200a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V56a8,8,0,0,1,16,0V192H216a8,8,0,0,1,8,8ZM205.66,82.34l-56,56a8,8,0,0,1-11.32,0L104,103.31,73.66,133.66a8,8,0,0,1-11.32-11.32l36-36a8,8,0,0,1,11.32,0L144,120.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" />
+              </svg>
+              Analyse
+            </button>
+
+            <button 
+              onClick={onSendPdfToRag} 
+              disabled={isUploadingToRag} 
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              title="Chat"
+            >
+              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
+                <path d="M232,112a88,88,0,0,0-161.46-44.82A88.13,88.13,0,0,0,51.82,204.16L32.22,223.77A8,8,0,0,0,37.88,237.5a133,133,0,0,0,86.6-32A87.65,87.65,0,0,0,144,200a88,88,0,0,0,88-88Zm-16,0a72,72,0,0,1-125.79,48.06,8,8,0,0,0-9.87-1.46,117.14,117.14,0,0,1-36.63,16l10.37-25.29a8,8,0,0,0-1.15-8A72,72,0,0,1,216,112Z" />
+              </svg>
+              Chat
+            </button>
+
+            <button 
+              onClick={() => setShowHL(v => !v)} 
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors ml-auto p-1"
+              title={showHL ? "Hide highlights" : "Show highlights"}
+            >
+              {showHL ? (
+                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
+                  <path d="M247.31,124.76c-.35-.79-49-110.76-119.31-110.76S9.04,124,8.69,124.76a8,8,0,0,0,0,6.48c.35.79,49,110.76,119.31,110.76s119-110,119.31-110.76A8,8,0,0,0,247.31,124.76ZM128,224c-50.78,0-89.09-70.36-96-96,6.91-25.64,45.22-96,96-96s89.09,70.36,96,96C217.09,153.64,178.78,224,128,224Zm0-144a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
+                  <path d="M241.6,183.1a8,8,0,0,1-11,2.5,124.63,124.63,0,0,1-102.6,38.4C57.7,224,9,128,9,128s32.2-64,74.5-83.3a8,8,0,1,1,6.6,14.6C54.4,75.1,25.6,128,25.6,128s44,80,102.4,80c29.1,0,59-15.6,76.5-36.4a8,8,0,0,1,11-2.5C227,175.1,241.6,177.5,241.6,183.1Z" opacity="0.4" />
+                  <path d="M53.9,42.7a8,8,0,1,1,11.3,11.3l-12,12a8,8,0,0,1-11.3-11.3l12-12a8,8,0,0,1,53.9,42.7Zm19.5,148.6a8,8,0,0,1,0,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3-11.3ZM214.1,42.7a8,8,0,0,1,0,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3,0Zm-19.5,148.6a8,8,0,1,1,11.3,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3,0ZM128,80a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" />
+                </svg>
+              )}
+            </button>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)", margin: "0 0 32px" }} />
+
+          {/* Section Content */}
+          <div
             ref={htmlContainerRef}
             id="section-content-area"
             data-disabled-entity-groups={disabledHighlightGroupData}
-            className="p-10 lg:px-20 lg:py-14 min-h-screen article-prose"
-            dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }}
-          />
-        {activeSpeciesPopup && (
-          <div
-            ref={speciesPopupRef}
-            role="dialog"
-            aria-label={`Species metadata for ${activeSpeciesPopup.species.primaryName}`}
-            className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-emerald-100 bg-white p-4 shadow-2xl shadow-slate-900/10"
-            style={{
-              top: `${activeSpeciesPopup.position.top}px`,
-              left: `${activeSpeciesPopup.position.left}px`,
-            }}
+            className="article-prose scroll-mt-20"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-600">
-                  Species
-                </p>
-                <h3 className="mt-2 text-sm font-semibold text-slate-900 italic leading-snug">
-                  {activeSpeciesPopup.species.scientificNameVerified || activeSpeciesPopup.species.primaryName}
-                </h3>
-                {activeSpeciesPopup.species.commonName && normalizeLookupText(activeSpeciesPopup.species.commonName) !== normalizeLookupText(activeSpeciesPopup.species.primaryName) && (
-                  <p className="mt-1 text-[11px] font-medium text-slate-500 normal-case">
-                    {activeSpeciesPopup.species.commonName}
+            <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+          </div>
+
+          {/* Species Popup */}
+          {activeSpeciesPopup && (
+            <div
+              ref={speciesPopupRef}
+              role="dialog"
+              aria-label={`Species metadata for ${activeSpeciesPopup.species.primaryName}`}
+              className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-teal-100 bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
+              style={{
+                top: `${activeSpeciesPopup.position.top}px`,
+                left: `${activeSpeciesPopup.position.left}px`,
+              }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-teal-600">
+                    Species
                   </p>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={closeSpeciesPopup}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-300 hover:text-slate-600"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
-              {/* Taxon ID */}
-              {activeSpeciesPopup.species.taxonId && (
-                <div className="flex items-start gap-2">
-                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Taxon</span>
-                  <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.taxonId}</span>
-                </div>
-              )}
-
-              {/* Source DB and URL */}
-              {(activeSpeciesPopup.species.sourceDb || activeSpeciesPopup.species.sourceUrl) && (
-                <div className="flex items-start gap-2">
-                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Source</span>
-                  {activeSpeciesPopup.species.sourceUrl ? (
-                    <a
-                      href={activeSpeciesPopup.species.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-w-0 break-words font-medium text-blue-600 hover:underline"
-                    >
-                      {activeSpeciesPopup.species.sourceDb || 'View'}
-                    </a>
-                  ) : (
-                    <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.sourceDb}</span>
+                  <h3 className="mt-2 text-sm font-semibold text-on-surface italic leading-snug">
+                    {activeSpeciesPopup.species.scientificNameVerified || activeSpeciesPopup.species.primaryName}
+                  </h3>
+                  {activeSpeciesPopup.species.commonName && normalizeLookupText(activeSpeciesPopup.species.commonName) !== normalizeLookupText(activeSpeciesPopup.species.primaryName) && (
+                    <p className="mt-1 text-[11px] font-medium text-on-surface-variant normal-case">
+                      {activeSpeciesPopup.species.commonName}
+                    </p>
                   )}
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-        {activeChemicalPopup && (
-          <div
-            ref={chemicalPopupRef}
-            role="dialog"
-            aria-label={`Chemical metadata for ${activeChemicalPopup.chemical.primaryName}`}
-            className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-blue-100 bg-white p-4 shadow-2xl shadow-slate-900/10"
-            style={{
-              top: `${activeChemicalPopup.position.top}px`,
-              left: `${activeChemicalPopup.position.left}px`,
-            }}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-blue-600">
-                  Chemical
-                </p>
-                <h3 className="mt-2 text-sm font-semibold text-slate-900 leading-snug">
-                  {activeChemicalPopup.chemical.primaryName}
-                </h3>
-                {activeChemicalPopup.chemical.preferredName && normalizeLookupText(activeChemicalPopup.chemical.preferredName) !== normalizeLookupText(activeChemicalPopup.chemical.primaryName) && (
-                  <p className="mt-1 text-[11px] font-medium text-slate-500 normal-case">
-                    {activeChemicalPopup.chemical.preferredName}
-                  </p>
+                <button
+                  type="button"
+                  onClick={closeSpeciesPopup}
+                  className="rounded-lg border border-border px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-muted transition-colors hover:border-outline hover:text-on-surface-variant cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-2 border-t border-border pt-3 text-[10px] text-on-surface-variant">
+                {activeSpeciesPopup.species.taxonId && (
+                  <div className="flex items-start gap-2">
+                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Taxon</span>
+                    <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.taxonId}</span>
+                  </div>
                 )}
-                {activeChemicalPopup.chemical.synonyms && activeChemicalPopup.chemical.synonyms.length > 0 && (
-                  <div className="mt-1 text-[10px] font-medium text-slate-400 normal-case">
-                    Also: {isExpandedChemical ? (
-                      <>
-                        {activeChemicalPopup.chemical.synonyms.join(', ')}
-                        <button
-                          type="button"
-                          onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
-                          className="ml-1 font-semibold text-blue-600 hover:underline"
-                        >
-                          Show less
-                        </button>
-                      </>
+                {(activeSpeciesPopup.species.sourceDb || activeSpeciesPopup.species.sourceUrl) && (
+                  <div className="flex items-start gap-2">
+                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Source</span>
+                    {activeSpeciesPopup.species.sourceUrl ? (
+                      <a
+                        href={activeSpeciesPopup.species.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 break-words font-medium text-primary hover:underline"
+                      >
+                        {activeSpeciesPopup.species.sourceDb || 'View'}
+                      </a>
                     ) : (
-                      <>
-                        {activeChemicalPopup.chemical.synonyms.slice(0, 3).join(', ')}
-                        {activeChemicalPopup.chemical.synonyms.length > 3 && (
-                          <button
-                            type="button"
-                            onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
-                            className="ml-1 font-semibold text-blue-600 hover:underline"
-                          >
-                            +{activeChemicalPopup.chemical.synonyms.length - 3} more
-                          </button>
-                        )}
-                      </>
+                      <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.sourceDb}</span>
                     )}
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={closeChemicalPopup}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-300 hover:text-slate-600"
-              >
-                Close
-              </button>
             </div>
-
-            {/* Molecular Structure */}
-            <div className="mt-3 min-h-[19rem] rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-4">
-              {activeChemicalPopup.chemical.smiles ? (
-                <div className="relative flex min-h-[17rem] items-center justify-center">
-                  {isRenderingChemicalStructure && (
-                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-white/75 backdrop-blur-[1px]">
-                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500" />
-                      <p className="text-xs font-medium text-slate-500">Rendering structure…</p>
-                    </div>
-                  )}
-                  {!chemicalStructureError ? (
-                    <svg
-                      ref={chemicalStructureSvgRef}
-                      className="h-auto max-h-[18rem] w-full max-w-[24rem]"
-                      viewBox="0 0 400 300"
-                      aria-label={`${activeChemicalPopup.chemical.primaryName} molecular structure`}
-                    />
-                  ) : (
-                    <div className="text-xs text-slate-400">No structure</div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex min-h-[17rem] items-center justify-center text-xs text-slate-400">No structure</div>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 text-[10px] text-slate-600">
-              {/* Molecular Formula */}
-              {activeChemicalPopup.chemical.molecularFormula && (
-                <div className="flex items-start gap-2">
-                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Formula</span>
-                  <span className="min-w-0 break-words font-mono font-medium">{activeChemicalPopup.chemical.molecularFormula}</span>
-                </div>
-              )}
-
-              {/* InChIKey */}
-              {activeChemicalPopup.chemical.inchikey && (
-                <div className="flex items-start gap-2">
-                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">InChIKey</span>
-                  <span className="min-w-0 break-words font-mono font-medium break-all">{activeChemicalPopup.chemical.inchikey}</span>
-                </div>
-              )}
-
-              {/* Source DB and URL */}
-              {(activeChemicalPopup.chemical.sourceDb || activeChemicalPopup.chemical.sourceUrl) && (
-                <div className="flex items-start gap-2">
-                  <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-slate-400">Source</span>
-                  {activeChemicalPopup.chemical.sourceUrl ? (
-                    <a
-                      href={activeChemicalPopup.chemical.sourceUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="min-w-0 break-words font-medium text-blue-600 hover:underline"
-                    >
-                      {activeChemicalPopup.chemical.sourceDb || 'View'}
-                    </a>
-                  ) : (
-                    <span className="min-w-0 break-words font-medium">{activeChemicalPopup.chemical.sourceDb}</span>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {isFetchingFallback && (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-6 w-6 border-2 border-slate-200 border-t-emerald-600 mx-auto mb-3" />
-              <p className="text-xs text-slate-400">Fetching abstract from alternative sources...</p>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Right Sidebar: Entity Groups */}
-      <aside className="w-full lg:w-[380px] p-8 space-y-10 bg-slate-50/20 h-screen sticky top-0 overflow-y-auto custom-scrollbar shrink-0 relative z-30">
-        {/* Find Key Terms Button */}
-        <button
-          onClick={() => {
-            if (onExtract && !isExtracting && !isExtracted) onExtract();
-          }}
-          disabled={isExtracted || isExtracting}
-          className={`w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg ${
-            isExtracted 
-              ? 'bg-slate-200 text-slate-500 cursor-not-allowed' 
-              : isExtracting
-              ? 'bg-blue-100 text-blue-400 cursor-wait animate-pulse'
-              : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-100 cursor-pointer'
-          }`}
-        >
-          {isExtracting ? (
-            <div className="animate-spin rounded-full h-3 w-3 border-2 border-blue-400 border-t-blue-600 mr-2" />
-          ) : (
-            <PencilSimple size={16} weight="bold" />
           )}
-          <span>
-            {isExtracted ? 'Entities Extracted' : isExtracting ? 'Extracting Terms...' : 'Find Key Terms'}
-          </span>
-        </button>
 
-        {/* Export CSV */}
-        {isExtracted && entities.length > 0 && (
-          <button
-            onClick={() => {
-              const escape = (val: string | number | undefined | null) => {
-                if (val == null) return '';
-                const str = String(val);
-                return str.includes(',') || str.includes('"') || str.includes('\n')
-                  ? `"${str.replace(/"/g, '""')}"`
-                  : str;
-              };
-              // Build grouped data from existing grouping logic
-              const grouped = groupedEntityMap;
-              // Sort groups alphabetically (already alphabetical by label names)
-              const sortedLabels = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
-              const rows: string[] = [];
-              for (const label of sortedLabels) {
-                const items = [...grouped[label]].sort((a, b) => a.text.localeCompare(b.text));
-                for (const item of items) {
-                  rows.push(
-                    [label, item.text, String(item.count), item.aliases.slice(0, 5).join('; ')].map(escape).join(',')
-                  );
-                }
-              }
-              const csv = `# ${paperIdentifier?.type?.toUpperCase() || 'PAPER'}: ${identifierValue}\nType,Name,Count,Variants\n${rows.join('\n')}`;
-              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `entities-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-            className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-100 cursor-pointer"
-          >
-            <Table size={16} weight="bold" />
-            <span>Export Entities</span>
-          </button>
-        )}
-
-        {extractionError && (
-          <div className="p-4 bg-red-50 border border-red-100 rounded-xl">
-            <p className="text-[10px] text-red-600 font-bold uppercase tracking-wider mb-1">Extraction Error</p>
-            <p className="text-[11px] text-red-500 leading-relaxed font-medium">{extractionError}</p>
-          </div>
-        )}
-
-        <div className="flex flex-col flex-1 mt-2">
-          {/* Header & Master Toggle */}
-          <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
-            <div className="flex items-center gap-3">
-              <span className="text-[14px] font-semibold text-slate-900 font-display">Entity Index</span>
-            </div>
-            
-            <div 
-              className="flex items-center gap-2 cursor-pointer select-none group" 
-              onClick={toggleAllHighlightGroups}
+          {/* Chemical Popup */}
+          {activeChemicalPopup && (
+            <div
+              ref={chemicalPopupRef}
+              role="dialog"
+              aria-label={`Chemical metadata for ${activeChemicalPopup.chemical.primaryName}`}
+              className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-primary/20 bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
+              style={{
+                top: `${activeChemicalPopup.position.top}px`,
+                left: `${activeChemicalPopup.position.left}px`,
+              }}
             >
-              <div className={`w-[16px] h-[16px] rounded border-[1.5px] flex items-center justify-center transition-all ${isAllEnabled ? 'bg-slate-900 border-slate-900' : isNoneEnabled ? 'bg-white border-slate-300 group-hover:border-slate-400' : 'bg-white border-slate-400'}`}>
-                {isAllEnabled && (
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                    <polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                )}
-                {!isAllEnabled && !isNoneEnabled && (
-                  <div className="w-[8px] h-[1.5px] bg-slate-500 rounded-sm"></div>
-                )}
-              </div>
-              <span className="text-[10px] font-semibold text-slate-500 tracking-wide font-display">{isAllEnabled ? 'All' : isNoneEnabled ? 'None' : `${activeGroupsCount}`}</span>
-            </div>
-          </div>
-
-            <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-
-              <div className="flex flex-col bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-                {visibleGroupedEntities.map((group) => {
-                  const isExpanded = expandedGroups[group.label];
-                  const isHighlightEnabled = enabledHighlightGroups[group.label];
-                  const accentColor = `var(${group.accentVar})`;
-
-                  return (
-                    <div 
-                      key={group.label} 
-                      className="relative border-b-[0.5px] border-slate-200 last:border-0" 
-                      style={{ borderLeft: isExpanded ? `2.5px solid ${accentColor}` : '2.5px solid transparent' }}
-                    >
-                      {/* Entity Row (.e-row) */}
-                      <div 
-                        className={`flex items-center gap-3 py-2.5 px-3 cursor-pointer transition-colors hover:bg-slate-50 ${isHighlightEnabled ? '' : 'opacity-50 grayscale-[0.5]'}`}
-                        onClick={() => toggleHighlightGroup(group.label)}
-                      >
-                        <div 
-                          className="w-[3px] h-8 rounded-sm shrink-0" 
-                          style={{ backgroundColor: accentColor, opacity: isHighlightEnabled ? (group.termCount === 0 ? 0.3 : 1) : 0.15 }}
-                        />
-                        <div className="flex-1 flex flex-col gap-[2px] min-w-0">
-                          <span 
-                            className="text-[11px] font-semibold text-slate-800 font-display truncate capitalize"
-                            style={{ color: isExpanded ? accentColor : undefined }}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-primary">
+                    Chemical
+                  </p>
+                  <h3 className="mt-2 text-sm font-semibold text-on-surface leading-snug">
+                    {activeChemicalPopup.chemical.primaryName}
+                  </h3>
+                  {activeChemicalPopup.chemical.preferredName && normalizeLookupText(activeChemicalPopup.chemical.preferredName) !== normalizeLookupText(activeChemicalPopup.chemical.primaryName) && (
+                    <p className="mt-1 text-[11px] font-medium text-on-surface-variant normal-case">
+                      {activeChemicalPopup.chemical.preferredName}
+                    </p>
+                  )}
+                  {activeChemicalPopup.chemical.synonyms && activeChemicalPopup.chemical.synonyms.length > 0 && (
+                    <div className="mt-1 text-[10px] font-medium text-on-surface-muted normal-case">
+                      Also: {isExpandedChemical ? (
+                        <>
+                          {activeChemicalPopup.chemical.synonyms.join(', ')}
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
+                            className="ml-1 font-semibold text-primary hover:underline cursor-pointer"
                           >
-                            {group.label.toLowerCase()}
-                          </span>
-                          {group.termCount > 0 && (
-                            <div 
-                              className="h-2 w-full rounded-[2px] transition-opacity"
-                              style={{ 
-                                backgroundColor: `rgb(var(${group.accentVar}-rgb) / 0.13)`, 
-                                opacity: isHighlightEnabled ? 1 : 0.1
-                              }}
-                            />
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span 
-                            className="text-[10px] font-mono text-right min-w-[1.5rem]"
-                            style={{ color: group.termCount === 0 ? '#cbd5e1' : accentColor, opacity: isHighlightEnabled ? 1 : 0.2 }}
-                          >
-                            {group.termCount || '—'}
-                          </span>
-                          {group.termCount > 0 && (
-                            <button 
+                            Show less
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {activeChemicalPopup.chemical.synonyms.slice(0, 3).join(', ')}
+                          {activeChemicalPopup.chemical.synonyms.length > 3 && (
+                            <button
                               type="button"
-                              className={`text-[9px] text-slate-300 transition-transform duration-200 px-1.5 py-1 hover:text-slate-500 ${isExpanded ? 'rotate-90' : ''}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleEntityGroup(group.label);
-                              }}
+                              onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
+                              className="ml-1 font-semibold text-primary hover:underline cursor-pointer"
                             >
-                              ▶
+                              +{activeChemicalPopup.chemical.synonyms.length - 3} more
                             </button>
                           )}
-                        </div>
-                      </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={closeChemicalPopup}
+                  className="rounded-lg border border-border px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-muted transition-colors hover:border-outline hover:text-on-surface-variant cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
 
-                      {/* Values Expansion (.e-values-wrap) */}
-                      <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out bg-white ${isExpanded && group.visibleItems.length > 0 ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-                        <div className="overflow-hidden min-h-0">
-                          <div className="flex flex-col py-1 border-t-[0.5px] border-slate-100">
+              {/* Molecular Structure */}
+              <div className="mt-3 min-h-[19rem] rounded-xl border border-border bg-surface-c/70 px-3 py-4">
+                {activeChemicalPopup.chemical.smiles ? (
+                  <div className="relative flex min-h-[17rem] items-center justify-center">
+                    {isRenderingChemicalStructure && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/75 backdrop-blur-[1px]">
+                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-teal-200 border-t-teal-500" />
+                        <p className="text-xs font-medium text-on-surface-variant">Rendering structure…</p>
+                      </div>
+                    )}
+                    {!chemicalStructureError ? (
+                      <svg
+                        ref={chemicalStructureSvgRef}
+                        className="h-auto max-h-[18rem] w-full max-w-[24rem]"
+                        viewBox="0 0 400 300"
+                        aria-label={`${activeChemicalPopup.chemical.primaryName} molecular structure`}
+                      />
+                    ) : (
+                      <div className="text-xs text-on-surface-muted">No structure</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex min-h-[17rem] items-center justify-center text-xs text-on-surface-muted">No structure</div>
+                )}
+              </div>
+
+              <div className="mt-4 space-y-2 border-t border-border pt-3 text-[10px] text-on-surface-variant">
+                {activeChemicalPopup.chemical.molecularFormula && (
+                  <div className="flex items-start gap-2">
+                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Formula</span>
+                    <span className="min-w-0 break-words font-mono font-medium">{activeChemicalPopup.chemical.molecularFormula}</span>
+                  </div>
+                )}
+                {activeChemicalPopup.chemical.inchikey && (
+                  <div className="flex items-start gap-2">
+                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">InChIKey</span>
+                    <span className="min-w-0 break-words font-mono font-medium break-all">{activeChemicalPopup.chemical.inchikey}</span>
+                  </div>
+                )}
+                {(activeChemicalPopup.chemical.sourceDb || activeChemicalPopup.chemical.sourceUrl) && (
+                  <div className="flex items-start gap-2">
+                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Source</span>
+                    {activeChemicalPopup.chemical.sourceUrl ? (
+                      <a
+                        href={activeChemicalPopup.chemical.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 break-words font-medium text-primary hover:underline"
+                      >
+                        {activeChemicalPopup.chemical.sourceDb || 'View'}
+                      </a>
+                    ) : (
+                      <span className="min-w-0 break-words font-medium">{activeChemicalPopup.chemical.sourceDb}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {isFetchingFallback && (
+            <div className="flex items-center justify-center py-12">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-6 w-6 border-2 border-border border-t-teal-500 mx-auto mb-3" />
+                <p className="text-xs text-on-surface-muted">Fetching abstract from alternative sources...</p>
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* Right Sidebar: Entity Groups */}
+        <aside className="w-full lg:w-[330px] sticky top-[88px] h-fit flex flex-col gap-3.5 shrink-0 z-30">
+          {!isExtracted ? (
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
+              gap: 16, padding: "32px 24px",
+              border: "1px solid var(--border)", borderRadius: 16,
+              background: "#FFFFFF"
+            }}>
+              <span style={{
+                width: 44, height: 44, borderRadius: 12,
+                display: "grid", placeItems: "center",
+                background: "color-mix(in oklab, var(--blue-A700, #2962FF) 10%, transparent)",
+                color: "var(--blue-A700, #2962FF)"
+              }} className={isExtracting ? "animate-pulse" : ""}>
+                <Sparkle size={22} weight="fill" />
+              </span>
+              <div style={{ fontSize: 13.5, color: "var(--on-surface-variant)", lineHeight: 1.5, maxWidth: 240 }}>
+                Identify chemicals, species, methods and more across the full text.
+              </div>
+              <button 
+                onClick={() => {
+                  if (onExtract && !isExtracting) onExtract();
+                }}
+                disabled={isExtracting}
+                style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9,
+                  height: 44, padding: "0 24px", width: "100%",
+                  borderRadius: 999,
+                  background: "var(--blue-A700, #2962FF)", color: "#fff",
+                  border: "none", cursor: isExtracting ? "wait" : "pointer",
+                  fontSize: 14, fontWeight: 600, letterSpacing: ".01em",
+                  boxShadow: "0 6px 16px -8px rgba(41,98,255,.5)",
+                  transition: "opacity .15s",
+                  opacity: isExtracting ? 0.7 : 1
+                }}
+                onMouseEnter={(e) => { if (!isExtracting) e.currentTarget.style.opacity = "0.9"; }}
+                onMouseLeave={(e) => { if (!isExtracting) e.currentTarget.style.opacity = "1"; }}
+              >
+                {isExtracting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white/30 border-t-white mr-2" />
+                    Extracting Terms...
+                  </>
+                ) : (
+                  <>
+                    <Sparkle size={16} weight="fill" /> Extract Entities
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col flex-1 mt-2">
+              {/* Centered view switcher pill header */}
+              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14 }}>
+                <div style={{
+                  display: "inline-flex", gap: 2,
+                  padding: 5, borderRadius: 999,
+                  border: "none", background: "var(--surface-c)"
+                }}>
+                  {(
+                    [
+                      { id: 'entity', icon: ListBullets, label: 'Entity Index' },
+                      { id: 'graph', icon: Graph, label: 'Graph View' }
+                    ] as const
+                  ).map(({ id, icon: Icon, label }) => {
+                    const isActive = tab === id;
+                    const expanded = hoverTab === id;
+                    return (
+                      <button key={id}
+                        data-tab={id}
+                        onClick={() => setTab(id)}
+                        onMouseEnter={() => setHoverTab(id)}
+                        onMouseLeave={() => setHoverTab(null)}
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+                          height: 34, borderRadius: 999,
+                          width: expanded ? "auto" : 38,
+                          padding: expanded ? "0 14px" : 0,
+                          background: isActive ? "#FFFFFF" : "transparent",
+                          boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                          border: "none", cursor: "pointer",
+                          fontSize: 13, fontWeight: isActive ? 600 : 500,
+                          color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
+                          whiteSpace: "nowrap", overflow: "hidden",
+                          transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
+                        }}>
+                          {expanded ? <span>{label}</span> : <Icon size={16} />}
+                        </button>
+                    );
+                  })}
+                </div>
+
+                {/* Export options pinned right */}
+                <div
+                  ref={exportRef}
+                  style={{ position: "absolute", right: 0, top: 0 }}
+                >
+                  <button 
+                    onClick={() => setExportOpen((o) => !o)} 
+                    title="Export options" 
+                    style={{
+                      width: 40, height: 40, borderRadius: 999,
+                      background: exportOpen ? "var(--surface-c)" : "transparent",
+                      color: "var(--on-surface-variant)",
+                      border: "none", cursor: "pointer",
+                      display: "grid", placeItems: "center",
+                      transition: "background .15s"
+                    }}
+                  >
+                    <DotsThreeVertical size={20} weight="bold" />
+                  </button>
+                  {exportOpen && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", right: 0,
+                      width: "max-content",
+                      background: "#FFFFFF",
+                      border: "1px solid var(--border)", borderRadius: 12,
+                      boxShadow: "0 2px 6px 2px rgba(0, 0, 0, 0.08)",
+                      padding: 5, zIndex: 100,
+                      animation: "fadeUp .16s ease"
+                    }}>
+                      <button 
+                        className="export-opt" 
+                        onClick={() => {
+                          setExportOpen(false);
+                          triggerExportCsv();
+                        }}
+                      >
+                        <span>Export CSV</span>
+                      </button>
+                      <button 
+                        className="export-opt" 
+                        onClick={() => {
+                          setExportOpen(false);
+                          triggerExportGraph();
+                        }}
+                      >
+                        <span>Export Graph</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Accordion or KnowledgeGraph */}
+              {tab === 'entity' ? (
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                  {visibleGroupedEntities.map((group) => {
+                    const isExpanded = expandedGroups[group.label];
+                    const accentColor = `var(${group.accentVar})`;
+                    const empty = group.termCount === 0;
+
+                    return (
+                      <div 
+                        key={group.label} 
+                        style={{ borderBottom: "1px solid var(--border)" }}
+                      >
+                        {/* Accordion Row (.ent-cat) */}
+                        <button 
+                          type="button"
+                          className="ent-cat"
+                          onClick={empty ? undefined : () => {
+                            toggleEntityGroup(group.label);
+                          }}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 12,
+                            width: "100%", padding: "13px 4px",
+                            background: "transparent", border: "none",
+                            cursor: empty ? "default" : "pointer",
+                            opacity: empty ? 0.5 : 1
+                          }}
+                        >
+                          {/* Left category accent dot bar */}
+                          <span style={{
+                            width: 4, height: 20, borderRadius: 999,
+                            background: accentColor, flexShrink: 0,
+                            opacity: empty ? 0.3 : 1
+                          }} />
+                          
+                          <span style={{
+                            flex: 1, textAlign: "left", fontSize: 14, fontWeight: 600,
+                            color: isExpanded ? accentColor : "var(--on-surface)",
+                            transition: "color .15s",
+                            textTransform: "capitalize"
+                          }}>
+                            {group.label.toLowerCase()}
+                          </span>
+
+                          {/* Hover caret transitions slot */}
+                          <span style={{ flexShrink: 0 }}>
+                            {empty ? (
+                              <span style={{ fontSize: 14, color: "var(--on-surface-variant)" }}>–</span>
+                            ) : (
+                              <span style={{ position: "relative", display: "inline-grid", placeItems: "center", minWidth: 22, height: 16 }}>
+                                <span className="ent-count" style={{
+                                  fontSize: 13.5, fontWeight: 600, color: "var(--on-surface-variant)",
+                                  opacity: isExpanded ? 0 : 1
+                                }}>{group.termCount}</span>
+                                <span className={"ent-caret" + (isExpanded ? " is-open" : "")}
+                                  style={{
+                                    position: "absolute", inset: 0, margin: "auto",
+                                    transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                                    transition: "transform .2s ease, opacity .15s ease",
+                                    fontSize: 9, color: "var(--on-surface-variant)",
+                                    display: "inline-grid", placeItems: "center",
+                                    fontWeight: "bold"
+                                  }}
+                                >
+                                  ▼
+                                </span>
+                              </span>
+                            )}
+                          </span>
+                        </button>
+
+                        {/* Values expanded container */}
+                        {isExpanded && !empty && (
+                          <div style={{ padding: "0 4px 12px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
                             {group.visibleItems.map((ent, eIdx) => {
-                              const expandKey = `${group.label}-${ent.text.toLowerCase()}-${eIdx}`;
-                              const isChemicalRowExpanded = expandedChemical === expandKey;
-                              const hasChemicalMeta = isChemicalLikeLabel(group.label) && (
-                                ent.molecular_formula || ent.inchikey || ent.smiles || ent.source_db
-                              );
-                              const displayName = group.label === 'SPECIES' ? getSpeciesPrimaryName({
-                                text: ent.text,
-                                label: 'SPECIES',
-                                score: 1,
-                                accepted_scientific_name: ent.text,
-                                scientific_name_verified: ent.text,
-                                canonical: ent.text,
-                              } as Entity) : ent.text;
+                              const name = ent.text;
+                              const isNavigated = nav && nav.name.toLowerCase() === name.toLowerCase();
 
                               return (
-                                <div key={eIdx} className="flex flex-col border-b-[0.5px] border-slate-50 last:border-0">
-                                  {/* Value Row (.v-row) */}
-                                  <div 
-                                    className={`flex items-center gap-2 py-1.5 pr-3 pl-8 transition-colors ${hasChemicalMeta ? 'cursor-pointer hover:bg-slate-50' : ''}`}
-                                    onClick={(e) => {
-                                      if (hasChemicalMeta) {
-                                        e.stopPropagation();
-                                        setExpandedChemical(isChemicalRowExpanded ? null : expandKey);
-                                      }
-                                    }}
-                                  >
-                                    <div className="w-[6px] h-[6px] rounded-full shrink-0" style={{ backgroundColor: accentColor }} />
-                                    <div className="flex-1 min-w-0 pr-2">
-                                      <span 
-                                        className={`text-[11px] font-display block truncate ${isChemicalRowExpanded ? 'font-semibold' : 'text-slate-600'}`} 
-                                        style={{ color: isChemicalRowExpanded ? accentColor : undefined }}
-                                      >
-                                        {displayName}
-                                      </span>
-                                    </div>
-                                    <span className="text-[9px] font-mono text-slate-900 font-semibold">{ent.count}</span>
-                                  </div>
+                                <div 
+                                  key={eIdx}
+                                  onClick={() => activateEntity(name)}
+                                  title={`Go to "${name}" in the paper`}
+                                  className="ent-row"
+                                  style={{
+                                    display: "flex", alignItems: "center", gap: 10,
+                                    padding: "6px 10px", borderRadius: 7, cursor: "pointer",
+                                    transition: "background .12s"
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = "var(--surface-low)";
+                                    pulseEntity(name);
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = "transparent";
+                                    clearPulse();
+                                  }}
+                                >
+                                  {/* Item dot */}
+                                  <span style={{ width: 7, height: 7, borderRadius: 999, background: accentColor, flexShrink: 0 }} />
                                   
-                                  {/* Inline Chemical Meta */}
-                                  {hasChemicalMeta && (
-                                    <div className={`grid transition-[grid-template-rows] duration-200 bg-slate-50/50 ${isChemicalRowExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-                                      <div className="overflow-hidden min-h-0">
-                                        <div className="pl-[2.6rem] pr-4 pb-2 pt-1.5 space-y-1.5 border-t border-slate-100/50">
-                                        {ent.preferred_name && ent.preferred_name !== ent.text && (
-                                          <div className="flex items-start gap-2">
-                                            <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-12">Name</span>
-                                            <span className="text-[9px] text-slate-600 font-medium truncate">{ent.preferred_name}</span>
-                                          </div>
-                                        )}
-                                        {ent.molecular_formula && (
-                                          <div className="flex items-start gap-2">
-                                            <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-12">Formula</span>
-                                            <span className="text-[9px] text-slate-600 font-mono font-medium">{ent.molecular_formula}</span>
-                                          </div>
-                                        )}
-                                        {ent.inchikey && (
-                                          <div className="flex items-start gap-2">
-                                            <span className="text-[9px] font-semibold text-slate-400 shrink-0 w-12">InChIKey</span>
-                                            <span className="text-[9px] text-slate-600 font-mono font-medium break-all">{ent.inchikey}</span>
-                                          </div>
-                                        )}
-                                        </div>
-                                      </div>
-                                    </div>
+                                  {/* Item name (italicized for Species label) */}
+                                  <span style={{
+                                    flex: 1, fontSize: 13.5,
+                                    color: "var(--on-surface)",
+                                    fontStyle: group.label === "SPECIES" ? "italic" : "normal"
+                                  }}>
+                                    {name}
+                                  </span>
+
+                                  {/* Stepper pager navigator on active item, or item count otherwise */}
+                                  {isNavigated ? (
+                                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                                      <button onClick={() => gotoMention(nav.idx - 1, nav.total)} title="Previous" style={miniNavStyle}>◀</button>
+                                      <span className="mono font-semibold" style={{ fontSize: 11.5, color: "var(--on-surface)", minWidth: 28, textAlign: "center" }}>{nav.idx + 1}/{nav.total}</span>
+                                      <button onClick={() => gotoMention(nav.idx + 1, nav.total)} title="Next" style={miniNavStyle}>▶</button>
+                                    </span>
+                                  ) : (
+                                    <span className="mono" style={{ fontSize: 12, color: "var(--on-surface-variant)" }}>
+                                      {ent.count}
+                                    </span>
                                   )}
                                 </div>
                               );
                             })}
                           </div>
-                        </div>
+                        )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex-1 min-h-[400px]">
+                  <KnowledgeGraph 
+                    entities={entities} 
+                    paperIdentifier={paperIdentifier}
+                    entityConfig={ENTITY_GROUP_CONFIG}
+                  />
+                </div>
+              )}
             </div>
-          
-            <KnowledgeGraph 
-              entities={entities} 
-              paperIdentifier={paperIdentifier}
-              entityConfig={ENTITY_GROUP_CONFIG}
-            />
-        </div>
-      </aside>
+          )}
+
+          {extractionError && (
+            <div className="p-4 bg-red-50 border border-red-100 rounded-xl mt-4">
+              <p className="text-[10px] text-red-600 font-bold uppercase tracking-wider mb-1">Extraction Error</p>
+              <p className="text-[11px] text-red-500 leading-relaxed font-medium">{extractionError}</p>
+            </div>
+          )}
+        </aside>
+      </div>
 
       <style>{`
         .font-display {

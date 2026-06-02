@@ -95,16 +95,16 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
 
   return (
     <aside
-      className={`bg-white sidebar-transition flex-shrink-0 flex flex-col border-r border-slate-200 ${
+      className={`bg-background sidebar-transition flex-shrink-0 flex flex-col border-r border-border ${
         expanded ? 'w-80' : 'w-0'
       }`}
     >
       {/* Sidebar Header */}
-      <div className="h-14 flex items-center justify-between px-5 border-b border-slate-100">
+      <div className="h-14 flex items-center justify-between px-5 border-b border-surface-c">
         <div /> {/* Spacer */}
         <button
           onClick={onCollapse}
-          className="text-slate-400 hover:text-slate-600 transition p-1.5 focus:outline-none"
+          className="text-on-surface-muted hover:text-on-surface-variant transition p-1.5 focus:outline-none"
           aria-label="Collapse sidebar"
         >
           <SidebarSimple size={22} weight="bold" />
@@ -128,7 +128,7 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-[#f0f4f9] hover:bg-[#e1e9f1] text-slate-600 rounded-full transition-all group border border-transparent hover:border-blue-100 disabled:opacity-50"
+                className="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-[#f0f4f9] hover:bg-[#e1e9f1] text-on-surface-variant rounded-full transition-all group border border-transparent hover:border-primary/20 disabled:opacity-50"
               >
                 <Plus size={16} />
                 <span className="text-sm font-medium">
@@ -152,10 +152,10 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
 
             {/* Empty State Illustrations */}
             <div className="pt-20 text-center px-6">
-              <div className="w-12 h-12 bg-slate-50 rounded-xl flex items-center justify-center mx-auto mb-4 border border-slate-100/50">
-                <FileText size={24} className="text-slate-300" />
+              <div className="w-12 h-12 bg-surface-c/50 rounded-xl flex items-center justify-center mx-auto mb-4 border border-surface-c/50">
+                <FileText size={24} className="text-on-surface-muted/30" />
               </div>
-              <p className="text-[13px] text-slate-600 font-medium mb-1">
+              <p className="text-[13px] text-on-surface-variant font-medium mb-1">
                 Saved items will appear here
               </p>
             </div>

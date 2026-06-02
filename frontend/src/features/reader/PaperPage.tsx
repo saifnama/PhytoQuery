@@ -179,7 +179,7 @@ const PaperPage: React.FC = () => {
             setFallbackSource({ source: data.source, url: data.url });
             return;
           }
-          setError(`No abstract found. <a href="https://doi.org/${doi}" target="_blank" class="text-blue-600 underline">View on publisher</a>`);
+          setError(`No abstract found. <a href="https://doi.org/${doi}" target="_blank" class="text-primary underline">View on publisher</a>`);
         } catch {
           setFallbackLoading(false);
           setError('Failed to load paper from any source.');
@@ -339,8 +339,8 @@ const PaperPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-blue-600 mx-auto mb-4" />
-          <p className="text-sm text-slate-500">Loading paper...</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-teal-200 border-t-teal-500 mx-auto mb-4" />
+          <p className="text-sm text-on-surface-variant">Loading paper...</p>
         </div>
       </div>
     );
@@ -350,8 +350,8 @@ const PaperPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-slate-200 border-t-emerald-600 mx-auto mb-4" />
-          <p className="text-sm text-slate-500">Fetching DOI fallback sources...</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-teal-200 border-t-teal-600 mx-auto mb-4" />
+          <p className="text-sm text-on-surface-variant">Fetching DOI fallback sources...</p>
         </div>
       </div>
     );
@@ -364,7 +364,7 @@ const PaperPage: React.FC = () => {
           <p className="text-sm text-red-600 mb-4" dangerouslySetInnerHTML={{ __html: error || 'Paper not found' }} />
           <button
             onClick={() => navigate({ to: '/' })}
-            className="text-blue-600 hover:underline flex items-center gap-2 mx-auto"
+            className="text-primary hover:underline flex items-center gap-2 mx-auto"
           >
             <ArrowLeft size={16} /> Back to search
           </button>
@@ -408,6 +408,7 @@ const PaperPage: React.FC = () => {
       onSendPdfToRag={handleSendPdfToRag}
       onAddToAnalyse={handleAddToAnalyse}
       onExtract={handleExtract}
+      onBack={() => navigate({ to: '/' })}
     />
   );
 };

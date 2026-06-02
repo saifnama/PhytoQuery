@@ -1,26 +1,21 @@
-/**
- * Central entity color map.
- * Mirrors CSS --entity-*-rgb variables from index.css.
- * Used by KnowledgeGraph.
- */
-
 export interface EntityColorEntry {
   hex: string;
-  rgb: string; // "r g b" (space-separated, matches CSS var format)
+  tailwind: string;
 }
 
-export const ENTITY_COLORS: Record<string, EntityColorEntry> = {
-  default:            { hex: '#374151', rgb: '55 65 81' },
-  chemical:           { hex: '#2563EB', rgb: '37 99 235' },
-  species:            { hex: '#16A34A', rgb: '22 163 74' },
-  plant_part:         { hex: '#84CC16', rgb: '132 204 22' },
-  extraction_method:  { hex: '#7C3AED', rgb: '124 58 237' },
-  development_stage:  { hex: '#F97316', rgb: '249 115 22' },
-  season:             { hex: '#EAB308', rgb: '234 179 8' },
-  location:           { hex: '#06B6D4', rgb: '6 182 212' },
-  bioactivity:        { hex: '#EC4899', rgb: '236 72 153' },
-  analytical_technique: { hex: '#64748B', rgb: '100 116 139' },
-  disease:            { hex: '#DC2626', rgb: '220 38 38' },
+const ENTITY_COLORS: Record<string, EntityColorEntry> = {
+  chemical:           { hex: '#2563EB', tailwind: 'blue-600' },
+  species:            { hex: '#16A34A', tailwind: 'green-600' },
+  plant_part:         { hex: '#84CC16', tailwind: 'lime-500' },
+  extraction_method:  { hex: '#7C3AED', tailwind: 'violet-600' },
+  development_stage:  { hex: '#F97316', tailwind: 'orange-500' },
+  season:             { hex: '#EAB308', tailwind: 'yellow-500' },
+  location:           { hex: '#06B6D4', tailwind: 'cyan-500' },
+  bioactivity:        { hex: '#EC4899', tailwind: 'pink-500' },
+  analytical_technique: { hex: '#64748B', tailwind: 'slate-500' },
+  isolation_method:   { hex: '#8B5CF6', tailwind: 'violet-500' },
+  disease:            { hex: '#DC2626', tailwind: 'red-600' },
+  default:            { hex: '#6B7280', tailwind: 'gray-500' },
 };
 
 /**
@@ -31,6 +26,23 @@ export function getEntityColor(label: string): EntityColorEntry {
   const key = label.toLowerCase().replace(/\s+/g, '_');
   return ENTITY_COLORS[key] ?? ENTITY_COLORS.default;
 }
+
+/**
+ * Display names for entity categories (used in legends, filters, headers).
+ */
+export const ENTITY_DISPLAY_NAMES: Record<string, string> = {
+  chemical:               'Chemical',
+  species:                'Species',
+  plant_part:             'Plant part',
+  extraction_method:      'Extraction method',
+  development_stage:      'Development stage',
+  season:                 'Season',
+  location:               'Location',
+  bioactivity:            'Bioactivity',
+  analytical_technique:   'Analytical technique',
+  isolation_method:       'Isolation method',
+  disease:                'Disease',
+};
 
 /**
  * D3-force clustering target positions (0–1 normalized canvas space).
@@ -45,6 +57,7 @@ export const ENTITY_CLUSTER_POSITIONS: Record<string, { x: number; y: number }> 
   // Process layer
   extraction_method:   { x: 0.58, y: 0.50 },
   analytical_technique: { x: 0.50, y: 0.38 },
+  isolation_method:    { x: 0.50, y: 0.62 },
   // Outcome layer
   bioactivity:         { x: 0.78, y: 0.38 },
   disease:             { x: 0.82, y: 0.62 },
@@ -60,11 +73,12 @@ export const ENTITY_CATEGORY_INDEX: Record<string, number> = {
   plant_part:          2,
   extraction_method:   3,
   analytical_technique: 4,
-  bioactivity:         5,
-  disease:             6,
-  location:            7,
-  season:              8,
-  development_stage:   9,
+  isolation_method:    5,
+  bioactivity:         6,
+  disease:             7,
+  location:            8,
+  season:              9,
+  development_stage:   10,
 };
 
 /**

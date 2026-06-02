@@ -138,9 +138,11 @@ const JournalDistributionWidget: React.FC<Props> = ({
         className="h-auto bg-[#C8F1F8]"
       />
 
-      {/* Right pane — shadcn Card hosting the bar chart. */}
+      {/* Right pane — shadcn Card hosting the bar chart. ``flex-1`` so
+          this pane takes exactly half the row (the left pane is also
+          ``flex-1``, so 50/50 split). */}
       <Card
-        className="w-[240px] rounded-none ring-0 gap-0 py-3"
+        className="flex-1 rounded-none ring-0 gap-0 py-3"
         style={{ background: "#FBFEFE" }}
       >
         <CardContent className="h-full px-3">

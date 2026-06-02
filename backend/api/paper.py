@@ -512,16 +512,44 @@ async def proxy_pdf(url: str = Query(...)):
 
 
 @router.get("/db/list")
-async def list_papers(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), db: AsyncSession = Depends(get_db)):
+async def list_papers(
+    limit: int = Query(50, ge=1, le=500), 
+    offset: int = Query(0, ge=0), 
+    country: str = Query(None),
+    query: str = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
     """Fetch a paginated list of papers from the local SQLite database."""
     try:
-        # Order by newest first (highest ID)
-        result = await db.execute(select(Paper).order_by(desc(Paper.id)).limit(limit).offset(offset))
+        from sqlalchemy import func
+        
+        # Base queries
+        select_stmt = select(Paper)
+        
+        if country:
+            country_expr = func.json_extract(PaperEntity.meta, "$.country")
+            select_stmt = select_stmt.join(PaperEntity).where(PaperEntity.label == "LOCATION").where(country_expr == country)
+            
+        if query:
+            select_stmt = select_stmt.where(
+                Paper.title.ilike(f"%{query}%") | Paper.journal.ilike(f"%{query}%")
+            )
+            
+        # Distinct/Group by to avoid duplicates
+        select_stmt = select_stmt.group_by(Paper.id).order_by(desc(Paper.id))
+        
+        # Execute to get list
+        result = await db.execute(select_stmt.limit(limit).offset(offset))
         papers = result.scalars().all()
         
-        # Get total count for pagination
-        from sqlalchemy import func
-        count_result = await db.execute(select(func.count(Paper.id)))
+        # Count query
+        if country or query:
+            subq = select_stmt.limit(None).offset(None).subquery()
+            count_stmt = select(func.count()).select_from(subq)
+        else:
+            count_stmt = select(func.count(Paper.id))
+            
+        count_result = await db.execute(count_stmt)
         total_count = count_result.scalar() or 0
         
         paper_list = [
