@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   MagnifyingGlass,
-  X,
+  XCircle,
   CaretDown,
-  LockSimple,
   LockSimpleOpen,
   Article,
   ArrowUp,
@@ -98,19 +97,6 @@ const titleCase = (s: string): string =>
     .join(' ');
 
 // ─── small UI atoms ─────────────────────────────────────────────────────────
-
-const Kbd: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <kbd
-    className="
-      pointer-events-none select-none inline-flex items-center justify-center
-      h-6 min-w-6 px-[7px] rounded-[5px]
-      bg-surface-c border border-border text-on-surface-variant
-      font-mono text-[14px] font-medium leading-none
-    "
-  >
-    {children}
-  </kbd>
-);
 
 interface SourcePillProps {
   role: SourceKey;
@@ -505,7 +491,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
           ${expanded ? 'is-focused' : ''}
           transition-[padding] duration-200
         `}
-        style={{ padding: '10px 10px 10px 22px' }}
+        style={{ padding: '10px 12px 10px 16px' }}
       >
         {/* Pink trail-light on submit — keyed by submission time so animation restarts */}
         {searching && <span className="pq-search-trail" key={Date.now()} />}
@@ -559,14 +545,19 @@ const SearchForm: React.FC<SearchFormProps> = ({
                 onClick={(e) => { e.stopPropagation(); clear(); }}
                 aria-label="Clear search"
                 title="Clear"
-                className="grid place-items-center p-1.5 rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
+                className="grid place-items-center w-[36px] h-[36px] rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
               >
-                <X size={16} weight="bold" />
+                <XCircle size={18} weight="regular" />
               </button>
             )}
             {!expanded && !query && (
-              <span className="inline-flex items-center gap-1 mr-1 shrink-0">
-                <Kbd>⌘</Kbd><Kbd>K</Kbd>
+              <span className="inline-flex items-center gap-1.5 shrink-0">
+                <span className="inline-flex items-center justify-center w-[28px] h-[28px] rounded-full bg-[var(--surface-c)] border border-[var(--outline-variant)] text-[12px] font-mono text-[var(--on-surface-variant)]">
+                  ⌘
+                </span>
+                <span className="inline-flex items-center justify-center w-[28px] h-[28px] rounded-full bg-[var(--surface-c)] border border-[var(--outline-variant)] text-[12px] font-mono text-[var(--on-surface-variant)]">
+                  K
+                </span>
               </span>
             )}
           </div>
@@ -615,16 +606,14 @@ const SearchForm: React.FC<SearchFormProps> = ({
                       </span>
                       <div className="flex items-center gap-2 flex-wrap">
                         <FilterPill
-                          icon={filters.open_access
-                            ? <LockSimpleOpen size={14} weight="fill" />
-                            : <LockSimple size={14} weight="regular" />}
+                          icon={<LockSimpleOpen size={14} weight="regular" />}
                           label="Open Access"
                           tone="orange"
                           active={filters.open_access}
                           onClick={() => setFilters((p) => ({ ...p, open_access: !p.open_access }))}
                         />
                         <FilterPill
-                          icon={<Article size={14} weight={filters.has_full_text ? 'fill' : 'regular'} />}
+                          icon={<Article size={14} weight="regular" color="#1565C0" />}
                           label="Full Text"
                           tone="blue"
                           active={filters.has_full_text}

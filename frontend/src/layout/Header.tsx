@@ -5,8 +5,8 @@ import {
   ListMagnifyingGlass,
   Chats,
   Circle,
+  Flower,
 } from '@phosphor-icons/react';
-import { TulipLogo } from '../components/icons/TulipLogo';
 import { useSearchStore } from '../stores/searchStore';
 
 interface HeaderProps {
@@ -143,7 +143,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   return (
     <header className="app-header">
       <div className="flex items-center gap-[10px]">
-        <TulipLogo size={36} />
+        <Flower size={36} color="#EC407A" weight="fill" />
         {/* Clicking the brand resets the persisted search store AND
             clears URL search params, so NerPage's `!lastQuery` branch
             kicks in and the Dashboard surfaces. Without the reset,

@@ -29,6 +29,10 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -521,19 +525,25 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     color: var(--teal-800);
     border-color: var(--teal-500);
 }
-.pill[data-active="true"][data-tone="orange"] { background: #FFE0B2; color: #E65100; border-color: #E65100; }
-.pill[data-active="true"][data-tone="blue"]   { background: #BBDEFB; color: #1565C0; border-color: #1565C0; }
+/* Orange (Open Access) pill — pill-like with dedicated colors */
+.pill[data-tone="orange"] { background: #FFF3E0; color: #E65100; opacity: 0.85; }
+.pill[data-tone="orange"]:hover { opacity: 1; }
+.pill[data-tone="orange"][data-active="true"] { background: #FFF3E0; color: #E65100; border-color: #E65100; opacity: 0.85; }
+/* Blue (Full Text) pill — pill-like with dedicated colors */
+.pill[data-tone="blue"]   { background: #E3F2FD; color: #1565C0; opacity: 0.85; }
+.pill[data-tone="blue"]:hover   { opacity: 1; }
+.pill[data-tone="blue"][data-active="true"]   { background: #E3F2FD; color: #1565C0; border-color: #1565C0; opacity: 0.85; }
 
 /* Source pill variants — exact mockup colors */
 .pill-europepmc { background: #ECFDF5; color: #059669; opacity: 0.85; }
 .pill-europepmc:hover { opacity: 1; }
-.pill-europepmc[data-active="true"] { background: #D1FAE5; color: #059669; border-color: #059669; opacity: 1; }
+.pill-europepmc[data-active="true"] { background: #ECFDF5; color: #059669; border-color: #059669; opacity: 0.85; }
 .pill-openalex  { background: #F1F5F9; color: #334155; opacity: 0.85; }
 .pill-openalex:hover  { opacity: 1; }
-.pill-openalex[data-active="true"]  { background: #E2E8F0; color: #334155; border-color: #334155; opacity: 1; }
+.pill-openalex[data-active="true"]  { background: #F1F5F9; color: #334155; border-color: #334155; opacity: 0.85; }
 .pill-database  { background: #FCE4EC; color: #EC407A; opacity: 0.85; }
 .pill-database:hover  { opacity: 1; }
-.pill-database[data-active="true"]  { background: #F8BBD0; color: #EC407A; border-color: #EC407A; opacity: 1; }
+.pill-database[data-active="true"]  { background: #FCE4EC; color: #EC407A; border-color: #EC407A; opacity: 0.85; }
 
 /* ── Result action / icon (ResultCard) ──────────────────────────── */
 .result-action {

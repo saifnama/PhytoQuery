@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { Sparkle, ListBullets, Graph, DotsThreeVertical, ArrowLeft } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -257,7 +257,7 @@ interface PaperViewerProps {
   onSendPdfToRag?: () => void;
   onAddToAnalyse?: () => void;
   onExtract?: () => void;
-  onBack?: () => void;
+
 }
 
 interface GroupedEntities {
@@ -300,7 +300,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   onSendPdfToRag,
   onAddToAnalyse,
   onExtract,
-  onBack,
 }) => {
   const identifierValue = paperIdentifier?.value || 'paper';
 
@@ -1415,13 +1414,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   return (
     <div className="w-full max-w-[1440px] mx-auto px-6 lg:px-14 py-8 paper-enter">
-      {/* Back Link */}
-      <button 
-        onClick={onBack} 
-        className="paper-back hover:text-on-surface flex items-center gap-2 bg-transparent border-0 cursor-pointer text-on-surface-variant text-[14px] font-medium p-1 mb-5 transition-colors"
-      >
-        <ArrowLeft size={16} weight="bold" /> Back to results
-      </button>
 
       <div className={`grid grid-cols-1 lg:grid-cols-[190px_minmax(0,1fr)_300px] gap-14 items-start w-full ${showHL ? '' : 'hl-off'}`}>
         
@@ -1541,14 +1533,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             {/* Quiet Status Icons on the right */}
             <span className="ml-auto flex items-center gap-1">
               <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
-                <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
-                  <path d="M208,80H96V56a32,32,0,0,1,64,0,8,8,0,0,0,16,0,48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80Zm0,128H48V96H208V208Z" />
-                </svg>
+                <LockSimpleOpen size={17} weight="regular" />
               </span>
               <span className="status-ic" title="Full text available" style={{ color: "#15803D" }}>
-                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
-                  <path d="M224,48H32a8,8,0,0,0-8,8V200a8,8,0,0,0,8,8H224a8,8,0,0,0,8-8V56a8,8,0,0,0-8-8Zm-8,144H40V64H216V192Z" />
-                </svg>
+                <Article size={18} weight="regular" color="#1565C0" />
               </span>
             </span>
           </div>
@@ -1561,9 +1549,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
               title="Download"
             >
-              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
-                <path d="M224,144v48a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V144a8,8,0,0,1,16,0v48H208V144a8,8,0,0,1,16,0Zm-88,0V48a8,8,0,0,0-16,0v96L88,112a8,8,0,0,0-11.31,11.31l48,48a8,8,0,0,0,11.31,0l48-48a8,8,0,0,0-11.31-11.31Z" />
-              </svg>
+              <DownloadSimple size={17} weight="regular" />
               Download
             </button>
 
@@ -1573,9 +1559,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
               title="Analyse"
             >
-              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
-                <path d="M224,200a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V56a8,8,0,0,1,16,0V192H216a8,8,0,0,1,8,8ZM205.66,82.34l-56,56a8,8,0,0,1-11.32,0L104,103.31,73.66,133.66a8,8,0,0,1-11.32-11.32l36-36a8,8,0,0,1,11.32,0L144,120.69l50.34-50.35a8,8,0,0,1,11.32,11.32Z" />
-              </svg>
+              <ListMagnifyingGlass size={17} weight="regular" />
               Analyse
             </button>
 
@@ -1585,9 +1569,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
               title="Chat"
             >
-              <svg width="17" height="17" viewBox="0 0 256 256" fill="currentColor">
-                <path d="M232,112a88,88,0,0,0-161.46-44.82A88.13,88.13,0,0,0,51.82,204.16L32.22,223.77A8,8,0,0,0,37.88,237.5a133,133,0,0,0,86.6-32A87.65,87.65,0,0,0,144,200a88,88,0,0,0,88-88Zm-16,0a72,72,0,0,1-125.79,48.06,8,8,0,0,0-9.87-1.46,117.14,117.14,0,0,1-36.63,16l10.37-25.29a8,8,0,0,0-1.15-8A72,72,0,0,1,216,112Z" />
-              </svg>
+              <Chats size={17} weight="regular" />
               Chat
             </button>
 
@@ -1597,14 +1579,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               title={showHL ? "Hide highlights" : "Show highlights"}
             >
               {showHL ? (
-                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
-                  <path d="M247.31,124.76c-.35-.79-49-110.76-119.31-110.76S9.04,124,8.69,124.76a8,8,0,0,0,0,6.48c.35.79,49,110.76,119.31,110.76s119-110,119.31-110.76A8,8,0,0,0,247.31,124.76ZM128,224c-50.78,0-89.09-70.36-96-96,6.91-25.64,45.22-96,96-96s89.09,70.36,96,96C217.09,153.64,178.78,224,128,224Zm0-144a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" />
-                </svg>
+                <Eye size={18} weight="regular" />
               ) : (
-                <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
-                  <path d="M241.6,183.1a8,8,0,0,1-11,2.5,124.63,124.63,0,0,1-102.6,38.4C57.7,224,9,128,9,128s32.2-64,74.5-83.3a8,8,0,1,1,6.6,14.6C54.4,75.1,25.6,128,25.6,128s44,80,102.4,80c29.1,0,59-15.6,76.5-36.4a8,8,0,0,1,11-2.5C227,175.1,241.6,177.5,241.6,183.1Z" opacity="0.4" />
-                  <path d="M53.9,42.7a8,8,0,1,1,11.3,11.3l-12,12a8,8,0,0,1-11.3-11.3l12-12a8,8,0,0,1,53.9,42.7Zm19.5,148.6a8,8,0,0,1,0,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3-11.3ZM214.1,42.7a8,8,0,0,1,0,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3,0Zm-19.5,148.6a8,8,0,1,1,11.3,11.3l-12,12a8,8,0,1,1-11.3-11.3l12-12a8,8,0,0,1,11.3,0ZM128,80a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Z" />
-                </svg>
+                <EyeSlash size={18} weight="regular" />
               )}
             </button>
           </div>
@@ -1830,27 +1807,23 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               <span style={{
                 width: 44, height: 44, borderRadius: 12,
                 display: "grid", placeItems: "center",
-                background: "color-mix(in oklab, var(--blue-A700, #2962FF) 10%, transparent)",
-                color: "var(--blue-A700, #2962FF)"
+                background: "#c8f3fa",
+                color: "var(--on-surface)"
               }} className={isExtracting ? "animate-pulse" : ""}>
                 <Sparkle size={22} weight="fill" />
               </span>
-              <div style={{ fontSize: 13.5, color: "var(--on-surface-variant)", lineHeight: 1.5, maxWidth: 240 }}>
-                Identify chemicals, species, methods and more across the full text.
-              </div>
               <button 
                 onClick={() => {
                   if (onExtract && !isExtracting) onExtract();
                 }}
                 disabled={isExtracting}
                 style={{
-                  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9,
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
                   height: 44, padding: "0 24px", width: "100%",
                   borderRadius: 999,
-                  background: "var(--blue-A700, #2962FF)", color: "#fff",
+                  background: "#c8f3fa", color: "var(--on-surface)",
                   border: "none", cursor: isExtracting ? "wait" : "pointer",
                   fontSize: 14, fontWeight: 600, letterSpacing: ".01em",
-                  boxShadow: "0 6px 16px -8px rgba(41,98,255,.5)",
                   transition: "opacity .15s",
                   opacity: isExtracting ? 0.7 : 1
                 }}
@@ -1859,12 +1832,12 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               >
                 {isExtracting ? (
                   <>
-                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white/30 border-t-white mr-2" />
+                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-current/30 border-t-current mr-2" />
                     Extracting Terms...
                   </>
                 ) : (
                   <>
-                    <Sparkle size={16} weight="fill" /> Extract Entities
+                    Extract Entities
                   </>
                 )}
               </button>

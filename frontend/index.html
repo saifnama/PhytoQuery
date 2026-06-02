@@ -8,6 +8,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Portal root: outside #root so fixed overlays are never clipped by
+         any overflow / transform / stacking context inside the React app. -->
+    <div id="portal-root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -20,10 +20,9 @@ import {
   ArrowLeft,
   ArrowRight,
   DownloadSimple,
-  ChartLine,
-  ChatCircle,
+  ListMagnifyingGlass,
+  Chats,
   Circle,
-  LockSimple,
   LockSimpleOpen,
   Article,
 } from '@phosphor-icons/react';
@@ -313,7 +312,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             title="Analyse"
             className="result-action"
           >
-            <ChartLine size={17} weight="regular" />
+            <ListMagnifyingGlass size={17} weight="regular" />
             <span>Analyse</span>
           </button>
           <button
@@ -322,7 +321,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             title="Chat"
             className="result-action"
           >
-            <ChatCircle size={17} weight="regular" />
+            <Chats size={17} weight="regular" />
             <span>Chat</span>
           </button>
         </div>
@@ -333,7 +332,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
               title="Open Access"
               className="grid place-items-center w-7 h-7 rounded-lg text-orange-500"
             >
-              <LockSimpleOpen size={16} weight="fill" />
+              <LockSimpleOpen size={16} weight="regular" />
             </span>
           )}
           {hasFT && (
@@ -341,7 +340,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
               title="Full Text Available"
               className="grid place-items-center w-7 h-7 rounded-lg text-emerald-600"
             >
-              <Article size={16} weight="fill" />
+              <Article size={16} weight="regular" color="#1565C0" />
             </span>
           )}
         </div>
@@ -374,7 +373,7 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
   return (
     <aside
       className="
-        sticky top-[100px] mt-[92px] h-fit
+        sticky top-[100px] h-fit
         flex flex-col gap-5 pr-6
         border-r border-border
       "
@@ -401,15 +400,13 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
         <FilterSection title="Availability">
           <div className="flex flex-col gap-2 items-start">
             <FilterTogglePill
-              icon={filters.open_access
-                ? <LockSimpleOpen size={14} weight="fill" />
-                : <LockSimple     size={14} weight="regular" />}
+              icon={<LockSimpleOpen size={14} weight="regular" />}
               label="Open Access"
               tone="orange"
               active={!!filters.open_access}
               onClick={() => onChange({ ...filters, open_access: !filters.open_access })} />
             <FilterTogglePill
-              icon={<Article size={14} weight={filters.has_full_text ? 'fill' : 'regular'} />}
+              icon={<Article size={14} weight="regular" color="#1565C0" />}
               label="Full Text"
               tone="blue"
               active={!!filters.has_full_text}
@@ -630,26 +627,26 @@ const NerPage: React.FC = () => {
   return (
     <div className="w-full px-8 pt-7 pb-10 results-page">
       <div className="mx-auto max-w-[1440px]">
-        <div className="px-[24px]">
-          <SearchForm
-            onSearch={handleSearch}
-            onOpenDatabasePanel={(q) => {
-              // Signal Dashboard to open its drawer with the query
-              // pre-applied. The drawer lives inside Dashboard; this
-              // store is the cross-page bridge (see stores/drawerStore.ts).
-              useDrawerStore.getState().requestOpenWithQuery(q);
-            }}
-            isLoading={isLoading}
-            defaultQuery={search.q ?? ''}
-            defaultFilters={{
-              open_access:   search.oa === '1',
-              has_full_text: search.ft === '1',
-              article_type:  search.type ?? '',
-              sort:          search.sort ?? '',
-              source:        search.src ?? 'europepmc',
-            }}
-          />
-        </div>
+        {/* SearchForm on dashboard/loading/error screens */}
+        {(!hasResults || (!lastFilters && isLoading)) && (
+          <div className="px-[24px]">
+            <SearchForm
+              onSearch={handleSearch}
+              onOpenDatabasePanel={(q) => {
+                useDrawerStore.getState().requestOpenWithQuery(q);
+              }}
+              isLoading={isLoading}
+              defaultQuery={search.q ?? ''}
+              defaultFilters={{
+                open_access:   search.oa === '1',
+                has_full_text: search.ft === '1',
+                article_type:  search.type ?? '',
+                sort:          search.sort ?? '',
+                source:        search.src ?? 'europepmc',
+              }}
+            />
+          </div>
+        )}
 
         {error && (
           <div className="mx-auto mb-6 max-w-4xl rounded-lg bg-red-50 p-4 text-red-700">
@@ -706,6 +703,24 @@ const NerPage: React.FC = () => {
             <FilterSidebar filters={lastFilters} onChange={handleFilterChange} />
 
             <section>
+              <div className="mb-8">
+                <SearchForm
+                  onSearch={handleSearch}
+                  onOpenDatabasePanel={(q) => {
+                    useDrawerStore.getState().requestOpenWithQuery(q);
+                  }}
+                  isLoading={isLoading}
+                  defaultQuery={search.q ?? ''}
+                  defaultFilters={{
+                    open_access:   search.oa === '1',
+                    has_full_text: search.ft === '1',
+                    article_type:  search.type ?? '',
+                    sort:          search.sort ?? '',
+                    source:        search.src ?? 'europepmc',
+                  }}
+                />
+              </div>
+
               {/* Header row — "1,247 publications found" + SortSegmented */}
               <div className="flex items-center justify-between mb-5">
                 <div className="text-[15px] text-on-surface whitespace-nowrap">

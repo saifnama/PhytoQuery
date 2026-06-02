@@ -408,7 +408,7 @@ const PaperPage: React.FC = () => {
       onSendPdfToRag={handleSendPdfToRag}
       onAddToAnalyse={handleAddToAnalyse}
       onExtract={handleExtract}
-      onBack={() => navigate({ to: '/' })}
+
     />
   );
 };

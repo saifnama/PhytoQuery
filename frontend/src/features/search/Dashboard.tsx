@@ -21,11 +21,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   Card,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import { PublicationTimelineChart } from './PublicationTimelineChart';
@@ -77,11 +75,11 @@ const statCardVariants = cva('gap-0 py-5 transition-all duration-200', {
 interface StatCardProps extends VariantProps<typeof statCardVariants> {
   label: string;
   value: number;
-  footer: React.ReactNode;
   onClick?: () => void;
+  isActive?: boolean;
 }
 
-function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
+function StatCard({ accent, label, value, onClick, isActive }: StatCardProps) {
   const clickable = !!onClick;
   return (
     <Card
@@ -90,6 +88,7 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
         // Hover lift mirrors main.jsx's StatCard: -2px translate, accent
         // border, elevation-1 shadow.
         clickable && 'cursor-pointer hover:-translate-y-0.5 hover:[border-color:var(--stat-accent)] hover:shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]',
+        isActive && 'border-[var(--stat-accent)] shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]'
       )}
       onClick={onClick}
       role={clickable ? 'button' : undefined}
@@ -113,7 +112,7 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
           {label}
         </span>
       </CardHeader>
-      <CardContent className="px-6">
+      <CardContent className="px-6 pb-6">
         {/* 64px / weight 700 / -0.02em — matches main.jsx's .stat-num.
             font-mono dropped so the numerals render in the inherited
             sans (Roboto when present, system sans otherwise) per the
@@ -122,12 +121,6 @@ function StatCard({ accent, label, value, footer, onClick }: StatCardProps) {
           {value.toLocaleString()}
         </div>
       </CardContent>
-      <Separator
-        className="mx-6 my-3 opacity-55 [&]:bg-[var(--stat-divider)]"
-      />
-      <CardFooter className="px-6 text-[12.5px] text-on-surface-muted leading-[1.5]">
-        {footer}
-      </CardFooter>
     </Card>
   );
 }
@@ -240,30 +233,15 @@ const Dashboard: React.FC = () => {
   const entitiesTotal = metrics.kpis.total_entities;
   const journalsTotal = metrics.kpis.total_journals;
 
-  const years = metrics.charts.papers_by_year
-    .map((d) => Number(d.name))
-    .filter((y) => Number.isFinite(y));
-  const yearMin = years.length ? Math.min(...years) : null;
-  const yearMax = years.length ? Math.max(...years) : null;
-
-  const entitiesPerPaper = papersTotal > 0 ? Math.round(entitiesTotal / papersTotal) : 0;
-
-  const dominant = metrics.charts.papers_by_journal[0];
-  const dominantPct = dominant && papersTotal > 0
-    ? Math.round((dominant.value / papersTotal) * 100)
-    : 0;
-
   // Entity Distribution + Publication Timeline + Plant Origin Heatmap
   // are all dedicated components now (EntityDonutChart,
   // PublicationTimelineChart, PlantOriginMap). Dashboard.tsx just
   // wires data through them.
 
   return (
-    <div
-      className="w-full mx-auto px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700"
-      style={{ maxWidth: 'var(--content-max)' }}
-    >
-      <div className="flex items-center justify-between mb-5 mt-14">
+    <div className="mx-auto" style={{ maxWidth: 'var(--content-max)' }}>
+      <div className="px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
+        <div className="flex items-center justify-between mb-5 mt-14">
         <div>
           <h2 className="text-[28px] font-bold text-on-surface leading-tight tracking-[-0.005em]">Database metrics</h2>
         </div>
@@ -275,38 +253,37 @@ const Dashboard: React.FC = () => {
           accent="papers"
           label="Papers indexed"
           value={papersTotal}
-          footer={
-            yearMin !== null && yearMax !== null ? (
-              <>
-                {yearMin} <span className="text-[color:var(--stat-accent)] mx-[3px]">→</span> {yearMax}
-              </>
-            ) : (
-              'No year data'
-            )
-          }
-          onClick={() => openDrawer({ tab: 'papers', filter: null })}
+          onClick={() => {
+            if (drawerOpen && drawerTab === 'papers') {
+              setDrawerOpen(false);
+            } else {
+              openDrawer({ tab: 'papers', filter: null });
+            }
+          }}
         />
         <StatCard
           accent="entities"
           label="Entities extracted"
           value={entitiesTotal}
-          footer={
-            <>
-              {entitiesPerPaper} entities <span className="text-[color:var(--stat-accent)] mx-[3px]">·</span> per paper
-            </>
-          }
-          onClick={() => openDrawer({ tab: 'entities', filter: null })}
+          onClick={() => {
+            if (drawerOpen && drawerTab === 'entities') {
+              setDrawerOpen(false);
+            } else {
+              openDrawer({ tab: 'entities', filter: null });
+            }
+          }}
         />
         <StatCard
           accent="journals"
           label="Journals indexed"
           value={journalsTotal}
-          footer={
-            <>
-              1 journal <span className="text-[color:var(--stat-accent)] mx-[3px]">·</span> {dominantPct}% of corpus
-            </>
-          }
-          onClick={() => openDrawer({ tab: 'journals', filter: null })}
+          onClick={() => {
+            if (drawerOpen && drawerTab === 'journals') {
+              setDrawerOpen(false);
+            } else {
+              openDrawer({ tab: 'journals', filter: null });
+            }
+          }}
         />
       </div>
 
@@ -364,13 +341,13 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
+      </div>
+
       <DbExplorerDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         tab={drawerTab}
-        onTabChange={setDrawerTab}
         filter={drawerFilter}
-        onClearFilter={() => setDrawerFilter(null)}
         entities={metrics.charts.entity_distribution}
         journals={metrics.charts.papers_by_journal}
         onOpenPaper={(doi) => {
