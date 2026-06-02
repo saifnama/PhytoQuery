@@ -179,20 +179,23 @@ const DbExplorerDrawer: React.FC<Props> = ({
       <div
         onClick={onClose}
         className={`fixed inset-0 z-40 transition-colors duration-200 ${
-          open ? 'bg-black/[0.06] pointer-events-auto' : 'bg-transparent pointer-events-none'
+          open ? 'bg-black/[0.04] pointer-events-auto' : 'bg-transparent pointer-events-none'
         }`}
         aria-hidden
       />
 
       {/* Drawer */}
       <aside
-        className={`fixed top-0 right-0 bottom-0 z-50 bg-background border-l border-border flex flex-col overflow-hidden ${
-          open ? 'translate-x-0 shadow-[-4px_0_24px_rgba(0,0,0,0.08)]' : 'translate-x-full shadow-none'
+        className={`fixed top-0 right-0 bottom-0 z-50 flex flex-col overflow-hidden ${
+          open ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{
           width: `${width}px`,
+          background: "var(--surface-lowest, #FAFAFA)",
+          borderLeft: "1px solid var(--outline-variant, #E4E4E7)",
+          boxShadow: open ? "0 2px 8px rgba(0,0,0,.08)" : "none",
           animation: isDragging ? "none" : open ? "panelSlide .32s cubic-bezier(.2,.7,.2,1) both" : "none",
-          transition: isDragging ? "none" : "width .12s ease, transform 220ms cubic-bezier(0.4,0,0.2,1), box-shadow 220ms ease",
+          transition: isDragging ? "none" : "width .12s ease",
         }}
         aria-hidden={!open}
       >
@@ -233,9 +236,9 @@ const DbExplorerDrawer: React.FC<Props> = ({
         <div style={{ padding: "20px 22px 12px", position:"relative" }}>
           <button 
             onClick={onClose} 
-            className="w-7 h-7 rounded-md text-on-surface-muted hover:bg-surface-c hover:text-on-surface flex items-center justify-center border-0 bg-transparent cursor-pointer" 
+            className="btn-icon btn-xs" 
             aria-label="Close" 
-            style={{ position:"absolute", top: 16, right: 14 }}
+            style={{ position:"absolute", top: 16, right: 14, width:28, height:28, borderRadius:6, display:"grid", placeItems:"center", background:"transparent", border:"none", cursor:"pointer", color:"var(--on-surface-variant)" }}
           >
             <CloseIcon size={18} />
           </button>
@@ -263,7 +266,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
           </div>
 
           {/* Search filter row */}
-          <div style={{ position: "relative", marginBottom: 4 }}>
+          <div style={{ position: "relative" }}>
             <span style={{
               position:"absolute", left: 14, top: "50%",
               transform: "translateY(-50%)", color: "var(--on-surface-variant, #49454F)",
@@ -279,10 +282,10 @@ const DbExplorerDrawer: React.FC<Props> = ({
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               style={{
-                width:"100%", height: 40, paddingLeft: 42, paddingRight: 14,
+                width:"100%", height: 40, paddingLeft: 40, paddingRight: 14,
                 background: "var(--surface-c, #F4F3F7)",
                 border: "1px solid var(--outline-variant, #E5E5E5)",
-                borderRadius: 999,
+                borderRadius: "var(--radius-full, 9999px)",
                 fontSize: 13.5, color: "var(--on-surface, #1C1B1F)",
                 outline: "none",
               }}
@@ -327,7 +330,6 @@ const DbExplorerDrawer: React.FC<Props> = ({
           display: "flex", justifyContent: "flex-start", alignItems: "center",
           fontSize: 11.5, color: "var(--on-surface-variant, #49454F)",
           borderTop: "1px solid var(--outline-variant, #E5E5E5)",
-          borderBottom: "1px solid var(--outline-variant, #E5E5E5)",
           letterSpacing: ".05em",
         }}>
           <span style={{ display:"inline-flex", alignItems:"center", gap: 6, textTransform:"uppercase", fontWeight: 600 }}>

@@ -142,8 +142,8 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
 
   return (
     <header className="app-header">
-      <div className="flex items-center gap-3">
-        <TulipLogo size={32} />
+      <div className="flex items-center gap-[10px]">
+        <TulipLogo size={36} />
         {/* Clicking the brand resets the persisted search store AND
             clears URL search params, so NerPage's `!lastQuery` branch
             kicks in and the Dashboard surfaces. Without the reset,
@@ -187,13 +187,13 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
               }
             }}
             onMouseLeave={handlePillLeave}
-            className="relative inline-flex items-center gap-0.5 p-1 bg-background border border-border rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+            className="relative inline-flex items-center gap-[2px] p-[4px] bg-[var(--surface-lowest)] border border-[var(--outline-variant)] rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
             aria-label="Primary"
           >
             {/* Sliding indicator behind the active tab */}
             <span
               aria-hidden
-              className="absolute top-1 bottom-1 bg-surface-c rounded-full pointer-events-none"
+              className="absolute top-[4px] bottom-[4px] bg-surface-c rounded-full pointer-events-none"
               style={{
                 left: indicator.left,
                 width: indicator.width,
@@ -212,8 +212,8 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
                   ref={(el) => { itemRefs.current[idx] = el; }}
                   activeOptions={item.to === '/' ? { exact: true } : undefined}
                   className={[
-                    'relative z-[1] inline-flex items-center gap-2 h-10 px-[18px] rounded-full',
-                    'text-sm cursor-pointer no-underline transition-colors duration-200',
+                    'relative z-[1] inline-flex items-center gap-[8px] h-[40px] px-[18px] rounded-full',
+                    'text-[14px] cursor-pointer no-underline transition-colors duration-200',
                     isActive ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium hover:text-on-surface',
                   ].join(' ')}
                 >

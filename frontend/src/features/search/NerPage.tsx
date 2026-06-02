@@ -630,24 +630,26 @@ const NerPage: React.FC = () => {
   return (
     <div className="w-full px-8 pt-7 pb-10 results-page">
       <div className="mx-auto max-w-[1440px]">
-        <SearchForm
-          onSearch={handleSearch}
-          onOpenDatabasePanel={(q) => {
-            // Signal Dashboard to open its drawer with the query
-            // pre-applied. The drawer lives inside Dashboard; this
-            // store is the cross-page bridge (see stores/drawerStore.ts).
-            useDrawerStore.getState().requestOpenWithQuery(q);
-          }}
-          isLoading={isLoading}
-          defaultQuery={search.q ?? ''}
-          defaultFilters={{
-            open_access:   search.oa === '1',
-            has_full_text: search.ft === '1',
-            article_type:  search.type ?? '',
-            sort:          search.sort ?? '',
-            source:        search.src ?? 'europepmc',
-          }}
-        />
+        <div className="px-[24px]">
+          <SearchForm
+            onSearch={handleSearch}
+            onOpenDatabasePanel={(q) => {
+              // Signal Dashboard to open its drawer with the query
+              // pre-applied. The drawer lives inside Dashboard; this
+              // store is the cross-page bridge (see stores/drawerStore.ts).
+              useDrawerStore.getState().requestOpenWithQuery(q);
+            }}
+            isLoading={isLoading}
+            defaultQuery={search.q ?? ''}
+            defaultFilters={{
+              open_access:   search.oa === '1',
+              has_full_text: search.ft === '1',
+              article_type:  search.type ?? '',
+              sort:          search.sort ?? '',
+              source:        search.src ?? 'europepmc',
+            }}
+          />
+        </div>
 
         {error && (
           <div className="mx-auto mb-6 max-w-4xl rounded-lg bg-red-50 p-4 text-red-700">

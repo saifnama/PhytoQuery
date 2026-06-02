@@ -103,8 +103,8 @@ const Kbd: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <kbd
     className="
       pointer-events-none select-none inline-flex items-center justify-center
-      h-6 min-w-6 px-1.5 rounded
-      bg-surface-c border border-border text-on-surface-muted
+      h-6 min-w-6 px-[7px] rounded-[5px]
+      bg-surface-c border border-border text-on-surface-variant
       font-mono text-[14px] font-medium leading-none
     "
   >
@@ -505,7 +505,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
           ${expanded ? 'is-focused' : ''}
           transition-[padding] duration-200
         `}
-        style={{ padding: '14px 8px' }}
+        style={{ padding: '10px 10px 10px 22px' }}
       >
         {/* Pink trail-light on submit — keyed by submission time so animation restarts */}
         {searching && <span className="pq-search-trail" key={Date.now()} />}
@@ -530,7 +530,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               }}
               aria-label="Search"
               className="
-                grid place-items-center shrink-0 w-10 h-10
+                grid place-items-center shrink-0 w-[40px] h-[40px]
                 text-on-surface-variant hover:text-primary
                 transition-colors rounded-full
               "
@@ -547,7 +547,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               autoComplete="off"
               spellCheck={false}
               className="
-                flex-1 min-w-0 h-11
+                flex-1 min-w-0 h-[44px]
                 bg-transparent border-none outline-none
                 text-[15px] text-on-surface placeholder:text-on-surface-muted caret-teal-500
                 tracking-[-0.003em]
@@ -639,7 +639,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               {/* Row 3 — SORT BY */}
               {showSort && (
                 <div
-                  className="flex items-center gap-3 px-4 pb-2 animate-spring-in"
+                  className="flex items-center gap-3 px-4 pt-1.5 pb-1.5 animate-spring-in"
                   style={{ animationDelay: '0.05s' }}
                 >
                   <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-muted min-w-[78px]">
