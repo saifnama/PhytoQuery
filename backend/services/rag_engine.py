@@ -327,6 +327,64 @@ config = RAGConfig()
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# BM25 sparse encoder availability probe
+# ---------------------------------------------------------------------------
+# fastembed's BM25 encoder depends on ``py_rust_stemmers``, a Rust
+# extension that segfaults on certain Python builds (notably 3.14)
+# due to an incompatible C ABI.  Since the crash happens inside
+# native code, no try/except can catch it — it kills the process.
+#
+# We probe it in a short-lived subprocess: if the child exits
+# cleanly, the extension works and we enable hybrid (dense + BM25)
+# retrieval.  If it crashes, we log a warning and fall back to
+# dense-only retrieval.
+#
+# The check is lazy (runs once on first call) and cached for the
+# lifetime of the process.  When ``py_rust_stemmers`` ships a fixed
+# build, the probe passes automatically — zero code changes needed.
+# ---------------------------------------------------------------------------
+_bm25_probe_done: bool = False
+_bm25_probe_ok: bool = False
+
+
+def _check_bm25() -> bool:
+    """Return True if fastembed's BM25 stemmer works in this runtime."""
+    global _bm25_probe_done, _bm25_probe_ok
+    if _bm25_probe_done:
+        return _bm25_probe_ok
+    _bm25_probe_done = True
+    try:
+        import subprocess, sys
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import py_rust_stemmers;"
+                "s = py_rust_stemmers.SnowballStemmer('english');"
+                "s.stem_word('testing')",
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        _bm25_probe_ok = result.returncode == 0
+        if not _bm25_probe_ok:
+            logger.warning(
+                "BM25 sparse encoder disabled: py_rust_stemmers crashed "
+                "(exit code %d). Falling back to dense-only retrieval. "
+                "Upgrade py_rust_stemmers or Python to re-enable hybrid search.",
+                result.returncode,
+            )
+        else:
+            logger.info("BM25 sparse encoder probe passed — hybrid retrieval available.")
+    except Exception as exc:
+        logger.warning(
+            "BM25 probe could not run (%s), disabling sparse retrieval.", exc
+        )
+        _bm25_probe_ok = False
+    return _bm25_probe_ok
+
+
+
 class RAGProviderAuthError(Exception):
     """Raised when the configured LLM provider rejects authentication/config."""
 
@@ -1357,18 +1415,26 @@ class RAGService:
         client = self._get_qdrant_client()
         self._ensure_qdrant_collection(client, collection_name)
 
+        sparse = self._get_sparse_embeddings()
+        if sparse is not None:
+            mode = RetrievalMode.HYBRID
+            mode_label = "HYBRID"
+        else:
+            mode = RetrievalMode.DENSE
+            mode_label = "DENSE (BM25 unavailable)"
+
         vectorstore = QdrantVectorStore(
             client=client,
             collection_name=collection_name,
             embedding=self.embeddings,
-            sparse_embedding=self._get_sparse_embeddings(),
-            retrieval_mode=RetrievalMode.HYBRID,
+            sparse_embedding=sparse,
+            retrieval_mode=mode,
             vector_name="dense",
             sparse_vector_name="sparse",
         )
         logger.info(
-            f"Created Qdrant HYBRID vectorstore for user: {user_id} "
-            f"(collection={collection_name}, fusion=RRF)"
+            f"Created Qdrant {mode_label} vectorstore for user: {user_id} "
+            f"(collection={collection_name})"
         )
         self._vectorstore_cache[user_id] = vectorstore
         return vectorstore
@@ -1385,7 +1451,13 @@ class RAGService:
         Kept lazy so service construction stays cheap and the
         download cost is only paid the first time a user actually
         triggers a hybrid ingest or query.
+
+        Returns ``None`` when the BM25 runtime is broken (e.g.
+        ``py_rust_stemmers`` segfaults on Python 3.14).  Callers
+        must handle ``None`` by falling back to dense-only mode.
         """
+        if not _check_bm25():
+            return None
         if not hasattr(self, "_sparse_embeddings_cache") or self._sparse_embeddings_cache is None:
             from langchain_qdrant import FastEmbedSparse
             logger.info("Loading FastEmbed Qdrant/bm25 sparse encoder…")
