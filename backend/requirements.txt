@@ -1,0 +1,112 @@
+# PhytoQuery backend — Python dependencies
+# Install:   pip install -r backend/requirements.txt
+# Tested on: Python 3.10 → 3.14 (Linux, macOS, Windows)
+#
+# Pin policy:
+#   * Hard pins (==) for anything in the ML stack (numpy, transformers,
+#     sentence-transformers, qdrant-client, langchain*) — these have
+#     load-bearing API surfaces and any version drift quickly breaks
+#     embedding shape, reranker tokenization, or vector-store schema.
+#   * Hard pins for the FastAPI core too — pydantic v1↔v2, FastAPI's
+#     dependency-injection internals, and uvicorn's event-loop hooks
+#     move in lockstep.
+#   * Everything else gets a pin because reproducibility > convenience.
+#
+# When bumping a pin: run ``pytest backend/tests/ -v`` AND do one full
+# end-to-end PDF upload + query before committing. The embedding-dim
+# clamp + Qdrant hybrid retrieval + cross-encoder reranker have
+# several silent-breakage modes that unit tests don't catch.
+
+# === FastAPI core ===========================================================
+fastapi==0.136.1
+uvicorn[standard]==0.46.0
+# uvloop: libuv-backed asyncio event loop. uvicorn auto-detects + switches
+# the policy when present — ~25-40% throughput gain on the streaming SSE +
+# chunked upload paths. No Windows wheels exist, so the env marker keeps
+# the install Linux/macOS-only; Windows falls back to the stdlib
+# SelectorEventLoop with no code change.
+uvloop==0.21.0; sys_platform != "win32"
+pydantic==2.13.3
+python-multipart==0.0.27
+
+# === HTTP ===================================================================
+httpx==0.28.1
+
+# === NLP — dictionary matchers (spaCy PhraseMatcher) =======================
+# spaCy model is downloaded out-of-band: ``python -m spacy download en_core_web_sm``
+spacy==3.8.14
+
+# === RAG: LangChain + Qdrant + embeddings + reranker =======================
+langchain==1.2.17
+langchain-community==0.4.1
+langchain-core==1.3.3
+langchain-huggingface==1.2.2
+langchain-qdrant==1.1.0
+langchain-experimental==0.4.1
+langchain-text-splitters==1.1.2
+# qdrant-client version MUST match the Qdrant Server image tag in
+# scripts/qdrant.{sh,ps1} (currently v1.18.0) — mismatched protocol
+# versions trigger gRPC schema errors on collection introspection.
+qdrant-client==1.18.0
+# Sparse BM25 encoder for hybrid retrieval. Loaded lazily via
+# ``FastEmbedSparse(model_name="Qdrant/bm25")`` at first query.
+# langchain-qdrant 1.x ships fastembed only as an *extras* dependency
+# (``langchain-qdrant[fastembed]``), so a plain install does NOT
+# pull it. Declaring it explicitly here keeps hybrid retrieval working
+# on a clean ``pip install -r requirements.txt`` from any machine.
+fastembed==0.8.0
+sentence-transformers==5.4.1
+# transformers is kept in lockstep with the sentence-transformers
+# integration. Bumping one without the other typically breaks the
+# zerank-2 cross-encoder's tokenizer config (it ships modelling code
+# that loads via ``trust_remote_code``).
+transformers==4.57.1
+# Permissive JSON parser used by the structured-output citation pass.
+# Production LLMs (especially smaller models in JSON mode) emit common
+# malformations: trailing commas, code-fenced output, single quotes,
+# unclosed braces, smart quotes. ``json_repair`` recovers the intended
+# object from these without an extra LLM round-trip. See
+# ``_select_used_chunks`` in services/rag_engine.py.
+json-repair==0.59.6
+
+# === PDF + document parsing =================================================
+pymupdf==1.27.2.3
+pymupdf4llm==1.27.2.3
+
+# tokenizer chunker transitively.
+docling
+beautifulsoup4==4.14.3
+lxml==6.1.0
+# nh3 0.3.x renamed several arguments and dropped the legacy
+# ``link_rel`` behaviour. Pinned at 0.2.x until backend/core/sanitizer.py
+# is audited against the new API.
+nh3==0.2.20
+
+# === Numerical + utilities ==================================================
+# numpy 2.x changes the C ABI used by sentence-transformers and the
+# zerank-2 reranker's bundled modelling code. Stay on 1.26.x until
+# every ML dep above publishes wheels built against numpy 2.
+numpy==1.26.4
+jinja2==3.1.6
+# python-dotenv loads .env / .env.<PHYTOQUERY_PROFILE> at startup.
+# See backend/config.py for precedence rules.
+python-dotenv==1.2.2
+
+# === Database (SQLite + async SQLAlchemy) ===================================
+sqlalchemy==2.0.49
+# greenlet is the async runtime SQLAlchemy uses under the hood for
+# its async ORM. Pinned to a version that ships wheels for 3.12/3.13.
+greenlet==3.0.3
+# aiosqlite is the async driver SQLAlchemy targets via the
+# ``sqlite+aiosqlite://`` URL scheme (see backend/db/database.py).
+aiosqlite==0.22.1
+# pandas 3.x has breaking API changes around pyarrow defaults; stay
+# on 2.2.x until ``backend/db/import_entities.py`` is audited.
+pandas==2.2.2
+# openpyxl is the engine pandas uses for the .xlsx import path in
+# backend/db/import_entities.py (``pd.read_excel``).
+openpyxl==3.1.5
+
+# === Tests ==================================================================
+pytest==9.0.3
+pytest-asyncio==1.3.0
