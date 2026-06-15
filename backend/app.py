@@ -1,4 +1,48 @@
 # ─────────────────────────────────────────────────────────────────────────────
+# Python 3.14 resource_tracker segfault workaround (must be FIRST)
+# ─────────────────────────────────────────────────────────────────────────────
+# Python 3.14 rewrote ``multiprocessing.resource_tracker`` to aggressively
+# clean up "leaked" POSIX semaphores at interpreter shutdown.  The tracker
+# daemon calls ``sem_unlink()`` for every semaphore still in its registry,
+# but when the semaphore was already destroyed by the library that created
+# it (loky, PyTorch, etc.), the unlink segfaults inside the C extension.
+#
+# Fix: monkeypatch ``resource_tracker.register`` / ``unregister`` to skip
+# semaphore registrations entirely.  Semaphores are still cleaned up by
+# their owning libraries' ``__del__`` methods and by our explicit shutdown
+# handler (``_close_fastembed_models``) — the tracker's redundant cleanup
+# is the one that crashes.  Non-semaphore resources (shared memory, etc.)
+# are unaffected.
+#
+# This block MUST execute before any library creates a multiprocessing
+# semaphore (torch, joblib, loky …), so keep it at the very top.
+import sys as _sys
+if _sys.version_info >= (3, 14):
+    try:
+        from multiprocessing import resource_tracker as _rt
+        _rt__register = _rt.register
+        _rt__unregister = _rt.unregister
+
+        def _safe_register(name, rtype):
+            if rtype == "semaphore":
+                return
+            return _rt__register(name, rtype)
+
+        def _safe_unregister(name, rtype):
+            if rtype == "semaphore":
+                return
+            return _rt__unregister(name, rtype)
+
+        _rt.register = _safe_register
+        _rt.unregister = _safe_unregister
+        del _rt, _rt__register, _rt__unregister
+    except Exception:
+        pass
+del _sys
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Native-extension threading & worker-pool safe defaults
 # ─────────────────────────────────────────────────────────────────────────────
 # Many ML libraries (fastembed, transformers, torch, numpy via MKL/OpenMP)
