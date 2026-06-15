@@ -18,6 +18,10 @@
 #   * any library version (fastembed 0.x, torch 2.x, transformers 4.x)
 #
 # Knobs:
+#   JOBLIB_MULTIPROCESSING   When "0", joblib never spawns child processes
+#                            via loky — all work runs in the calling thread.
+#                            This avoids the POSIX semaphore that triggers
+#                            the Python 3.14 resource_tracker segfault.
 #   LOKY_MAX_CPU_COUNT       joblib/loky workers (fastembed BM25 uses this).
 #                            Setting to 1 limits loky to one child process.
 #   TOKENIZERS_PARALLELISM   HuggingFace tokenizers Rust thread pool. "false"
@@ -34,6 +38,7 @@
 # semaphore handles that become invalid during interpreter shutdown;
 # spawn avoids this by starting a fresh interpreter in each child.
 import os as _os
+_os.environ.setdefault("JOBLIB_MULTIPROCESSING", "0")
 _os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
 _os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 _cpu_count = _os.cpu_count() or 1
