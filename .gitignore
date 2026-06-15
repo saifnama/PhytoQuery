@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+ragnervenv/
+venv/
+env/
+.venv
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.nox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+# Runtime data - auto-created on first run (cache, uploads, chroma_db)
+data/
+!backend/gazetteer/data/
+!backend/gazetteer/data/*.csv
+*.log
+*.pid
+
+# Node (frontend)
+node_modules/
+dist/
+.env
+.env.local
+
+# Cache
+.ruff_cache/
+.pyright/
+.mypy_cache/
+
+# Agent tools (not needed in repo)
+.kilocode/
+.sisyphus/
+.skypilot/
+.agents/

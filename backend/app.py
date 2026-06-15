@@ -19,7 +19,8 @@
 #
 # Knobs:
 #   LOKY_MAX_CPU_COUNT       joblib/loky workers (fastembed BM25 uses this).
-#                            Setting to 1 limits loky to one child process.
+#                            Setting to 1 avoids the multiprocessing.Process
+#                            spawn that's segfault-prone on Python 3.14.
 #   TOKENIZERS_PARALLELISM   HuggingFace tokenizers Rust thread pool. "false"
 #                            silences the fork-after-parallelism warning and
 #                            avoids segfaults when uvicorn forks workers.
@@ -27,12 +28,6 @@
 #                            leave headroom for FastAPI's event loop +
 #                            worker pools sharing the same node.
 #   MKL_NUM_THREADS          Intel MKL (numpy on Intel CPUs). Same cap.
-#
-# Additionally, ``multiprocessing.set_start_method('spawn')`` is forced
-# below to prevent a Python 3.14 segfault in the resource_tracker when
-# loky's child process is created via fork.  Forked children inherit
-# semaphore handles that become invalid during interpreter shutdown;
-# spawn avoids this by starting a fresh interpreter in each child.
 import os as _os
 _os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
 _os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -40,13 +35,6 @@ _cpu_count = _os.cpu_count() or 1
 _os.environ.setdefault("OMP_NUM_THREADS", str(max(1, _cpu_count // 2)))
 _os.environ.setdefault("MKL_NUM_THREADS", str(max(1, _cpu_count // 2)))
 del _cpu_count
-
-import multiprocessing as _mp
-try:
-    _mp.set_start_method("spawn", force=True)
-except RuntimeError:
-    pass  # already set
-del _mp
 # ─────────────────────────────────────────────────────────────────────────────
 
 
