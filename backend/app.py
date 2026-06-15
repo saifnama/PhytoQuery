@@ -96,6 +96,12 @@ try:
 except RuntimeError:
     pass  # already set
 del _mp
+
+# Print a full native stack trace on segfault instead of bare
+# "Segmentation fault (core dumped)".  Costs nothing at runtime.
+import faulthandler as _fh
+_fh.enable()
+del _fh
 # ─────────────────────────────────────────────────────────────────────────────
 
 
