@@ -1199,25 +1199,57 @@ class RAGService:
         """
         with self._qdrant_lock:
             client = self._qdrant_client
-            if client is None:
-                return
-            # Skip silently if the client doesn't expose ``close()`` —
-            # this is the path test fakes hit (they implement only
-            # the methods their assertions need). Real QdrantClient
-            # instances always have ``close()``.
-            if hasattr(client, "close"):
+            if client is not None:
+                if hasattr(client, "close"):
+                    try:
+                        client.close()
+                        logger.info("Closed Qdrant local client cleanly")
+                    except Exception as e:
+                        logger.warning(
+                            f"Qdrant client close raised (ignored): {e}"
+                        )
+                self._qdrant_client = None
+                self._vectorstore_cache.clear()
+
+        self._close_fastembed_models()
+
+    def _close_fastembed_models(self) -> None:
+        """Clean up fastembed models and terminate their loky process pool.
+
+        On Python 3.14, the loky reusable executor (used by fastembed's
+        BM25 sparse encoder) does not implement __del__, so its IPC
+        semaphore is never released during normal garbage collection.
+        Python's multiprocessing.resource_tracker then finds the
+        orphaned semaphore at shutdown and segfaults in its cleanup
+        code (a Python 3.14 regression).
+
+        We explicitly terminate and release the executor here so the
+        semaphore is unlinked before the resource_tracker runs.
+
+        Idempotent: safe to call when the models were never loaded.
+        Best-effort: any exception is silently caught.
+        """
+        try:
+            from joblib.externals.loky import reusable_executor as _loky_re
+
+            executor = _loky_re._executor
+            if executor is not None:
+                executor.shutdown(wait=True)
+                _loky_re._executor = None
                 try:
-                    client.close()
-                    logger.info("Closed Qdrant local client cleanly")
-                except Exception as e:
-                    logger.warning(f"Qdrant client close raised (ignored): {e}")
-            # Drop the reference so ``__del__`` has nothing to do
-            # when the interpreter eventually tears the object
-            # down — no "Exception ignored in: __del__" lines.
-            self._qdrant_client = None
-            # Also drop per-user vectorstore wrappers; they hold
-            # references back into the (now-closed) client.
-            self._vectorstore_cache.clear()
+                    _loky_re._executor_kwargs = None
+                except AttributeError:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "_sparse_embeddings_cache"):
+                del self._sparse_embeddings_cache
+        except Exception:
+            pass
+
+        gc.collect()
 
     def _ensure_qdrant_collection(self, client, collection_name: str) -> None:
         """Create the per-user Qdrant collection if it doesn't exist.
