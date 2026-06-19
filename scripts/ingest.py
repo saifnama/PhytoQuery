@@ -46,30 +46,45 @@ if _REPO_ROOT not in sys.path:
 # --------------------------------------------------------------------------- #
 # Configuration — edit these to match your setup before running.
 # --------------------------------------------------------------------------- #
-RAW_DIR          = "backend/knowledge_base/papers"    # folder holding the PDFs
-MARKDOWN_DIR     = "backend/knowledge_base/parsed"    # parsed markdown cache
-STATE_DB         = "backend/knowledge_base/kb.sqlite" # papers table + parents table
+RAW_DIR = "backend/knowledge_base/papers"  # folder holding the PDFs
+MARKDOWN_DIR = "backend/knowledge_base/parsed"  # parsed markdown cache
+STATE_DB = "backend/knowledge_base/kb.sqlite"  # papers table + parents table
 
-QDRANT_URL       = os.environ.get("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME  = "knowledge_base_qwen3_1024"   # bake model+dim into name;
-                                                  # change if you re-embed with
-                                                  # a different model later.
-DENSE_DIM        = 2560          # Qwen3-Embedding-4B native dim (use 1024 if RAG_EMBEDDING_DIM=1024)
-DENSE_VEC        = "dense"
-SPARSE_VEC       = "sparse"
-SPARSE_MODEL     = "Qdrant/bm25"
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+COLLECTION_NAME = "kb_papers"  # bake model+dim into name;
+# change if you re-embed with
+# a different model later.
+DENSE_DIM = 384  # BGE-small-en-v1.5 native dim; change if using a different model
+DENSE_VEC = "dense"
+SPARSE_VEC = "sparse"
+SPARSE_MODEL = "Qdrant/bm25"
 
 # Tokenizer the chunker uses to stay within the model's context window.
-EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-4B"
-PARENT_MAX_TOKENS    = 500       # ~400-600 is the practical sweet spot
-CHILD_CHUNK_CHARS    = 900       # characters per child chunk
-CHILD_CHUNK_OVERLAP  = 120
+EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+PARENT_MAX_TOKENS = 500  # ~400-600 is the practical sweet spot
+CHILD_CHUNK_CHARS = 900  # characters per child chunk
+CHILD_CHUNK_OVERLAP = 120
 
-# GPU settings (A100). One worker process owns the GPU; don't raise this
+# GPU settings. One worker process owns the GPU; don't raise this
 # above 1 unless you have multiple GPUs — competing for one GPU is slower.
-PARSE_WORKERS    = 1
-GPU_PAGE_BATCH   = 8             # pages fed to layout model in one batch;
-                                  # tune up if VRAM allows (A100: try 16-32)
+PARSE_WORKERS = 1
+GPU_PAGE_BATCH = 8  # pages fed to layout model in one batch;
+# tune up if VRAM allows (A100: try 16-32)
+
+
+def _detect_device() -> str:
+    """Return 'cuda', 'mps', or 'cpu' depending on what's available."""
+    try:
+        import torch
+
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except ImportError:
+        pass
+    return "cpu"
+
 
 # Fixed UUID namespace for deterministic point IDs.
 # NEVER change this after first ingestion run — it would generate different
@@ -95,45 +110,52 @@ REF_HEADING = re.compile(
 
 # Worker-process globals — populated once by _init_worker(), never per-PDF.
 _converter = None
-_chunker   = None
-_splitter  = None
+_chunker = None
+_splitter = None
 
 
 def _init_worker() -> None:
     """Load Docling models once per worker process. Expensive — do not call per PDF."""
     global _converter, _chunker, _splitter
 
-    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.chunking import HybridChunker
+    from docling.datamodel.accelerator_options import (
+        AcceleratorDevice,
+        AcceleratorOptions,
+    )
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-    from docling.datamodel.accelerator_options import AcceleratorOptions, AcceleratorDevice
     from docling.datamodel.settings import settings as docling_settings
-    from docling.chunking import HybridChunker
-    from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
-    from transformers import AutoTokenizer
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling_core.transforms.chunker.tokenizer.huggingface import (
+        HuggingFaceTokenizer,
+    )
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from transformers import AutoTokenizer
 
     pipeline_opts = PdfPipelineOptions()
-    pipeline_opts.do_ocr = False          # academic PDFs are seldom scanned
+    pipeline_opts.do_ocr = False  # academic PDFs are seldom scanned
     pipeline_opts.do_table_structure = True
     pipeline_opts.table_structure_options.mode = TableFormerMode.ACCURATE
     pipeline_opts.table_structure_options.do_cell_matching = False
+
+    device = _detect_device()
+    log.info("Docling using device: %s", device)
+
     pipeline_opts.accelerator_options = AcceleratorOptions(
-        device=AcceleratorDevice.CUDA,
-        # Flash Attention 2 gives real speedup on A100 but has two prerequisites:
-        #   1. pip install flash-attn  (must be compiled for your CUDA version)
-        #   2. All Docling model presets must load in fp16/bf16, not fp32.
-        # Docling issue #3026 (Feb 2026) documents crashes when any preset loads
-        # in fp32 with this True. Start False, test one PDF, then enable if clean.
+        device=AcceleratorDevice.CUDA if device == "cuda" else AcceleratorDevice.CPU,
         cuda_use_flash_attention2=False,
     )
 
-    # GPU batch inference for layout detection — the single biggest speedup.
-    # With an A100 start at 8 and raise until VRAM pressure shows in nvidia-smi.
-    docling_settings.perf.page_batch_size = GPU_PAGE_BATCH
+    if device == "cuda":
+        docling_settings.perf.page_batch_size = GPU_PAGE_BATCH
+    else:
+        docling_settings.perf.page_batch_size = 1
 
     _converter = DocumentConverter(
-        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts)}
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts)
+        }
     )
     tokenizer = HuggingFaceTokenizer(
         tokenizer=AutoTokenizer.from_pretrained(EMBEDDING_MODEL_NAME),
@@ -141,13 +163,15 @@ def _init_worker() -> None:
     )
     _chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
     _splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHILD_CHUNK_CHARS, chunk_overlap=CHILD_CHUNK_OVERLAP,
+        chunk_size=CHILD_CHUNK_CHARS,
+        chunk_overlap=CHILD_CHUNK_OVERLAP,
     )
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
 
 def file_paper_id(path: str) -> str:
     """SHA-256 content hash → 24-char hex. Stable, filename-independent."""
@@ -163,25 +187,110 @@ def det_id(*parts: str) -> str:
     return str(uuid.uuid5(ID_NAMESPACE, ":".join(parts)))
 
 
-def extract_doi(text: str) -> Optional[str]:
-    """Best-effort DOI from the first 3,000 characters only — avoids picking
-    up a cited paper's DOI from the references section."""
+def extract_doi_from_pdf(pdf_path: str) -> Optional[str]:
+    """Extract DOI from the first two pages of a PDF via pymupdf.
+
+    Docling does *not* extract DOIs — they live in free-text body copy,
+    not in structured elements.  Academic PDFs almost always print the
+    DOI on page 1 (often as ``http://dx.doi.org/10.xxxx/…``).
+    """
+    try:
+        import pymupdf as _fitz
+
+        doc = _fitz.open(pdf_path)
+        for i in range(min(2, len(doc))):
+            page_text = doc[i].get_text()
+            m = DOI_PATTERN.search(page_text)
+            if m:
+                doc.close()
+                return m.group(2).rstrip(".,;)")
+        doc.close()
+    except Exception:
+        pass
+    return None
+
+
+def extract_doi_from_markdown(text: str) -> Optional[str]:
+    """Fallback DOI from the first 3,000 characters of markdown."""
     m = DOI_PATTERN.search(text[:3000])
     if not m:
         return None
-    # group 2 is the bare DOI (without the https://doi.org/ prefix)
     return m.group(2).rstrip(".,;)")
 
 
 def extract_title(doc, full_md: str, fallback: str) -> str:
+    """Extract the paper title from the Docling document.
+
+    Universal strategy — works for ANY paper without per-paper hardcoding:
+
+    1.  ``doc.name`` — set by Docling when the PDF has an embedded title.
+        Skipped when it looks like a filename (hyphens/dots, no spaces).
+    2.  Walk ``doc.iterate_items()`` and collect all ``section_header``
+        items that appear BEFORE any body text item.  The title is the
+        LONGEST such heading — journal section labels ("Special Report",
+        "Original Research", "Review") are always short, while paper
+        titles are always long (describing the topic).
+    3.  Markdown fallback: longest H1/H2 in first 80 lines.
+    4.  Filename stem (last resort).
+    """
+    from docling_core.types.doc import DocItemLabel
+
+    # --- 1. Embedded title from PDF metadata ---
     name = getattr(doc, "name", None)
-    if name:
+    if name and " " in name and not re.search(r"[-_.]{2,}", name):
         return name
-    for line in full_md.splitlines():
-        line = line.strip()
-        if line.startswith("# "):
-            return line.lstrip("# ").strip()
-    return fallback
+
+    # --- 2. Walk document structure ---
+    # Collect all section_headers before body text, then pick the longest.
+    seen_body_text = False
+    candidates = []  # (length, text) for each section_header before body
+
+    for item, level in doc.iterate_items():
+        label = getattr(item, "label", None)
+        text = getattr(item, "text", "").strip()
+
+        # Track whether we've hit real body content
+        if label in (
+            DocItemLabel.TEXT,
+            DocItemLabel.PARAGRAPH,
+            DocItemLabel.FOOTNOTE,
+            DocItemLabel.LIST_ITEM,
+        ):
+            seen_body_text = True
+
+        # Only consider section headers
+        if label != DocItemLabel.SECTION_HEADER:
+            continue
+
+        # Once we've seen body text, stop — title is always before body
+        if seen_body_text:
+            break
+
+        # Skip very short headings (< 10 chars — journal labels, "Keywords:", etc.)
+        if len(text) < 10:
+            continue
+
+        candidates.append((len(text), text))
+
+    if candidates:
+        # The title is the longest heading before body text
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    # --- 3. Markdown fallback ---
+    best = ""
+    for line in full_md.splitlines()[:80]:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            heading = stripped[3:].strip()
+        elif stripped.startswith("# "):
+            heading = stripped[2:].strip()
+        else:
+            continue
+        if len(heading) > len(best):
+            best = heading
+
+    return best if best else fallback
 
 
 # --------------------------------------------------------------------------- #
@@ -189,22 +298,106 @@ def extract_title(doc, full_md: str, fallback: str) -> str:
 # SQLite here). Returns plain picklable dicts back to the main process.
 # --------------------------------------------------------------------------- #
 
+
+def _normalized_find(haystack: str, needle: str, start: int = 0) -> int:
+    """Find *needle* in *haystack* after collapsing runs of whitespace.
+
+    The HybridChunker sometimes emits text with slightly different
+    whitespace (extra newlines, collapsed spaces) compared to
+    ``export_to_markdown()``.  A plain ``str.find()`` therefore misses
+    many chunks.  This helper normalises both sides to single spaces
+    before searching and returns the character offset in the *original*
+    (un-normalised) haystack so that ``body_start`` / ``body_end`` stay
+    useful for passage highlighting.
+    """
+    _ws = re.compile(r"\s+")
+    norm_hay = _ws.sub(" ", haystack)
+    norm_need = _ws.sub(" ", needle).strip()
+    pos = norm_hay.find(norm_need, start)
+    if pos == -1:
+        return -1
+    # Map back to original offset: walk the original string counting
+    # characters that were consumed by the normalised version.
+    orig_pos = 0
+    norm_pos = 0
+    while norm_pos < pos and orig_pos < len(haystack):
+        if haystack[orig_pos].isspace():
+            # Skip the entire whitespace run in both strings.
+            while orig_pos < len(haystack) and haystack[orig_pos].isspace():
+                orig_pos += 1
+            norm_pos += 1  # normalised version has exactly one space
+        else:
+            orig_pos += 1
+            norm_pos += 1
+    return orig_pos
+
+
+def _find_chunk_offset(haystack: str, chunk_text: str, cursor: int = 0) -> int:
+    """Find the character offset of *chunk_text* in *haystack*.
+
+    Universal approach — progressive anchor search:
+    1.  Try the full chunk text (with whitespace normalization).
+    2.  If that fails, try the first sentence (up to first '.').
+    3.  If that fails, try the first N words (first 80 chars).
+    4.  If that fails, try the first 50 chars.
+    5.  If all fail, return -1.
+
+    This handles cases where the HybridChunker emits text with different
+    whitespace, line breaks, or minor formatting differences from
+    ``export_to_markdown()``.
+    """
+    # Try full chunk text first
+    pos = _normalized_find(haystack, chunk_text, cursor)
+    if pos != -1:
+        return pos
+
+    # Try from the beginning (in case cursor skipped past it)
+    pos = _normalized_find(haystack, chunk_text)
+    if pos != -1:
+        return pos
+
+    # Progressive anchor: try shorter prefixes
+    for anchor_len in (200, 100, 80, 50):
+        if len(chunk_text) <= anchor_len:
+            continue
+        anchor = chunk_text[:anchor_len]
+        pos = _normalized_find(haystack, anchor, cursor)
+        if pos != -1:
+            return pos
+        pos = _normalized_find(haystack, anchor)
+        if pos != -1:
+            return pos
+
+    # Last resort: first sentence (up to first period)
+    period_idx = chunk_text.find(".")
+    if period_idx > 20:
+        anchor = chunk_text[:period_idx]
+        pos = _normalized_find(haystack, anchor, cursor)
+        if pos != -1:
+            return pos
+        pos = _normalized_find(haystack, anchor)
+        if pos != -1:
+            return pos
+
+    return -1
+
+
 def parse_and_chunk(path: str, paper_id: str) -> dict:
     result = _converter.convert(path)
-    doc    = result.document
+    doc = result.document
     full_md = doc.export_to_markdown()
 
     title = extract_title(doc, full_md, Path(path).stem)
-    doi   = extract_doi(full_md)
+    doi = extract_doi_from_pdf(path) or extract_doi_from_markdown(full_md)
 
-    parent_rows    = []
+    parent_rows = []
     pending_points = []
-    child_idx      = 0
-    cursor         = 0
+    child_idx = 0
+    cursor = 0
 
     for p_idx, chunk in enumerate(_chunker.chunk(dl_doc=doc)):
         headings = chunk.meta.headings or []
-        section  = headings[-1] if headings else ""
+        section = headings[-1] if headings else ""
 
         # Skip bibliography / references section — citation-formatted text
         # is noise in a content-retrieval system.
@@ -215,15 +408,12 @@ def parse_and_chunk(path: str, paper_id: str) -> dict:
         if chunk.meta.doc_items and chunk.meta.doc_items[0].prov:
             page = chunk.meta.doc_items[0].prov[0].page_no
 
-        # Best-effort character offset for future "highlight passage" feature.
-        start = full_md.find(chunk.text, cursor)
-        if start == -1:
-            start = full_md.find(chunk.text)
+        start = _find_chunk_offset(full_md, chunk.text, cursor)
         end = (start + len(chunk.text)) if start != -1 else -1
         if start != -1:
             cursor = end
 
-        parent_id    = det_id(paper_id, "parent", str(p_idx))
+        parent_id = det_id(paper_id, "parent", str(p_idx))
         contextualized = _chunker.contextualize(chunk=chunk)
 
         parent_rows.append(
@@ -231,22 +421,24 @@ def parse_and_chunk(path: str, paper_id: str) -> dict:
         )
 
         for c_text in _splitter.split_text(contextualized):
-            pending_points.append({
-                "id":        det_id(paper_id, "child", str(child_idx)),
-                "text":      c_text,
-                "parent_id": parent_id,
-                "section":   section,
-                "page":      page,
-            })
+            pending_points.append(
+                {
+                    "id": det_id(paper_id, "child", str(child_idx)),
+                    "text": c_text,
+                    "parent_id": parent_id,
+                    "section": section,
+                    "page": page,
+                }
+            )
             child_idx += 1
 
     return {
-        "paper_id":      paper_id,
-        "path":          path,
-        "title":         title,
-        "doi":           doi,
-        "full_md":       full_md,
-        "parent_rows":   parent_rows,
+        "paper_id": paper_id,
+        "path": path,
+        "title": title,
+        "doi": doi,
+        "full_md": full_md,
+        "parent_rows": parent_rows,
         "pending_points": pending_points,
     }
 
@@ -256,13 +448,14 @@ def parse_and_chunk(path: str, paper_id: str) -> dict:
 # and SQLite connection never cross into the worker processes.
 # --------------------------------------------------------------------------- #
 
+
 def embed_and_store(parsed: dict, embeddings, qdrant, conn: sqlite3.Connection) -> int:
     from qdrant_client import models
 
     paper_id = parsed["paper_id"]
-    path     = parsed["path"]
-    title    = parsed["title"]
-    doi      = parsed["doi"]
+    path = parsed["path"]
+    title = parsed["title"]
+    doi = parsed["doi"]
 
     # Save parsed markdown — citation rendering and future passage highlighting
     # depend on this. Parsing never needs to repeat if chunking changes later.
@@ -281,31 +474,40 @@ def embed_and_store(parsed: dict, embeddings, qdrant, conn: sqlite3.Connection) 
             log.warning(
                 "DOI collision: %s shares doi=%s with already-indexed %s (%s) "
                 "— possible duplicate. Keep one and run --delete on the other.",
-                Path(path).name, doi, clash[1], clash[0],
+                Path(path).name,
+                doi,
+                clash[1],
+                clash[0],
             )
 
     pts = parsed["pending_points"]
     if not pts:
-        log.warning("%s produced 0 child chunks — check parsing output.", Path(path).name)
+        log.warning(
+            "%s produced 0 child chunks — check parsing output.", Path(path).name
+        )
 
-    texts         = [p["text"] for p in pts]
+    texts = [p["text"] for p in pts]
     dense_vectors = embeddings.embed_documents(texts) if texts else []
 
     qdrant_points = [
         models.PointStruct(
             id=p["id"],
             vector={
-                DENSE_VEC:  dv,
+                DENSE_VEC: dv,
                 SPARSE_VEC: models.Document(text=p["text"], model=SPARSE_MODEL),
             },
             payload={
-                "paper_id":     paper_id,
-                "parent_id":    p["parent_id"],
-                "source":       Path(path).name,
-                "doc_title":    title,
-                "doc_doi":      doi,
-                "section_title": p["section"],
-                "page":         p["page"],
+                "page_content": p["text"],
+                "metadata": {
+                    "paper_id": paper_id,
+                    "parent_id": p["parent_id"],
+                    "source": Path(path).name,
+                    "doc_title": title,
+                    "doc_doi": doi,
+                    "section_title": p["section"],
+                    "page": p["page"],
+                    "content_type": "text",
+                },
             },
         )
         for p, dv in zip(pts, dense_vectors)
@@ -334,8 +536,10 @@ def embed_and_store(parsed: dict, embeddings, qdrant, conn: sqlite3.Connection) 
 # Qdrant collection management
 # --------------------------------------------------------------------------- #
 
+
 def ensure_collection(qdrant) -> None:
     from qdrant_client import models
+
     if qdrant.collection_exists(COLLECTION_NAME):
         return
     log.info("Creating collection %s …", COLLECTION_NAME)
@@ -343,7 +547,8 @@ def ensure_collection(qdrant) -> None:
         collection_name=COLLECTION_NAME,
         vectors_config={
             DENSE_VEC: models.VectorParams(
-                size=DENSE_DIM, distance=models.Distance.COSINE,
+                size=DENSE_DIM,
+                distance=models.Distance.COSINE,
             ),
         },
         sparse_vectors_config={
@@ -366,6 +571,7 @@ def ensure_collection(qdrant) -> None:
 
 def finalize_collection(qdrant) -> None:
     from qdrant_client import models
+
     log.info("Re-enabling HNSW index build …")
     qdrant.update_collection(
         collection_name=COLLECTION_NAME,
@@ -377,6 +583,7 @@ def finalize_collection(qdrant) -> None:
 # --------------------------------------------------------------------------- #
 # SQLite state store
 # --------------------------------------------------------------------------- #
+
 
 def init_db() -> sqlite3.Connection:
     Path(STATE_DB).parent.mkdir(parents=True, exist_ok=True)
@@ -406,6 +613,12 @@ def init_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("create index if not exists idx_parents_paper on parents(paper_id)")
+    conn.execute("""
+        create table if not exists config (
+            key   text primary key,
+            value text not null
+        )
+    """)
     conn.commit()
     return conn
 
@@ -414,12 +627,13 @@ def init_db() -> sqlite3.Connection:
 # Delete a paper — removes it from everywhere
 # --------------------------------------------------------------------------- #
 
+
 def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
     """Erase a paper's entire existence:
-      1. All Qdrant chunk vectors (single filtered delete via payload index)
-      2. All parent rows in SQLite
-      3. Catalog row in SQLite
-      4. Saved markdown file
+    1. All Qdrant chunk vectors (single filtered delete via payload index)
+    2. All parent rows in SQLite
+    3. Catalog row in SQLite
+    4. Saved markdown file
     """
     from qdrant_client import models
 
@@ -427,12 +641,14 @@ def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
     qdrant.delete(
         collection_name=COLLECTION_NAME,
         points_selector=models.FilterSelector(
-            filter=models.Filter(must=[
-                models.FieldCondition(
-                    key="paper_id",
-                    match=models.MatchValue(value=paper_id),
-                ),
-            ])
+            filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="paper_id",
+                        match=models.MatchValue(value=paper_id),
+                    ),
+                ]
+            )
         ),
     )
     conn.execute("delete from parents where paper_id = ?", (paper_id,))
@@ -446,6 +662,7 @@ def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
 # --------------------------------------------------------------------------- #
 # CLI commands
 # --------------------------------------------------------------------------- #
+
 
 def cmd_status(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
@@ -487,7 +704,7 @@ def cmd_delete(qdrant, conn: sqlite3.Connection) -> None:
         idx = 0
     else:
         try:
-            idx = int(input(f"Enter number to delete [0-{len(rows)-1}]: "))
+            idx = int(input(f"Enter number to delete [0-{len(rows) - 1}]: "))
         except ValueError:
             print("Cancelled.")
             return
@@ -497,7 +714,9 @@ def cmd_delete(qdrant, conn: sqlite3.Connection) -> None:
         return
 
     pid, fname, title, _ = rows[idx]
-    confirm = input(f"\nDelete '{fname}' ({title or 'no title'})? This cannot be undone. [y/N]: ")
+    confirm = input(
+        f"\nDelete '{fname}' ({title or 'no title'})? This cannot be undone. [y/N]: "
+    )
     if confirm.strip().lower() != "y":
         print("Cancelled.")
         return
@@ -511,12 +730,14 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
     # in the embedding model at import time.
     from backend.services.rag_engine import PhytoQueryEmbeddings
 
-    embeddings = PhytoQueryEmbeddings()
+    embeddings = PhytoQueryEmbeddings(primary_model=EMBEDDING_MODEL_NAME)
 
     ensure_collection(qdrant)
 
-    all_paths = sorted(glob.glob(os.path.join(RAW_DIR, "**/*.pdf"), recursive=True)
-                       + glob.glob(os.path.join(RAW_DIR, "*.pdf")))
+    all_paths = sorted(
+        glob.glob(os.path.join(RAW_DIR, "**/*.pdf"), recursive=True)
+        + glob.glob(os.path.join(RAW_DIR, "*.pdf"))
+    )
     all_paths = sorted(set(all_paths))
     log.info("Found %d PDFs in %s", len(all_paths), RAW_DIR)
 
@@ -525,7 +746,7 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
 
     pending = []
     for path in all_paths:
-        pid   = file_paper_id(path)
+        pid = file_paper_id(path)
         fname = Path(path).name
 
         # Detect revised PDFs (same filename, different content).
@@ -544,12 +765,14 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
 
     log.info(
         "%d to process  |  %d already indexed  |  %d parse workers",
-        len(pending), len(all_paths) - len(pending), PARSE_WORKERS,
+        len(pending),
+        len(all_paths) - len(pending),
+        PARSE_WORKERS,
     )
 
     if not pending:
         log.info("Nothing to do.")
-        finalize_collection(qdrant)   # re-enable HNSW even if nothing was added
+        finalize_collection(qdrant)  # re-enable HNSW even if nothing was added
         return
 
     ok = failed = 0
@@ -569,12 +792,14 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
             path, pid = futures[future]
             t0 = time.perf_counter()  # covers wait-for-parse + embed + store
             try:
-                parsed   = future.result()
+                parsed = future.result()
                 n_chunks = embed_and_store(parsed, embeddings, qdrant, conn)
                 ok += 1
                 log.info(
                     "OK   %-50s  %3d chunks  %.1fs",
-                    Path(path).name, n_chunks, time.perf_counter() - t0,
+                    Path(path).name,
+                    n_chunks,
+                    time.perf_counter() - t0,
                 )
             except Exception as exc:
                 failed += 1
@@ -589,6 +814,17 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
                 traceback.print_exc()
 
     finalize_collection(qdrant)
+
+    conn.execute(
+        "insert or replace into config (key, value) values (?, ?)",
+        ("embedding_model", EMBEDDING_MODEL_NAME),
+    )
+    conn.execute(
+        "insert or replace into config (key, value) values (?, ?)",
+        ("embedding_dim", str(DENSE_DIM)),
+    )
+    conn.commit()
+
     log.info("Done — %d indexed, %d failed. Re-run to retry failures.", ok, failed)
 
 
@@ -596,16 +832,21 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
 # Entry point
 # --------------------------------------------------------------------------- #
 
+
 def main() -> None:
     from qdrant_client import QdrantClient
 
     parser = argparse.ArgumentParser(description="Knowledge base ingestion pipeline")
-    parser.add_argument("--status", action="store_true", help="Print catalog summary and exit")
-    parser.add_argument("--delete", action="store_true", help="Interactive paper deletion")
+    parser.add_argument(
+        "--status", action="store_true", help="Print catalog summary and exit"
+    )
+    parser.add_argument(
+        "--delete", action="store_true", help="Interactive paper deletion"
+    )
     args = parser.parse_args()
 
     qdrant = QdrantClient(url=QDRANT_URL)
-    conn   = init_db()
+    conn = init_db()
 
     if args.status:
         cmd_status(conn)

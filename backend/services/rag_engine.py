@@ -1439,6 +1439,96 @@ class RAGService:
         self._vectorstore_cache[user_id] = vectorstore
         return vectorstore
 
+    # --- Knowledge Base Collection ---
+
+    KB_COLLECTION_NAME = "kb_papers"
+    _kb_vectorstore_cache: Optional[Any] = None
+
+    # Default fallback when kb.sqlite config table has no embedding_model row.
+    _KB_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+
+    def _get_kb_collection(self):
+        """Get or create a Qdrant-backed VectorStore for the permanent
+        knowledge base (``kb_papers`` collection).
+
+        Mirrors ``_get_user_collection`` but targets the fixed KB
+        collection created by ``scripts/ingest.py``. Cached on the
+        service instance so repeated queries don't re-create the
+        wrapper. Returns ``None`` when the collection doesn't exist
+        (no papers ingested yet).
+
+        Reads the embedding model name from ``kb.sqlite`` config table
+        so the backend always matches whatever ingest.py used — no
+        hardcoded model names.
+        """
+        from langchain_qdrant import QdrantVectorStore, RetrievalMode
+
+        if RAGService._kb_vectorstore_cache is not None:
+            return RAGService._kb_vectorstore_cache
+
+        client = self._get_qdrant_client()
+        try:
+            client.get_collection(self.KB_COLLECTION_NAME)
+        except Exception:
+            return None
+
+        kb_model = self._read_kb_config("embedding_model") or self._KB_DEFAULT_EMBEDDING_MODEL
+        kb_embeddings = PhytoQueryEmbeddings(primary_model=kb_model)
+
+        sparse = self._get_sparse_embeddings()
+        if sparse is not None:
+            mode = RetrievalMode.HYBRID
+            mode_label = "HYBRID"
+        else:
+            mode = RetrievalMode.DENSE
+            mode_label = "DENSE (BM25 unavailable)"
+
+        vectorstore = QdrantVectorStore(
+            client=client,
+            collection_name=self.KB_COLLECTION_NAME,
+            embedding=kb_embeddings,
+            sparse_embedding=sparse,
+            retrieval_mode=mode,
+            vector_name="dense",
+            sparse_vector_name="sparse",
+            content_payload_key="page_content",
+            metadata_payload_key="metadata",
+        )
+        logger.info(
+            f"Created Qdrant {mode_label} vectorstore for KB "
+            f"(collection={self.KB_COLLECTION_NAME}, "
+            f"embedding={kb_model})"
+        )
+        RAGService._kb_vectorstore_cache = vectorstore
+        return vectorstore
+
+    def _invalidate_kb_collection(self) -> None:
+        """Drop the cached KB vectorstore wrapper."""
+        RAGService._kb_vectorstore_cache = None
+
+    def _read_kb_config(self, key: str) -> Optional[str]:
+        """Read a value from the ``config`` table in ``kb.sqlite``.
+
+        Returns ``None`` when the DB file is missing, the table doesn't
+        exist yet, or the key isn't present.
+        """
+        import sqlite3
+        kb_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "knowledge_base", "kb.sqlite",
+        )
+        if not os.path.exists(kb_path):
+            return None
+        try:
+            conn = sqlite3.connect(kb_path, timeout=2)
+            row = conn.execute(
+                "select value from config where key = ?", (key,)
+            ).fetchone()
+            conn.close()
+            return row[0] if row else None
+        except Exception:
+            return None
+
     def _get_sparse_embeddings(self):
         """Lazy-init FastEmbed's ``Qdrant/bm25`` sparse encoder.
 
@@ -1879,6 +1969,40 @@ class RAGService:
             return raw
         # Defensive: unknown shape — coerce to text only
         return {"text": str(raw)}
+
+    def _get_kb_parent_data(self, parent_id: str) -> Dict[str, Any]:
+        """Read parent data from the KB's ``kb.sqlite`` parents table.
+
+        Returns the same dict shape as ``_get_parent_data`` so the
+        citation pipeline works unchanged.
+        """
+        import sqlite3
+
+        kb_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "knowledge_base", "kb.sqlite",
+        )
+        if not os.path.exists(kb_path):
+            return {}
+        try:
+            conn = sqlite3.connect(kb_path)
+            row = conn.execute(
+                "SELECT text, section_title, body_start, body_end, page "
+                "FROM parents WHERE parent_id = ?",
+                (parent_id,),
+            ).fetchone()
+            conn.close()
+            if row is None:
+                return {}
+            return {
+                "text": row[0] or "",
+                "section_title": row[1] or "",
+                "body_start": row[2],
+                "body_end": row[3],
+                "page": row[4],
+            }
+        except Exception:
+            return {}
 
     @staticmethod
     def _find_page_for_offset(full_text: str, offset: int) -> Optional[int]:
@@ -2925,11 +3049,23 @@ class RAGService:
         Both ``query()`` (non-streaming) and ``query_stream()`` use
         this so retrieval logic stays in one place.
         """
-        vectorstore = self._get_user_collection(user_id)
+        user_files = self.list_indexed_files(user_id)
+        is_kb_mode = not user_files
+        if user_files:
+            vectorstore = self._get_user_collection(user_id)
+            effective_filter = filter_files
+            _resolve_parent = lambda pid: self._get_parent_data(pid, user_id)
+        else:
+            kb_store = self._get_kb_collection()
+            if kb_store is None:
+                return {"answer": "", "sources": []}
+            vectorstore = kb_store
+            effective_filter = None
+            _resolve_parent = self._get_kb_parent_data
 
         # 1. Retrieve many child chunks from vector store (up to 200)
         search_results = self._hybrid_search(
-            question, vectorstore, filter_files, k=config.retrieve_k,
+            question, vectorstore, effective_filter, k=config.retrieve_k,
             user_id=user_id,
         )
 
@@ -3078,7 +3214,7 @@ class RAGService:
                 continue
 
             parent_ids_seen.add(parent_id)
-            parent_data = self._get_parent_data(parent_id, user_id)
+            parent_data = _resolve_parent(parent_id)
             ptext = parent_data.get("text", "")
             if ptext:
                 from langchain_core.documents import Document
@@ -3194,6 +3330,12 @@ class RAGService:
                 "score": score,
                 "chunk_text": citable_text,
             }
+            # For KB mode, carry paper-level metadata so the
+            # reference builder can group chunks by paper and
+            # emit Perplexity-style numbered references.
+            if is_kb_mode:
+                source_record["doc_title"] = d.metadata.get("doc_title", "")
+                source_record["doc_doi"] = d.metadata.get("doc_doi", "")
             body_start = result.get("body_start")
             body_end = result.get("body_end")
             page = result.get("page") or d.metadata.get("page") or None
@@ -3294,7 +3436,7 @@ class RAGService:
 Question: {question}"""
         messages.append({"role": "user", "content": user_msg})
 
-        return {"messages": messages, "sources": sources}
+        return {"messages": messages, "sources": sources, "is_kb_mode": is_kb_mode}
 
     async def query(
         self,
@@ -3315,13 +3457,30 @@ Question: {question}"""
         response = await self._invoke_llm(
             messages=prepared["messages"], timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS
         )
-        # Non-streaming path is a fallback only; the structured-
-        # output citation pipeline lives in ``query_stream`` (which
-        # is what the frontend uses). Returning the plain answer +
-        # sources here keeps this path lightweight and matches the
-        # ``QueryResponse`` schema (no ``citations`` field).
+        answer_text = (response.content or "").strip()
+
+        if prepared.get("is_kb_mode") and answer_text:
+            seen_papers: Dict[str, Dict[str, str]] = {}
+            for s in prepared.get("sources", []):
+                key = s.get("source", "")
+                if key and key not in seen_papers:
+                    seen_papers[key] = {
+                        "title": s.get("doc_title", ""),
+                        "doi": s.get("doc_doi", ""),
+                    }
+            if seen_papers:
+                ref_lines = ["\n\n---\n\n**References**\n"]
+                for idx, (fname, meta) in enumerate(seen_papers.items(), 1):
+                    title = meta["title"] or fname
+                    doi = meta["doi"]
+                    line = f"{idx}. {title}"
+                    if doi:
+                        line += f". DOI: {doi}"
+                    ref_lines.append(line)
+                answer_text += "\n" + "\n".join(ref_lines)
+
         return {
-            "answer": (response.content or "").strip(),
+            "answer": answer_text,
             "sources": prepared["sources"],
         }
 
@@ -3501,75 +3660,76 @@ Question: {question}"""
                 snippet,
             )
 
-        # Structured-output citation pass. Two stages:
-        #   1. Ask the LLM (JSON mode) which chunk_ids it used to
-        #      write the streamed answer. Schema-constrained, so it
-        #      can't return an empty list and can't hallucinate ids
-        #      outside the retrieved set.
-        #   2. Reranker assigns each of those chunks to the answer
-        #      sentence it best supports, then we splice ``[cN]``
-        #      markers in at those sentence boundaries.
-        # If stage 1 fails, stage 2 falls back to "top-2 reranker-
-        # scored chunks against the whole answer" so an answer is
-        # never uncited.
-        citations: List[Dict[str, Any]] = []
-        rewrite_error: Optional[str] = None
-        corrected_answer = accumulated
-        used_chunk_ids: List[str] = []
-        if accumulated.strip():
-            try:
-                used_chunk_ids = await self._select_used_chunks(
-                    question=question,
-                    answer=accumulated,
-                    sources=prepared["sources"],
-                )
-            except Exception as e:
-                logger.warning(f"chunk-id selection failed: {e}")
-                used_chunk_ids = []
-            try:
-                corrected_answer, citations = self._reattribute_and_extract(
-                    accumulated,
-                    prepared["sources"],
-                    used_chunk_ids=used_chunk_ids,
-                )
-            except Exception as e:
-                logger.warning(f"Citation injection failed: {e}")
-                citations = []
-                corrected_answer = accumulated
-                rewrite_error = str(e)[:200]
+        is_kb_mode = prepared.get("is_kb_mode", False)
 
-        # Diagnostic — fires unconditionally so we always see the
-        # outcome of the structured-output citation pass. Logs the
-        # ids the LLM said it used (stage 1) and the citations the
-        # reranker actually attached to sentences (stage 2). When
-        # ``llm_selected`` is empty but ``citations`` is not, the
-        # fallback "top-N chunks against the whole answer" path
-        # ran — that's expected behavior, not an error.
-        if accumulated.strip():
-            answer_rewritten = corrected_answer != accumulated
-            citations_summary = [
-                {
-                    "chunk_id": c.get("chunk_id"),
-                    "quote_preview": (c.get("quote") or "")[:140],
-                }
-                for c in citations
-            ]
-            logger.warning(
-                "[CITATION DIAG] llm_selected=%s injected=%s rewritten=%s "
-                "citations=%s%s",
-                used_chunk_ids,
-                len(citations),
-                answer_rewritten,
-                citations_summary,
-                f" error={rewrite_error!r}" if rewrite_error else "",
-            )
+        if is_kb_mode:
+            corrected_answer = accumulated
+            citations: List[Dict[str, Any]] = []
+            if accumulated.strip():
+                seen_papers: Dict[str, Dict[str, str]] = {}
+                for s in prepared.get("sources", []):
+                    key = s.get("source", "")
+                    if key and key not in seen_papers:
+                        seen_papers[key] = {
+                            "title": s.get("doc_title", ""),
+                            "doi": s.get("doc_doi", ""),
+                        }
+                if seen_papers:
+                    ref_lines = ["\n\n---\n\n**References**\n"]
+                    for idx, (fname, meta) in enumerate(seen_papers.items(), 1):
+                        title = meta["title"] or fname
+                        doi = meta["doi"]
+                        line = f"{idx}. {title}"
+                        if doi:
+                            line += f". DOI: {doi}"
+                        ref_lines.append(line)
+                    corrected_answer = accumulated + "\n" + "\n".join(ref_lines)
+        else:
+            citations: List[Dict[str, Any]] = []
+            rewrite_error: Optional[str] = None
+            corrected_answer = accumulated
+            used_chunk_ids: List[str] = []
+            if accumulated.strip():
+                try:
+                    used_chunk_ids = await self._select_used_chunks(
+                        question=question,
+                        answer=accumulated,
+                        sources=prepared["sources"],
+                    )
+                except Exception as e:
+                    logger.warning(f"chunk-id selection failed: {e}")
+                    used_chunk_ids = []
+                try:
+                    corrected_answer, citations = self._reattribute_and_extract(
+                        accumulated,
+                        prepared["sources"],
+                        used_chunk_ids=used_chunk_ids,
+                    )
+                except Exception as e:
+                    logger.warning(f"Citation injection failed: {e}")
+                    citations = []
+                    corrected_answer = accumulated
+                    rewrite_error = str(e)[:200]
 
-        # If re-attribution rewrote any markers, push the corrected
-        # answer text to the frontend so subsequent renders use the
-        # right [cN] → chunk mapping. The displayed superscript
-        # numbers stay stable because the frontend numbers by order
-        # of first appearance — only the underlying chunk_id link
-        # changes, so users don't see the answer text "flicker".
+            if accumulated.strip():
+                answer_rewritten = corrected_answer != accumulated
+                citations_summary = [
+                    {
+                        "chunk_id": c.get("chunk_id"),
+                        "quote_preview": (c.get("quote") or "")[:140],
+                    }
+                    for c in citations
+                ]
+                logger.warning(
+                    "[CITATION DIAG] llm_selected=%s injected=%s rewritten=%s "
+                    "citations=%s%s",
+                    used_chunk_ids,
+                    len(citations),
+                    answer_rewritten,
+                    citations_summary,
+                    f" error={rewrite_error!r}" if rewrite_error else "",
+                )
+
         if corrected_answer != accumulated:
             yield {"type": "answer_corrected", "text": corrected_answer}
 
