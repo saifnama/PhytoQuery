@@ -3201,6 +3201,31 @@ class RAGService:
         parent_ids_seen: set[str] = set()
         candidate_parents: List[Dict[str, Any]] = []
 
+        # Batch-fetch parent contexts for KB mode — one query instead of N+1.
+        kb_parent_cache: Dict[str, Dict[str, Any]] = {}
+        if not user_files:
+            import sys as _sys
+            import sqlite3 as _sqlite3
+            _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            if _repo_root not in _sys.path:
+                _sys.path.insert(0, _repo_root)
+            from scripts.ingest import get_parent_contexts
+
+            all_parent_ids = list({
+                r["doc"].metadata.get("parent_id")
+                for r in reranked_children
+                if r["doc"].metadata.get("content_type", "text") == "text"
+                and r["doc"].metadata.get("parent_id")
+            })
+            kb_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "knowledge_base", "kb.sqlite",
+            )
+            if os.path.exists(kb_path) and all_parent_ids:
+                _conn = _sqlite3.connect(kb_path)
+                kb_parent_cache = get_parent_contexts(all_parent_ids, _conn)
+                _conn.close()
+
         for result in reranked_children:
             d = result["doc"]
             ctype = d.metadata.get("content_type", "text")
@@ -3214,7 +3239,10 @@ class RAGService:
                 continue
 
             parent_ids_seen.add(parent_id)
-            parent_data = _resolve_parent(parent_id)
+            if user_files:
+                parent_data = _resolve_parent(parent_id)
+            else:
+                parent_data = kb_parent_cache.get(parent_id, {})
             ptext = parent_data.get("text", "")
             if ptext:
                 from langchain_core.documents import Document

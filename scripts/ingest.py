@@ -20,6 +20,7 @@ Delete a paper:
 """
 
 import argparse
+import difflib
 import glob
 import hashlib
 import logging
@@ -35,41 +36,33 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-# --------------------------------------------------------------------------- #
-# Ensure the repo root is on sys.path so `backend.*` imports work when run
-# from any working directory (e.g. `python scripts/ingest.py`).
-# --------------------------------------------------------------------------- #
+# sys.path hack — lets us run `python scripts/ingest.py` from anywhere
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 # --------------------------------------------------------------------------- #
-# Configuration — edit these to match your setup before running.
+# Configuration
 # --------------------------------------------------------------------------- #
 RAW_DIR = "backend/knowledge_base/papers"  # folder holding the PDFs
 MARKDOWN_DIR = "backend/knowledge_base/parsed"  # parsed markdown cache
 STATE_DB = "backend/knowledge_base/kb.sqlite"  # papers table + parents table
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = "kb_papers"  # bake model+dim into name;
-# change if you re-embed with
-# a different model later.
+COLLECTION_NAME = "kb_papers"  # change if you re-embed with a different model
 DENSE_DIM = 384  # BGE-small-en-v1.5 native dim; change if using a different model
 DENSE_VEC = "dense"
 SPARSE_VEC = "sparse"
 SPARSE_MODEL = "Qdrant/bm25"
 
-# Tokenizer the chunker uses to stay within the model's context window.
 EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 PARENT_MAX_TOKENS = 500  # ~400-600 is the practical sweet spot
 CHILD_CHUNK_CHARS = 900  # characters per child chunk
 CHILD_CHUNK_OVERLAP = 120
 
-# GPU settings. One worker process owns the GPU; don't raise this
-# above 1 unless you have multiple GPUs — competing for one GPU is slower.
+# One worker owns the GPU — don't raise above 1 without multiple GPUs.
 PARSE_WORKERS = 1
-GPU_PAGE_BATCH = 8  # pages fed to layout model in one batch;
-# tune up if VRAM allows (A100: try 16-32)
+GPU_PAGE_BATCH = 8  # A100: try 16-32
 
 
 def _detect_device() -> str:
@@ -86,9 +79,7 @@ def _detect_device() -> str:
     return "cpu"
 
 
-# Fixed UUID namespace for deterministic point IDs.
-# NEVER change this after first ingestion run — it would generate different
-# IDs for already-indexed chunks and cause silent duplicates on re-upsert.
+# NEVER change this after first run — different UUIDs = silent duplicates on re-upsert.
 ID_NAMESPACE = uuid.UUID("a4f1b9d2-7e3a-4c8b-9f10-7c5d2e8a1b00")
 # --------------------------------------------------------------------------- #
 
@@ -103,13 +94,27 @@ DOI_PATTERN = re.compile(
     r"\b(https?://doi\.org/|doi:\s*)?(10\.\d{4,9}/[^\s\"'<>)]+)",
     re.IGNORECASE,
 )
-REF_HEADING = re.compile(
-    r"^(references?|bibliography|works cited|literature cited|citations?)\s*$",
-    re.IGNORECASE,
-)
 
-# Worker-process globals — populated once by _init_worker(), never per-PDF.
-_converter = None
+
+def _build_noise_labels():
+    """Build the set of DocItemLabel values to exclude from indexing.
+
+    Imported lazily so the worker process doesn't pull in docling at
+    module level (it's only needed inside parse_and_chunk).
+    """
+    from docling_core.types.doc import DocItemLabel
+
+    return {
+        DocItemLabel.REFERENCE,
+        DocItemLabel.PAGE_HEADER,
+        DocItemLabel.PAGE_FOOTER,
+        DocItemLabel.FOOTNOTE,
+    }
+
+
+_NOISE_LABELS = None  # lazily populated per-worker
+
+_converter = None  # per-worker, set by _init_worker()
 _chunker = None
 _splitter = None
 
@@ -218,84 +223,32 @@ def extract_doi_from_markdown(text: str) -> Optional[str]:
     return m.group(2).rstrip(".,;)")
 
 
-def extract_title(doc, full_md: str, fallback: str) -> str:
-    """Extract the paper title from the Docling document.
+def extract_title(doc, fallback: str) -> str:
+    """Extract the paper title from a DoclingDocument.
 
-    Universal strategy — works for ANY paper without per-paper hardcoding:
-
-    1.  ``doc.name`` — set by Docling when the PDF has an embedded title.
-        Skipped when it looks like a filename (hyphens/dots, no spaces).
-    2.  Walk ``doc.iterate_items()`` and collect all ``section_header``
-        items that appear BEFORE any body text item.  The title is the
-        LONGEST such heading — journal section labels ("Special Report",
-        "Original Research", "Review") are always short, while paper
-        titles are always long (describing the topic).
-    3.  Markdown fallback: longest H1/H2 in first 80 lines.
-    4.  Filename stem (last resort).
+    Strategy: prefer a DocItemLabel.TITLE item first (correctly tagged by
+    some PDF creators).  Otherwise return the first SECTION_HEADER — in
+    academic papers the title always appears before any body headings.
     """
     from docling_core.types.doc import DocItemLabel
 
-    # --- 1. Embedded title from PDF metadata ---
-    name = getattr(doc, "name", None)
-    if name and " " in name and not re.search(r"[-_.]{2,}", name):
-        return name
+    for item, _ in doc.iterate_items():
+        if item.label == DocItemLabel.TITLE:
+            text = getattr(item, "text", None)
+            if text and text.strip():
+                return text.strip()
 
-    # --- 2. Walk document structure ---
-    # Collect all section_headers before body text, then pick the longest.
-    seen_body_text = False
-    candidates = []  # (length, text) for each section_header before body
+    for item, _ in doc.iterate_items():
+        if item.label == DocItemLabel.SECTION_HEADER:
+            text = getattr(item, "text", None)
+            if text and text.strip():
+                return text.strip()
 
-    for item, level in doc.iterate_items():
-        label = getattr(item, "label", None)
-        text = getattr(item, "text", "").strip()
-
-        # Track whether we've hit real body content
-        if label in (
-            DocItemLabel.TEXT,
-            DocItemLabel.PARAGRAPH,
-            DocItemLabel.FOOTNOTE,
-            DocItemLabel.LIST_ITEM,
-        ):
-            seen_body_text = True
-
-        # Only consider section headers
-        if label != DocItemLabel.SECTION_HEADER:
-            continue
-
-        # Once we've seen body text, stop — title is always before body
-        if seen_body_text:
-            break
-
-        # Skip very short headings (< 10 chars — journal labels, "Keywords:", etc.)
-        if len(text) < 10:
-            continue
-
-        candidates.append((len(text), text))
-
-    if candidates:
-        # The title is the longest heading before body text
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
-
-    # --- 3. Markdown fallback ---
-    best = ""
-    for line in full_md.splitlines()[:80]:
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            heading = stripped[3:].strip()
-        elif stripped.startswith("# "):
-            heading = stripped[2:].strip()
-        else:
-            continue
-        if len(heading) > len(best):
-            best = heading
-
-    return best if best else fallback
+    return fallback
 
 
 # --------------------------------------------------------------------------- #
-# Stage A — runs inside a worker process (no embedding model, no Qdrant, no
-# SQLite here). Returns plain picklable dicts back to the main process.
+# Stage A — worker process (no embeddings, no Qdrant, no SQLite)
 # --------------------------------------------------------------------------- #
 
 
@@ -316,16 +269,14 @@ def _normalized_find(haystack: str, needle: str, start: int = 0) -> int:
     pos = norm_hay.find(norm_need, start)
     if pos == -1:
         return -1
-    # Map back to original offset: walk the original string counting
-    # characters that were consumed by the normalised version.
+    # Walk original string to map normalised offset back to real offset.
     orig_pos = 0
     norm_pos = 0
     while norm_pos < pos and orig_pos < len(haystack):
         if haystack[orig_pos].isspace():
-            # Skip the entire whitespace run in both strings.
             while orig_pos < len(haystack) and haystack[orig_pos].isspace():
                 orig_pos += 1
-            norm_pos += 1  # normalised version has exactly one space
+            norm_pos += 1
         else:
             orig_pos += 1
             norm_pos += 1
@@ -346,17 +297,14 @@ def _find_chunk_offset(haystack: str, chunk_text: str, cursor: int = 0) -> int:
     whitespace, line breaks, or minor formatting differences from
     ``export_to_markdown()``.
     """
-    # Try full chunk text first
     pos = _normalized_find(haystack, chunk_text, cursor)
     if pos != -1:
         return pos
 
-    # Try from the beginning (in case cursor skipped past it)
     pos = _normalized_find(haystack, chunk_text)
     if pos != -1:
         return pos
 
-    # Progressive anchor: try shorter prefixes
     for anchor_len in (200, 100, 80, 50):
         if len(chunk_text) <= anchor_len:
             continue
@@ -368,7 +316,6 @@ def _find_chunk_offset(haystack: str, chunk_text: str, cursor: int = 0) -> int:
         if pos != -1:
             return pos
 
-    # Last resort: first sentence (up to first period)
     period_idx = chunk_text.find(".")
     if period_idx > 20:
         anchor = chunk_text[:period_idx]
@@ -382,13 +329,128 @@ def _find_chunk_offset(haystack: str, chunk_text: str, cursor: int = 0) -> int:
     return -1
 
 
+def fetch_crossref_metadata(title: str, doi: Optional[str]) -> Optional[dict]:
+    """Look up paper metadata via the Crossref REST API.
+
+    Strategy:
+      1. If a candidate *doi* is provided, try direct DOI lookup first
+         (most reliable — avoids false-positive title matches).
+      2. Otherwise search by title via ``query.title``.
+      3. If neither works, return None (caller falls back to heuristic).
+
+    Retries on 429 (rate-limited) with exponential backoff.
+
+    Returns a dict with keys ``title``, ``doi``, ``authors``, ``year``,
+    ``journal``, or None.
+    """
+    crossref_url = "https://api.crossref.org/works"
+    mailto = "ingest@phytoquery.local"
+    timeout = 15.0
+    max_retries = 3
+    base_delay = 2.0  # seconds
+
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as client:
+            # --- Strategy 1: DOI lookup ---
+            if doi:
+                for attempt in range(max_retries):
+                    resp = client.get(
+                        f"{crossref_url}/{doi}",
+                        params={"mailto": mailto},
+                    )
+                    if resp.status_code == 429:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning("Crossref 429 on DOI lookup, retrying in %.1fs", delay)
+                        time.sleep(delay)
+                        continue
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        msg = data.get("message", {})
+                        d = msg.get("DOI") or doi
+                        t = (msg.get("title") or [None])[0]
+                        if t:
+                            return {
+                                "doi": d,
+                                "title": t,
+                                "authors": [
+                                    f"{a.get('given', '')} {a.get('family', '')}".strip()
+                                    for a in msg.get("author", [])
+                                    if a.get("family")
+                                ],
+                                "year": (
+                                    (msg.get("published-print") or msg.get("published-online") or {}).get("date-parts", [[None]])[0][0]
+                                ),
+                                "journal": (msg.get("container-title") or [None])[0],
+                            }
+                    break  # non-429, non-200 — don't retry
+
+            # --- Strategy 2: title search ---
+            if title:
+                for attempt in range(max_retries):
+                    resp = client.get(
+                        crossref_url,
+                        params={"query.title": title, "rows": 3, "mailto": mailto},
+                    )
+                    if resp.status_code == 429:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning("Crossref 429 on title search, retrying in %.1fs", delay)
+                        time.sleep(delay)
+                        continue
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        items = data.get("message", {}).get("items", [])
+                        if items:
+                            def _score(item):
+                                t = (item.get("title") or [None])[0]
+                                if not t:
+                                    return 0.0
+                                return difflib.SequenceMatcher(None, title.lower(), t.lower()).ratio()
+
+                            best = max(items, key=_score)
+                            score = _score(best)
+                            if score >= 0.6:
+                                t = (best.get("title") or [None])[0]
+                                d = best.get("DOI") or ""
+                                if t:
+                                    return {
+                                        "doi": d,
+                                        "title": t,
+                                        "authors": [
+                                            f"{a.get('given', '')} {a.get('family', '')}".strip()
+                                            for a in best.get("author", [])
+                                            if a.get("family")
+                                        ],
+                                        "year": (
+                                            (best.get("published-print") or best.get("published-online") or {}).get("date-parts", [[None]])[0][0]
+                                        ),
+                                        "journal": (best.get("container-title") or [None])[0],
+                                    }
+                    break  # non-429, non-200 — don't retry
+    except Exception:
+        log.warning("Crossref lookup failed for title=%r doi=%r", title, doi, exc_info=True)
+    return None
+
+
 def parse_and_chunk(path: str, paper_id: str) -> dict:
+    global _NOISE_LABELS
+    if _NOISE_LABELS is None:
+        _NOISE_LABELS = _build_noise_labels()
+
     result = _converter.convert(path)
     doc = result.document
     full_md = doc.export_to_markdown()
 
-    title = extract_title(doc, full_md, Path(path).stem)
+    title = extract_title(doc, Path(path).stem)
     doi = extract_doi_from_pdf(path) or extract_doi_from_markdown(full_md)
+
+    cr = fetch_crossref_metadata(title, doi)
+    if cr:
+        if cr["title"]:
+            title = cr["title"]
+        if cr["doi"]:
+            doi = cr["doi"]
 
     parent_rows = []
     pending_points = []
@@ -399,9 +461,9 @@ def parse_and_chunk(path: str, paper_id: str) -> dict:
         headings = chunk.meta.headings or []
         section = headings[-1] if headings else ""
 
-        # Skip bibliography / references section — citation-formatted text
-        # is noise in a content-retrieval system.
-        if any(REF_HEADING.match(h.strip()) for h in headings):
+        if chunk.meta.doc_items and all(
+            item.label in _NOISE_LABELS for item in chunk.meta.doc_items
+        ):
             continue
 
         page = None
@@ -444,8 +506,7 @@ def parse_and_chunk(path: str, paper_id: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Stage B — runs in the main process only. Embedding model, Qdrant client,
-# and SQLite connection never cross into the worker processes.
+# Stage B — main process only (embeddings, Qdrant, SQLite)
 # --------------------------------------------------------------------------- #
 
 
@@ -457,14 +518,12 @@ def embed_and_store(parsed: dict, embeddings, qdrant, conn: sqlite3.Connection) 
     title = parsed["title"]
     doi = parsed["doi"]
 
-    # Save parsed markdown — citation rendering and future passage highlighting
-    # depend on this. Parsing never needs to repeat if chunking changes later.
+    # Cache markdown for citation rendering / passage highlighting.
     Path(MARKDOWN_DIR).mkdir(parents=True, exist_ok=True)
     with open(f"{MARKDOWN_DIR}/{paper_id}.md", "w", encoding="utf-8") as f:
         f.write(parsed["full_md"])
 
-    # Warn on DOI collision (duplicate or preprint/published pair).
-    # Don't auto-merge — let the operator decide which copy to keep.
+    # DOI collision — warn but don't auto-merge; operator decides which to keep.
     if doi:
         clash = conn.execute(
             "select paper_id, filename from papers where doi = ? and paper_id != ?",
@@ -478,6 +537,11 @@ def embed_and_store(parsed: dict, embeddings, qdrant, conn: sqlite3.Connection) 
                 doi,
                 clash[1],
                 clash[0],
+            )
+            conn.execute(
+                "insert into doi_collisions (doi, paper_a, paper_b, detected_at) "
+                "values (?, ?, ?, ?)",
+                (doi, paper_id, clash[0], time.time()),
             )
 
     pts = parsed["pending_points"]
@@ -552,18 +616,16 @@ def ensure_collection(qdrant) -> None:
             ),
         },
         sparse_vectors_config={
-            # IDF modifier is mandatory for Qdrant/bm25 — without it the sparse
-            # side does not apply BM25 scoring at all.
+            # IDF modifier required — without it Qdrant skips BM25 scoring entirely.
             SPARSE_VEC: models.SparseVectorParams(modifier=models.Modifier.IDF),
         },
-        # Disable HNSW during bulk load; re-enable in finalize_collection().
-        # Building the graph incrementally on every batch wastes hours of work.
+        # Disable HNSW during bulk load — building the graph incrementally wastes hours.
         hnsw_config=models.HnswConfigDiff(m=0),
         optimizers_config=models.OptimizersConfigDiff(indexing_threshold=0),
     )
     qdrant.create_payload_index(
         collection_name=COLLECTION_NAME,
-        field_name="paper_id",
+        field_name="metadata.paper_id",
         field_schema="keyword",
     )
     log.info("Collection created.")
@@ -613,6 +675,16 @@ def init_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("create index if not exists idx_parents_paper on parents(paper_id)")
+    conn.execute("create index if not exists idx_papers_doi on papers(doi)")
+    conn.execute("""
+        create table if not exists doi_collisions (
+            id         integer primary key autoincrement,
+            doi        text not null,
+            paper_a    text not null,
+            paper_b    text not null,
+            detected_at real
+        )
+    """)
     conn.execute("""
         create table if not exists config (
             key   text primary key,
@@ -633,7 +705,8 @@ def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
     1. All Qdrant chunk vectors (single filtered delete via payload index)
     2. All parent rows in SQLite
     3. Catalog row in SQLite
-    4. Saved markdown file
+    4. DOI collision records referencing this paper
+    5. Saved markdown file
     """
     from qdrant_client import models
 
@@ -644,7 +717,7 @@ def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
             filter=models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="paper_id",
+                        key="metadata.paper_id",
                         match=models.MatchValue(value=paper_id),
                     ),
                 ]
@@ -653,10 +726,37 @@ def delete_paper(paper_id: str, qdrant, conn: sqlite3.Connection) -> None:
     )
     conn.execute("delete from parents where paper_id = ?", (paper_id,))
     conn.execute("delete from papers  where paper_id = ?", (paper_id,))
+    conn.execute(
+        "delete from doi_collisions where paper_a = ? or paper_b = ?",
+        (paper_id, paper_id),
+    )
     conn.commit()
     md = Path(MARKDOWN_DIR) / f"{paper_id}.md"
     md.unlink(missing_ok=True)
     log.info("Deleted paper_id=%s — gone from Qdrant, SQLite, and markdown.", paper_id)
+
+
+def get_parent_contexts(
+    parent_ids: list[str], conn: sqlite3.Connection
+) -> dict:
+    if not parent_ids:
+        return {}
+    placeholders = ",".join("?" * len(parent_ids))
+    rows = conn.execute(
+        f"select parent_id, text, section_title, body_start, body_end, page "
+        f"from parents where parent_id in ({placeholders})",
+        parent_ids,
+    ).fetchall()
+    return {
+        r[0]: {
+            "text": r[1],
+            "section_title": r[2],
+            "body_start": r[3],
+            "body_end": r[4],
+            "page": r[5],
+        }
+        for r in rows
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -673,6 +773,15 @@ def cmd_status(conn: sqlite3.Connection) -> None:
     print(f"  Total papers: {total}")
     for status, n in sorted(rows):
         print(f"  {status:12s}: {n}")
+
+    collisions = conn.execute(
+        "select doi, paper_a, paper_b from doi_collisions"
+    ).fetchall()
+    if collisions:
+        print(f"\n  DOI collisions: {len(collisions)}")
+        for doi, a, b in collisions:
+            print(f"    doi={doi}")
+            print(f"      {a} <-> {b}")
     print()
 
 
@@ -725,9 +834,8 @@ def cmd_delete(qdrant, conn: sqlite3.Connection) -> None:
     print(f"\n'{fname}' has been completely removed from the knowledge base.")
 
 
-def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
-    # Import here so the worker processes (spawned, not forked) don't pull
-    # in the embedding model at import time.
+def cmd_ingest(qdrant, conn: sqlite3.Connection, workers: int = PARSE_WORKERS) -> None:
+    # Lazy import — don't load embeddings into worker processes at import time.
     from backend.services.rag_engine import PhytoQueryEmbeddings
 
     embeddings = PhytoQueryEmbeddings(primary_model=EMBEDDING_MODEL_NAME)
@@ -741,7 +849,6 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
     all_paths = sorted(set(all_paths))
     log.info("Found %d PDFs in %s", len(all_paths), RAW_DIR)
 
-    # filename → paper_id already on record; detects revised PDFs.
     existing = dict(conn.execute("select filename, paper_id from papers").fetchall())
 
     pending = []
@@ -749,7 +856,7 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
         pid = file_paper_id(path)
         fname = Path(path).name
 
-        # Detect revised PDFs (same filename, different content).
+        # Same filename but different content hash — re-index.
         old_pid = existing.get(fname)
         if old_pid and old_pid != pid:
             log.info("%s: content changed — removing stale entry %s", fname, old_pid)
@@ -767,7 +874,7 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
         "%d to process  |  %d already indexed  |  %d parse workers",
         len(pending),
         len(all_paths) - len(pending),
-        PARSE_WORKERS,
+        workers,
     )
 
     if not pending:
@@ -776,11 +883,10 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection) -> None:
         return
 
     ok = failed = 0
-    # "spawn" avoids inheriting the CUDA context from the parent process.
-    # "fork" + CUDA = known source of silent hangs on Linux.
+    # spawn, not fork — fork + CUDA = silent hangs on Linux.
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(
-        max_workers=PARSE_WORKERS,
+        max_workers=workers,
         initializer=_init_worker,
         mp_context=ctx,
     ) as pool:
@@ -843,6 +949,11 @@ def main() -> None:
     parser.add_argument(
         "--delete", action="store_true", help="Interactive paper deletion"
     )
+    parser.add_argument(
+        "--workers", type=int, default=PARSE_WORKERS,
+        help=f"Parse worker processes (default: {PARSE_WORKERS}). "
+             "Raise only with multiple GPUs — competing for one GPU is slower.",
+    )
     args = parser.parse_args()
 
     qdrant = QdrantClient(url=QDRANT_URL)
@@ -856,7 +967,7 @@ def main() -> None:
         cmd_delete(qdrant, conn)
         sys.exit(0)
 
-    cmd_ingest(qdrant, conn)
+    cmd_ingest(qdrant, conn, workers=args.workers)
 
 
 if __name__ == "__main__":
