@@ -50,7 +50,7 @@ STATE_DB = "backend/knowledge_base/kb.sqlite"  # papers table + parents table
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "kb_papers"  # change if you re-embed with a different model
-DENSE_DIM = 384  # BGE-small-en-v1.5 native dim; change if using a different model
+DENSE_DIM = 2560  # Qwen3-Embedding-4B native dim
 DENSE_VEC = "dense"
 SPARSE_VEC = "sparse"
 SPARSE_MODEL = "Qdrant/bm25"

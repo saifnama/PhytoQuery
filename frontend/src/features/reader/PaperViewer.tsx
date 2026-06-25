@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
 import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
-import SmilesDrawer from 'smiles-drawer';
+import 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
 
 const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
@@ -680,9 +680,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setIsRenderingChemicalStructure(true);
     setChemicalStructureError(false);
 
-    const drawer = new SmilesDrawer.SvgDrawer({ width: 400, height: 300 });
+    const drawer = new window.SmilesDrawer.SvgDrawer({ width: 400, height: 300 });
 
-    SmilesDrawer.parse(
+    window.SmilesDrawer.parse(
       smiles,
       (tree: unknown) => {
         if (cancelled || chemicalStructureRenderIdRef.current !== renderId || !chemicalStructureSvgRef.current) {

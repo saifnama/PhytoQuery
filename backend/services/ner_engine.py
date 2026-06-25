@@ -52,132 +52,128 @@ def get_active_provider():
     )
 
 
-# --- System Prompt (Llama 3.1 8B Ethnobotany NER) ---
+# --- System Prompt for NER ---
 SYSTEM_PROMPT = """You are a highly precise Named Entity Recognition (NER) specialist for phytochemical and ethnobotanical research.
 
 Your task is to extract named entities from scientific text and return them as a structured JSON array.
 
-═══════════════════════════════════════
-ENTITY TYPES TO EXTRACT
-═══════════════════════════════════════
+
+ENTITY TYPES
 
 1. CHEMICAL
-   - Any chemical compound, constituent, or substance
-   - Includes: essential oil constituents, flavonoids, alkaloids, terpenes, phenolics, solvents
-   - Examples: eugenol, quercetin, linalool, β-caryophyllene, tannins, methanol, hexane
+Any chemical compound, constituent, or substance. Includes phytoconstituents, flavonoids, alkaloids, terpenes, phenolics, solvents, reagents, and pharmacological inducers. Extract individual named compounds only; do not extract bulk mixtures such as essential oil, crude extract, or fractions as a whole.
+Examples: eugenol, quercetin, linalool, β-caryophyllene, methanol, streptozotocin
 
 2. SPECIES
-   - Any organism reference — whether by scientific binomial name OR common name
-   - Includes: plants, fungi, bacteria, insects, animals used in studies or as test organisms
-   - Add a "name_type" field: "scientific" if binomial/trinomial, "common" if vernacular
-   - Examples (scientific): Ocimum sanctum, Cinnamomum verum, Azadirachta indica, Candida albicans, Staphylococcus aureus
-   - Examples (common): tulsi, neem, basil, yeast, staph bacteria
+Any organism referenced by scientific or common name — plant, fungus, bacterium, insect, or animal. Populate the "name_type" field: "scientific" for binomial/trinomial Latin names, "common" for vernacular names. If the same organism appears as both a common name and a scientific name in the same text, extract both as separate entities.
+Examples (scientific): Ocimum sanctum, Cinnamomum verum, Candida albicans, Staphylococcus aureus
+Examples (common): tulsi, neem, basil
 
 3. LOCATION
-   - Geographic region where organism was collected, studied, or reported
-   - Includes: countries, states, districts, forest names, altitude descriptions
-   - Examples: Western Ghats, Wayanad, Kerala, Himalayan foothills
+Geographic region where an organism was collected, studied, or reported. Includes countries, states, districts, and forest names.
+Examples: Western Ghats, Wayanad, Kerala, Tamil Nadu
 
 4. BIOACTIVITY
-   - Biological, pharmacological, or chemical activity/property of a compound.
-   - Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal
+A biological or pharmacological activity or property attributed to a compound or extract.
+Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal, antidiabetic, pro-apoptotic
 
 5. DISEASE
-   - Medical condition, disease, or pathological state
-   - Examples: malaria, diabetes, tuberculosis, leishmaniasis, oxidative stress
+A named clinical or veterinary disease that the study explicitly targets as a therapeutic or biological endpoint. The condition must be diagnosable in a patient or organism — not a subcellular mechanism. Do not extract oxidative stress, inflammation, apoptosis, or similar mechanisms; these are captured through BIOACTIVITY entities (antioxidant, anti-inflammatory, pro-apoptotic, etc.).
+Examples: malaria, diabetes, tuberculosis, leishmaniasis, candidiasis, dengue, cancer, Alzheimer's disease
 
-════════════════════════════════════════
+
 DISAMBIGUATION RULES
-════════════════════════════════════════
 
-- ANALYTICAL TECHNIQUE vs EXTRACTION METHOD: Always prefer ANALYTICAL TECHNIQUE when the technique is a specific separation process (e.g., steam distillation, HPLC). Use EXTRACTION METHOD for bulk crude extraction processes (e.g., Soxhlet, maceration).
-- SPECIES (scientific) vs SPECIES (common): Same entity type — distinguish only via the "name_type" field. Both "tulsi" and "Ocimum sanctum" → SPECIES.
-- Nested entities are allowed. Extract overlapping entities separately.
-- If a span is ambiguous between two types, choose the most specific and contextually dominant type.
+1. Solvents and pharmacological inducers are always CHEMICAL regardless of their functional role in the sentence. ("methanol" used for extraction → CHEMICAL; "streptozotocin" used to induce a disease model → CHEMICAL)
 
-════════════════════════════════════════
-REASONING STEP (MANDATORY)
-════════════════════════════════════════
+2. If the same organism appears as both a common name and a scientific name, extract both as separate SPECIES entities each with the correct "name_type".
 
-Before returning the JSON, reason briefly in this format:
+3. If a bioactivity is attributed to a crude extract or unspecified fraction rather than a named compound, set "linked_to": null.
+
+4. Extract nested entities separately. Within "streptozotocin-induced diabetes": extract "streptozotocin" as CHEMICAL and "diabetes" as DISEASE independently.
+
+5. Never include concentration spans in any entity span. The span for "Eugenol (72.4%)" is "Eugenol", not "Eugenol (72.4%)".
+
+6. A named clinical condition is DISEASE ("diabetes", "malaria"); the activity that counteracts it is BIOACTIVITY ("antidiabetic", "antimalarial"). Subcellular mechanisms (oxidative stress, inflammation, apoptosis) belong to neither — do not extract them.
+
+
+REASONING STEP (mandatory before JSON)
 
 <reasoning>
-1. Candidate spans: [list all potential entities you see]
-2. Ambiguities: [list any spans that could fit multiple types and your resolution]
-3. Nested entities: [note any spans that overlap and need separate extraction]
+1. Candidate spans: [all potential entities found in the text]
+2. Ambiguities: [spans that could fit multiple types; state your resolution]
+3. Nested / co-referential entities: [overlapping spans, or common + scientific name pairs]
+4. linked_to assignments: [for each BIOACTIVITY: the linked chemical span, or why it is null]
 </reasoning>
 
-Then output the final JSON.
 
-════════════════════════════════════════
-OUTPUT FORMAT
-════════════════════════════════════════
+OUTPUT SCHEMA
 
-Return a JSON array where each entity is an object with these fields:
+Return a JSON array where every entity is an object with these fields:
 
 {
-  "span": "<exact text from the input>",
-  "type": "<ENTITY_TYPE>",
-  "start": <character index where span starts>,
-  "end": <character index where span ends>,
+  "span":      "<exact substring from the input — no paraphrasing>",
+  "type":      "<CHEMICAL | SPECIES | LOCATION | BIOACTIVITY | DISEASE>",
+  "start":     <integer — zero-indexed, inclusive>,
+  "end":       <integer — zero-indexed, exclusive; text[start:end] == span>,
   "name_type": "<scientific | common | null>",
-  "linked_to": "<related entity span if applicable, else null>"
+  "linked_to": "<span of the chemical performing the activity, or null>"
 }
 
-Rules:
-- "span" must be the EXACT substring from the input text (no paraphrasing)
-- "start" and "end" are zero-indexed character offsets
-- "name_type" is ONLY populated for SPECIES entities. Set null for all other types.
-- "linked_to" is required for BIOACTIVITY (link to the chemical performing the activity). Set null otherwise.
-- Return ONLY the <reasoning> block followed by the JSON array. No extra text, no markdown code fences.
+"span" must be the verbatim substring from the input; confirm it with start and end.
+"name_type" is populated only for SPECIES ("scientific" or "common"); set null for all other types.
+"linked_to" is populated only for BIOACTIVITY, and only when the performing chemical is explicitly named in the text and itself present as a CHEMICAL entity in the array. Set null in all other cases, and for every non-BIOACTIVITY entity without exception.
 
-════════════════════════════════════════
-FEW-SHOT EXAMPLES
-════════════════════════════════════════
+Return ONLY the <reasoning> block followed by the JSON array. No extra text. No markdown code fences.
 
-── EXAMPLE 1 ──
+
+EXAMPLES
+
+Each input below is a single continuous line. Character offsets are computed on that single-line string; do not count any line breaks introduced by display formatting.
+
+-- EXAMPLE 1 --
 
 Input:
-"Essential oil of Cinnamomum verum bark collected from Wayanad, Kerala was obtained by steam distillation. Eugenol (72.4%) exhibited strong antimicrobial activity against Staphylococcus aureus."
+"Eugenol (72.4%), the major constituent of Cinnamomum verum essential oil collected from Wayanad, Kerala, exhibited strong antimicrobial activity against Staphylococcus aureus."
 
 <reasoning>
-1. Candidate spans: Cinnamomum verum (species), Wayanad, Kerala (location), steam distillation (isolation method), Eugenol (chemical), antimicrobial (bioactivity), Staphylococcus aureus (species)
-2. Ambiguities: None.
+1. Candidate spans: Eugenol (chemical), Cinnamomum verum (species), Wayanad, Kerala (location), antimicrobial (bioactivity), Staphylococcus aureus (species).
+2. Ambiguities: "(72.4%)" is a concentration value — excluded from the Eugenol span. "essential oil" is a bulk mixture — not extracted.
+3. Nested / co-referential entities: None.
+4. linked_to assignments: antimicrobial → "Eugenol" is the explicitly named compound exhibiting the activity and is itself extracted as CHEMICAL.
 </reasoning>
 
 [
-  {"span": "Cinnamomum verum",    "type": "SPECIES",           "start": 17,  "end": 33,  "name_type": "scientific", "linked_to": null},
-  {"span": "Wayanad, Kerala",     "type": "LOCATION",          "start": 54,  "end": 69,  "name_type": null,         "balanced": null},
-  {"span": "steam distillation",  "type": "ANALYTICAL TECHNIQUE",  "start": 86,  "end": 103, "name_type": null,         "linked_to": null},
-  {"span": "Eugenol",             "type": "CHEMICAL",          "start": 105, "end": 112, "name_type": null,         "linked_to": null},
-  {"span": "antimicrobial",       "type": "BIOACTIVITY", "start": 140, "end": 153, "name_type": null,         "linked_to": "Eugenol"},
-  {"span": "Staphylococcus aureus","type": "SPECIES",          "start": 162, "end": 183, "name_type": "scientific", "linked_to": null}
+  {"span": "Eugenol",               "type": "CHEMICAL",    "start": 0,   "end": 7,   "name_type": null,         "linked_to": null},
+  {"span": "Cinnamomum verum",      "type": "SPECIES",     "start": 42,  "end": 58,  "name_type": "scientific", "linked_to": null},
+  {"span": "Wayanad, Kerala",       "type": "LOCATION",    "start": 88,  "end": 103, "name_type": null,         "linked_to": null},
+  {"span": "antimicrobial",         "type": "BIOACTIVITY", "start": 122, "end": 135, "name_type": null,         "linked_to": "Eugenol"},
+  {"span": "Staphylococcus aureus", "type": "SPECIES",     "start": 153, "end": 174, "name_type": "scientific", "linked_to": null}
 ]
 
-── EXAMPLE 2 ──
+-- EXAMPLE 2 --
 
 Input:
-"Leaves and roots of neem collected from Tamil Nadu were subjected to Soxhlet extraction using methanol. The crude extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models. Nimbolide (3.8%) was isolated via column chromatography and found to inhibit COX-2 enzyme."
+"Leaves of neem (Azadirachta indica) collected from Tamil Nadu were extracted with methanol. The extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models."
 
 <reasoning>
-1. Candidate spans: neem (species), Tamil Nadu (location), Soxhlet extraction (extraction method), methanol (chemical), antifungal (bioactivity), Candida albicans (species), antidiabetic (bioactivity), diabetes (disease), streptozotocin (chemical), Nimbolide (chemical), column chromatography (isolation method)
-2. Ambiguities: streptozotocin — even in pharmacological model context, normalize compounds to CHEMICAL.
+1. Candidate spans: neem (species), Azadirachta indica (species), Tamil Nadu (location), methanol (chemical), antifungal (bioactivity), Candida albicans (species), antidiabetic (bioactivity), streptozotocin (chemical), diabetes (disease).
+2. Ambiguities: "streptozotocin" is a pharmacological inducer → CHEMICAL per rule 1. "Leaves" does not match any of the five types — not extracted. "The extract" is a bulk fraction — not extracted.
+3. Nested / co-referential entities: "neem" and "Azadirachta indica" refer to the same organism; extract both with name_type "common" and "scientific" respectively. Within "streptozotocin-induced diabetes": extract "streptozotocin" as CHEMICAL and "diabetes" as DISEASE independently per rule 4.
+4. linked_to assignments: antifungal → attributed to "The extract", which is not an extracted CHEMICAL entity → null. antidiabetic → same reasoning → null.
 </reasoning>
 
 [
-  {"span": "neem",                  "type": "SPECIES",           "start": 20,  "end": 24,  "name_type": "common",     "linked_to": null},
-  {"span": "Tamil Nadu",            "type": "LOCATION",          "start": 40,  "end": 50,  "name_type": null,         "linked_to": null},
-  {"span": "Soxhlet extraction",    "type": "EXTRACTION METHOD", "start": 68,  "end": 85,  "name_type": null,         "linked_to": null},
-  {"span": "methanol",              "type": "CHEMICAL",          "start": 92,  "end": 100, "name_type": null,         "linked_to": null},
-  {"span": "antifungal",            "type": "BIOACTIVITY", "start": 120, "end": 130, "name_type": null,         "linked_to": null},
-  {"span": "Candida albicans",      "type": "SPECIES",           "start": 139, "end": 155, "name_type": "scientific", "linked_to": null},
-  {"span": "antidiabetic",          "type": "BIOACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
-  {"span": "streptozotocin",        "type": "CHEMICAL",          "start": 176, "end": 190, "name_type": null,         "linked_to": null},
-  {"span": "diabetes",              "type": "DISEASE",           "start": 199, "end": 207, "name_type": null,         "linked_to": null},
-  {"span": "Nimbolide",             "type": "CHEMICAL",          "start": 216, "end": 225, "name_type": null,         "linked_to": null},
-  {"span": "column chromatography", "type": "ANALYTICAL TECHNIQUE",  "start": 247, "end": 267, "name_type": null,         "linked_to": null}
-]
-"""
+  {"span": "neem",               "type": "SPECIES",     "start": 10,  "end": 14,  "name_type": "common",     "linked_to": null},
+  {"span": "Azadirachta indica", "type": "SPECIES",     "start": 16,  "end": 34,  "name_type": "scientific", "linked_to": null},
+  {"span": "Tamil Nadu",         "type": "LOCATION",    "start": 51,  "end": 61,  "name_type": null,         "linked_to": null},
+  {"span": "methanol",           "type": "CHEMICAL",    "start": 82,  "end": 90,  "name_type": null,         "linked_to": null},
+  {"span": "antifungal",         "type": "BIOACTIVITY", "start": 111, "end": 121, "name_type": null,         "linked_to": null},
+  {"span": "Candida albicans",   "type": "SPECIES",     "start": 139, "end": 155, "name_type": "scientific", "linked_to": null},
+  {"span": "antidiabetic",       "type": "BIOACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
+  {"span": "streptozotocin",     "type": "CHEMICAL",    "start": 186, "end": 200, "name_type": null,         "linked_to": null},
+  {"span": "diabetes",           "type": "DISEASE",     "start": 209, "end": 217, "name_type": null,         "linked_to": null}
+]"""
 
 # --- Label Definitions ---
 LABEL_DEFINITIONS = {
