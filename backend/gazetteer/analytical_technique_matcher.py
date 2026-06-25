@@ -7,6 +7,7 @@ Uses spaCy blank model with PhraseMatcher for efficient matching.
 
 import csv
 import pickle
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import spacy
@@ -21,6 +22,10 @@ ENTITY_TYPE = "ANALYTICAL TECHNIQUE"
 # Paths
 BASE_DIR = Path(__file__).parent.parent  # backend/
 DATA_DIR = BASE_DIR / "gazetteer" / "data"
+
+
+def _normalize_dashes(text: str) -> str:
+    return re.sub(r'[\u2013\u2014\u2015\u2212]', '-', text)
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 CACHE_FILE = BUILD_DIR / "analytical_technique_cache.pkl"
 
@@ -73,8 +78,14 @@ class AnalyticalTechniqueMatcher:
         """
         csv_path = DATA_DIR / "analytical_technique.csv"
 
+        enc = "utf-8"
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                f.read()
+        except UnicodeDecodeError:
+            enc = "cp1252"
         terms = []
-        with open(csv_path, "r", encoding="utf-8") as f:
+        with open(csv_path, "r", encoding=enc) as f:
             reader = csv.reader(f)
             headers = next(reader, [])
 
@@ -103,7 +114,7 @@ class AnalyticalTechniqueMatcher:
 
         # Build canonical map
         canonical_map = {}
-        with open(csv_path, "r", encoding="utf-8") as f:
+        with open(csv_path, "r", encoding=enc) as f:
             reader = csv.reader(f)
             headers = next(reader, [])
             for row in reader:
@@ -118,9 +129,9 @@ class AnalyticalTechniqueMatcher:
 
         self.canonical_map = canonical_map
 
-        # Create matcher
+        # Create matcher — normalize dashes so en-dash/em-dash match hyphen
         self.matcher = PhraseMatcher(self.nlp.vocab, attr="LOWER")
-        patterns = [self.nlp.make_doc(t) for t in terms if t]
+        patterns = [self.nlp.make_doc(_normalize_dashes(t)) for t in terms if t]
         self.matcher.add(ENTITY_TYPE, patterns)
 
         logger.info(
@@ -154,7 +165,7 @@ class AnalyticalTechniqueMatcher:
         if not text or not text.strip():
             return []
 
-        doc = self.nlp(text)
+        doc = self.nlp(_normalize_dashes(text))
         entities = []
         seen = set()
 
@@ -176,18 +187,27 @@ class AnalyticalTechniqueMatcher:
                 {
                     "span": span.text,
                     "canonical": canonical,
-                    "aliases": aliases,  # All variations for counting
+                    "aliases": aliases,
                     "type": ENTITY_TYPE,
                     "start": span.start_char,
                     "end": span.end_char,
                     "name_type": None,
                     "linked_to": None,
                     "label": ENTITY_TYPE,
-                    "score": 1.0,  # Dictionary matches are 100% confident
+                    "score": 1.0,
                 }
             )
 
-        return entities
+        # Remove shorter entities nested inside longer ones at the same position
+        entities.sort(key=lambda e: (e["start"], -(e["end"] - e["start"])))
+        deduped = []
+        for ent in entities:
+            if not any(ent["start"] >= other["start"] and ent["end"] <= other["end"]
+                       and (ent["end"] - ent["start"]) < (other["end"] - other["start"])
+                       for other in deduped):
+                deduped.append(ent)
+
+        return deduped
 
 
 # Singleton instance
