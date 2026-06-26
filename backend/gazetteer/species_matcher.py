@@ -142,6 +142,22 @@ class SpeciesMatcher:
                         "name_type": "scientific",
                     }
 
+                # Generate abbreviated forms: "A. annua" and "A.annua"
+                parts = canonical.split()
+                if len(parts) == 2 and len(parts[0]) > 1:
+                    genus_initial = parts[0][0] + "."
+                    species_epithet = parts[1]
+                    abbrev_spaced = (genus_initial + " " + species_epithet).lower()
+                    abbrev_nospace = (genus_initial + species_epithet).lower()
+                    for abbrev in (abbrev_spaced, abbrev_nospace):
+                        if abbrev not in scientific_terms:
+                            scientific_terms.add(abbrev)
+                            canonical_map[abbrev] = canonical
+                            metadata_map[abbrev] = {
+                                **base_metadata,
+                                "name_type": "scientific",
+                            }
+
                 if common_name:
                     common_lower = common_name.lower()
                     canonical_map[common_lower] = canonical

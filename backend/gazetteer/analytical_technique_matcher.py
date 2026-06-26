@@ -24,8 +24,9 @@ BASE_DIR = Path(__file__).parent.parent  # backend/
 DATA_DIR = BASE_DIR / "gazetteer" / "data"
 
 
-def _normalize_dashes(text: str) -> str:
-    return re.sub(r'[\u2013\u2014\u2015\u2212]', '-', text)
+def _normalize_separators(text: str) -> str:
+    text = re.sub(r'[\u2013\u2014\u2015\u2212]', '-', text)
+    return text.replace('/', '-')
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 CACHE_FILE = BUILD_DIR / "analytical_technique_cache.pkl"
 
@@ -131,7 +132,7 @@ class AnalyticalTechniqueMatcher:
 
         # Create matcher — normalize dashes so en-dash/em-dash match hyphen
         self.matcher = PhraseMatcher(self.nlp.vocab, attr="LOWER")
-        patterns = [self.nlp.make_doc(_normalize_dashes(t)) for t in terms if t]
+        patterns = [self.nlp.make_doc(_normalize_separators(t)) for t in terms if t]
         self.matcher.add(ENTITY_TYPE, patterns)
 
         logger.info(
@@ -165,7 +166,7 @@ class AnalyticalTechniqueMatcher:
         if not text or not text.strip():
             return []
 
-        doc = self.nlp(_normalize_dashes(text))
+        doc = self.nlp(_normalize_separators(text))
         entities = []
         seen = set()
 
