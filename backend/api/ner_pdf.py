@@ -145,14 +145,35 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
     from backend.gazetteer import chemical_matcher, development_stage_matcher, extraction_method_matcher
     from backend.gazetteer import plant_part_matcher, season_matcher, species_matcher
 
-    plant_parts = plant_part_matcher.match_plant_parts(text)
-    chemicals = chemical_matcher.match_chemicals(text)
-    species = species_matcher.match_species(text)
-    analytical = analytical_technique_matcher.match_analytical_techniques(text)
-    extraction = extraction_method_matcher.match_extraction_methods(text)
-    development = development_stage_matcher.match_development_stages(text)
-    seasons = season_matcher.match_seasons(text)
-    bioactivities = bioactivity_matcher.match_bioactivities(text)
+    # Collect all entities with their output labels
+    matchers = [
+        (chemical_matcher.match_chemicals, "CHEMICAL"),
+        (plant_part_matcher.match_plant_parts, "PLANT_PART"),
+        (species_matcher.match_species, "SPECIES"),
+        (analytical_technique_matcher.match_analytical_techniques, "ANALYTICAL_TECHNIQUE"),
+        (extraction_method_matcher.match_extraction_methods, "EXTRACTION_METHOD"),
+        (development_stage_matcher.match_development_stages, "DEVELOPMENT_STAGE"),
+        (season_matcher.match_seasons, "SEASON"),
+        (bioactivity_matcher.match_bioactivities, "BIOACTIVITY"),
+    ]
+    all_labeled = []
+    for fn, label in matchers:
+        for e in fn(text):
+            all_labeled.append((e, label))
+
+    # Cross-type dedup: longest span wins regardless of type
+    kept = []
+    for e, label in sorted(all_labeled, key=lambda x: (x[0].get("start") or 0, -(x[0].get("end") or 0))):
+        s, en = e.get("start"), e.get("end")
+        if s is None or en is None:
+            kept.append((e, label))
+            continue
+        if not any(s < k[0]["end"] and en > k[0]["start"] for k in kept if "start" in k[0] and "end" in k[0]):
+            kept.append((e, label))
+
+    grouped: Dict[str, list] = {}
+    for e, label in kept:
+        grouped.setdefault(label, []).append(e)
 
     entities: Dict[str, List[str]] = {}
     seen_lower: Dict[str, set] = {}
@@ -204,14 +225,8 @@ def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Di
                 existing_aliases.update(canonical_aliases_map.get(canonical, []))
                 existing["aliases"] = list(existing_aliases)
 
-    add_canonical_ents(plant_parts, "PLANT_PART")
-    add_canonical_ents(chemicals, "CHEMICAL")
-    add_canonical_ents(species, "SPECIES")
-    add_canonical_ents(analytical, "ANALYTICAL_TECHNIQUE")
-    add_canonical_ents(extraction, "EXTRACTION_METHOD")
-    add_canonical_ents(development, "DEVELOPMENT_STAGE")
-    add_canonical_ents(seasons, "SEASON")
-    add_canonical_ents(bioactivities, "BIOACTIVITY")
+    for label, ents in grouped.items():
+        add_canonical_ents(ents, label)
 
     return entities, count_map, canonical_data
 

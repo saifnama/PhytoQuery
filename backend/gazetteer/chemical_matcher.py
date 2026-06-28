@@ -23,7 +23,52 @@ DATA_DIR = BASE_DIR / "gazetteer" / "data"
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 DATA_FILE = DATA_DIR / "chemical.csv"
 CACHE_FILE = BUILD_DIR / "chemical_cache.pkl"
-CACHE_VERSION = "v5"
+CACHE_VERSION = "v7"
+
+
+GREEK_MAP = {
+    "α": "alpha", "β": "beta", "γ": "gamma", "δ": "delta",
+    "ε": "epsilon", "ζ": "zeta", "η": "eta", "θ": "theta",
+    "ι": "iota", "κ": "kappa", "λ": "lambda", "μ": "mu",
+    "ν": "nu", "ξ": "xi", "ο": "omicron", "π": "pi",
+    "ρ": "rho", "σ": "sigma", "τ": "tau", "υ": "upsilon",
+    "φ": "phi", "χ": "chi", "ψ": "psi", "ω": "omega",
+    "ς": "sigma",
+    "Α": "alpha", "Β": "beta", "Γ": "gamma", "Δ": "delta",
+    "Ε": "epsilon", "Ζ": "zeta", "Η": "eta", "Θ": "theta",
+    "Ι": "iota", "Κ": "kappa", "Λ": "lambda", "Μ": "mu",
+    "Ν": "nu", "Ξ": "xi", "Ο": "omicron", "Π": "pi",
+    "Ρ": "rho", "Σ": "sigma", "Τ": "tau", "Υ": "upsilon",
+    "Φ": "phi", "Χ": "chi", "Ψ": "psi", "Ω": "omega",
+}
+
+
+def _normalize_greek(text: str) -> tuple[str, list[int]]:
+    """Replace Greek letters with Latin names, return (normalized, offset_map).
+
+    When a Greek letter follows an alphanumeric character (e.g. ``6α``) a
+    hyphen is inserted so the expanded form mirrors CSV patterns like
+    ``6-alpha-ol``.  The inserted hyphen maps to the Greek letter's original
+    position in the offset map.
+
+    offset_map[i] gives the original-text character index that normalized
+    position *i* came from.  Use it to map PhraseMatcher result offsets
+    back to the original input.
+    """
+    result: list[str] = []
+    offset_map: list[int] = []
+    for i, ch in enumerate(text):
+        replacement = GREEK_MAP.get(ch)
+        if replacement:
+            if i > 0 and text[i - 1].isalnum():
+                result.append("-")
+                offset_map.append(i)
+            result.extend(replacement)
+            offset_map.extend([i] * len(replacement))
+        else:
+            result.append(ch)
+            offset_map.append(i)
+    return "".join(result), offset_map
 
 
 def _normalize_alias(text: str) -> str:
@@ -79,7 +124,11 @@ def build_chemical_cache_data(
             continue
 
         primary_aliases = _alias_variants(preferred_name)
-        synonyms = [s.strip() for s in synonyms_raw.split("|") if s.strip()]
+        synonyms = [s.strip() for s in synonyms_raw.split("|") if s.strip() and any(c.isalnum() for c in s.strip())]
+        # synonyms match as-is (case-insensitive via PhraseMatcher LOWER),
+        # no variant generation — 3× bloat from _alias_variants on 300K+ synonyms
+        # made pattern loading ~5× slower with negligible recall gain.
+        synonym_variants = list(dict.fromkeys(s for s in synonyms if s))
         aliases = list(dict.fromkeys(primary_aliases + synonyms))
 
         prepared_rows.append(
@@ -88,6 +137,7 @@ def build_chemical_cache_data(
                 "preferred_name": preferred_name,
                 "aliases": aliases,
                 "match_aliases": primary_aliases,
+                "synonym_aliases": synonym_variants,
                 "inchikey": inchikey,
                 "smiles": smiles,
                 "molecular_formula": molecular_formula,
@@ -103,6 +153,10 @@ def build_chemical_cache_data(
                     "alias": alias,
                     "priority": 2 if index == 0 else 1,
                 }
+            )
+        for sv in synonym_variants:
+            alias_candidates.setdefault(sv.lower(), []).append(
+                {"canonical": canonical, "alias": sv, "priority": 0}
             )
     alias_owner: Dict[str, str] = {}
     invalid_alias_keys: set[str] = set()
@@ -142,6 +196,13 @@ def build_chemical_cache_data(
             if alias.lower() not in invalid_alias_keys
             and alias_owner.get(alias.lower()) == canonical
         ]
+        accepted_synonyms = [
+            alias
+            for alias in prepared["synonym_aliases"]
+            if alias.lower() not in invalid_alias_keys
+            and alias_owner.get(alias.lower()) == canonical
+        ]
+        accepted_aliases.extend(accepted_synonyms)
 
         if not accepted_aliases:
             continue
@@ -245,7 +306,7 @@ class ChemicalMatcher:
 
         cache_data = build_chemical_cache_data(
             rows,
-            log_collision=lambda alias, existing, canonical: logger.warning(
+            log_collision=lambda alias, existing, canonical: logger.debug(
                 "[ChemicalMatcher] Duplicate alias collision for '%s': '%s' vs '%s'. Keeping neither.",
                 alias,
                 existing,
@@ -308,13 +369,18 @@ class ChemicalMatcher:
         if not text or not text.strip() or self.matcher is None:
             return []
 
-        doc = self.nlp(text)
+        normalized_text, offset_map = _normalize_greek(text)
+        doc = self.nlp(normalized_text)
         entities: List[Dict[str, Any]] = []
         seen = set()
 
         for _, start, end in self.matcher(doc):
             span = doc[start:end]
-            key = (span.start_char, span.end_char)
+            norm_start = span.start_char
+            norm_end = span.end_char
+            orig_start = offset_map[norm_start]
+            orig_end = offset_map[norm_end - 1] + 1
+            key = (orig_start, orig_end)
             if key in seen:
                 continue
             seen.add(key)
@@ -325,10 +391,10 @@ class ChemicalMatcher:
 
             enriched.update(
                 {
-                    "text": span.text,
-                    "span": span.text,
-                    "start": span.start_char,
-                    "end": span.end_char,
+                    "text": text[orig_start:orig_end],
+                    "span": text[orig_start:orig_end],
+                    "start": orig_start,
+                    "end": orig_end,
                 }
             )
             entities.append(enriched)

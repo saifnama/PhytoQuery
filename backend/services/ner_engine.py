@@ -220,116 +220,9 @@ class NERService:
             text: Input text to process
             max_chunks: Maximum number of chunks to process (for performance)
         """
-        # 1. Dictionary-based extraction (PLANT PARTS) - fast, from CSV
-        dict_entities = match_plant_parts(text)
-        # Normalize dict entities: span->text, type->label for deduplication
-        dict_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),  # Include canonical for normalization
-                "aliases": e.get("aliases"),
-            }
-            for e in dict_entities
-        ]
-
-        # 1b. Dictionary-based ANALYTICAL TECHNIQUE extraction
-        analytical_entities = match_analytical_techniques(text)
-        analytical_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),  # Include canonical for normalization
-                "aliases": e.get("aliases"),
-            }
-            for e in analytical_entities
-        ]
-
-        # 1c. Dictionary-based EXTRACTION METHOD extraction
-        from backend.gazetteer.extraction_method_matcher import (
-            match_extraction_methods,
-        )
-
-        extraction_entities = match_extraction_methods(text)
-        extraction_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),
-                "aliases": e.get("aliases"),
-            }
-            for e in extraction_entities
-        ]
-
-        # 1d. Dictionary-based DEVELOPMENT STAGE extraction
-        from backend.gazetteer.development_stage_matcher import (
-            match_development_stages,
-        )
-
-        development_entities = match_development_stages(text)
-        development_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),
-                "aliases": e.get("aliases"),
-            }
-            for e in development_entities
-        ]
-
-        # 1e. Dictionary-based SEASON extraction
-        from backend.gazetteer.season_matcher import match_seasons
-
-        season_entities = match_seasons(text)
-        season_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),
-                "aliases": e.get("aliases"),
-            }
-            for e in season_entities
-        ]
-
-        # 1f. Dictionary-based SPECIES extraction (scientific names only)
-        species_entities = match_species(text)
-
-        # 1g. Dictionary-based CHEMICAL extraction
-        chemical_entities = match_chemicals(text)
-        chemical_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),
-                "preferred_name": e.get("preferred_name"),
-                "aliases": e.get("aliases"),
-                "inchikey": e.get("inchikey"),
-                "smiles": e.get("smiles"),
-                "molecular_formula": e.get("molecular_formula"),
-                "source_db": e.get("source_db"),
-                "source_url": e.get("source_url"),
-            }
-            for e in chemical_entities
-        ]
-
-        # 1h. Dictionary-based BIOACTIVITY extraction
-        bioactivity_entities = match_bioactivities(text)
-        bioactivity_entities = [
-            {
-                "text": e.get("span", e.get("text", "")),
-                "label": e.get("type", e.get("label", "")),
-                "score": e.get("score", 1.0),
-                "canonical": e.get("canonical"),
-                "synonyms": e.get("synonyms"),
-            }
-            for e in bioactivity_entities
-        ]
+        # 1. Dictionary-based extraction — all 8 matchers run once, with
+        #    dedup (longest overlapping span wins) applied automatically.
+        dict_entities = self._match_dictionary_in_text(text)
 
         # 2. Chunking - limit chunks for performance
         chunks = self.split_into_word_chunks(text)
@@ -356,18 +249,8 @@ class NERService:
                 f"LLM extraction failed: {e}. Using dictionary entities only."
             )
 
-        # 5. Combine and deduplicate (only dictionary + LLM)
-        all_entities = (
-            dict_entities
-            + analytical_entities
-            + extraction_entities
-            + development_entities
-            + season_entities
-            + species_entities
-            + chemical_entities
-            + bioactivity_entities
-            + llm_entities
-        )
+        # 5. Combine dict entities (already dedup'd) + LLM entities
+        all_entities = dict_entities + llm_entities
 
         # 6. Normalize all entities to canonical form
         from backend.gazetteer.plant_part_matcher import (
@@ -536,6 +419,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "PLANT PART")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "aliases": e.get("aliases"),
             })
@@ -546,6 +431,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "ANALYTICAL TECHNIQUE")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "aliases": e.get("aliases"),
             })
@@ -557,6 +444,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "EXTRACTION METHOD")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "aliases": e.get("aliases"),
             })
@@ -568,6 +457,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "DEVELOPMENT STAGE")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "aliases": e.get("aliases"),
             })
@@ -579,6 +470,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "SEASON")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "aliases": e.get("aliases"),
             })
@@ -589,6 +482,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "SPECIES")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
             })
 
@@ -598,6 +493,8 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "CHEMICAL")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "preferred_name": e.get("preferred_name"),
                 "aliases": e.get("aliases"),
@@ -615,9 +512,27 @@ class NERService:
                 "text": e.get("span", e.get("text", "")),
                 "label": e.get("type", e.get("label", "BIOACTIVITY")),
                 "score": e.get("score", 1.0),
+                "start": e.get("start"),
+                "end": e.get("end"),
                 "canonical": e.get("canonical"),
                 "synonyms": e.get("synonyms"),
             })
+
+        # Deduplicate overlapping spans - longest match wins
+        kept = []
+        for e in sorted(entities, key=lambda x: (x.get("start") or 0, -(x.get("end") or 0))):
+            s, en = e.get("start"), e.get("end")
+            if s is None or en is None:
+                kept.append(e)
+                continue
+            overlaps = any(
+                s < k["end"] and en > k["start"]
+                for k in kept
+                if "start" in k and "end" in k
+            )
+            if not overlaps:
+                kept.append(e)
+        entities = kept
 
         return entities
 
