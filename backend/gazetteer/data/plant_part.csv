@@ -94,7 +94,8 @@ trunk,trunks
 bole,boles
 # === BARK & WOOD ===,
 bark,barks
-stem bark,stem barks
+stem bark,stem barks|stem-bark
+trunk bark,trunk barks
 root bark,root barks
 inner bark,inner barks
 cork,corks
@@ -144,7 +145,7 @@ catkin,catkins
 # === FLOWER STALKS ===,
 pedicel,pedicels
 peduncle,peduncles
-flower stalk,flower stalks
+flower stalk,flower stalks|stalks
 # === FLOWER ANATOMY ===,
 petal,petals
 sepal,sepals
@@ -166,7 +167,7 @@ androecium,androecia
 # === HERBS & HERBAGE ===,
 herb,herbs
 herbage,herbage
-aerial parts,aerial parts
+aerial part,aerial parts
 flowering top,flowering tops
 # === OTHER ===,
 bract,bracts
@@ -198,3 +199,8 @@ lateral meristem,lateral meristems
 intercalary meristem,intercalary meristems
 procambium,procambia
 protoderm,protoderms
+phyllode,phyllodes
+cuticle,
+twigs,
+ripe fruits,
+aerial tissues,

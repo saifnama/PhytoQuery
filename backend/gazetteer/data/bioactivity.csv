@@ -2,9 +2,9 @@ term,synonyms
 anti neuralgic, 
 muscle relaxant,myorelaxant
 anti mutagen,anti mutagenic 
-anti oxidant,anti radical|antioxidant
+anti oxidant,anti radical|antioxidant|antioxidative
 insect repellent,insectifuge
-hepatotoxic,hepatotoxicant|hepatotoxin
+hepatotoxic,hepatotoxicant|hepatotoxin|hepatotoxicity
 expectorant,mucokinetic|expectorant
 anti perspirant, 
 nephrotoxicity,nephrotoxic agent|nephrotoxicant
@@ -14,11 +14,11 @@ immunomodulator,immunomodulator
 protease inhibitor,
 lipoxygenase inhibitor,
 analgesic, 
-herbicide, 
-insecticide, 
+herbicide,herbicidal
+insecticide,insecticidal
 histaminergic, 
 gabaergic,GABA agent 
-genotoxic,genotoxin 
+genotoxic,genotoxin|genotoxicity
 allergenic, 
 carcinogen,carcinogenic 
 adenosine inhibitor, 
@@ -34,11 +34,11 @@ anti coagulant,
 laxative, 
 anti obesity, 
 immunosuppressant,immunosuppressive agent
-acetylcholinesterase inhibitor,anti acetylcholinesterase 
+acetylcholinesterase inhibitor,anti acetylcholinesterase|antiacetylcholinesterase|antiacetylcholinesterase activity
 antacid, 
 anti diarrheic,anti diarrhoeal 
-anti septic, 
-anti cancer,anti neoplastic|anti tumor|anticancer
+anti septic,antiseptic
+anti cancer,anti neoplastic|anti tumor|anticancer|antitumor|anti-cancer
 anti prostaglandin, 
 anti pruritic, 
 anti histaminic, histamine antagonist|histamine inhibitor 
@@ -51,28 +51,34 @@ anti asthmatic,anti-asthmatic
 anti scar,cicatrizant 
 spermicide, 
 anti malarial, 
-anti diabetic,anti hyperglycemic 
+anti diabetic,anti hyperglycemic|antidiabetic
 anti fibrinolytic, 
 anti hypertensive, 
 anti convulsant, 
-anti fungal,anti mycotic|fungistat|antifungal 
+anti fungal,anti mycotic|fungistat|antifungal|anti-mycotic|fungistatic|fungitoxic
 anti parasitic, 
-anti inflammatory, 
+anti inflammatory,anti-inflammatory
 anti protozoal, 
 anti pyretic,febrifuge 
 anti tussive, 
 anti hyperkeratinization, 
-anti microbial, 
+anti microbial,antimicrobial
 anti mitotic,mitotic inhibitor 
 anti bacteria,anti bacterial|anti pertussic|anti pertussive|bactericidal|bactericide|anti-bacterial|antibacterial 
 anti viral, 
 anti leukotriene,leukotriene inhibitor 
 anti acne, 
 anti melasmic, 
-anti proliferative,
+anti proliferative,antiproliferative
 virucidal,virucide
 phytotoxic,
-prooxidant,
+prooxidant,pro-oxidant
 anti plasmodial,
 anti cytotoxic,
-antimicrobial,
+anticholinesterase,
+scavenging activity,
+cytotoxic,cytotoxicity
+antinociceptive,
+larvicidal,larvicidal activity
+anesthetic,
+inhibitory effect,inhibitory effects
