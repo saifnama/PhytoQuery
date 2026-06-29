@@ -901,7 +901,7 @@ class NERService:
             try:
                 client = await HttpClientManager.get_client()
                 response = await client.post(
-                    url, json=payload, headers=headers, timeout=30.0
+                    url, json=payload, headers=headers, timeout=120.0
                 )
 
                 # Handle rate limiting (429) with retry

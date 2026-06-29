@@ -1,0 +1,267 @@
+"""
+extract.py
+
+Runs your 3 NER system configurations on the gold standard texts and
+saves each output as a JSON file. Run this once per system change.
+
+Outputs:
+    data/config1_dict.json     -- dictionary-only spans
+    data/config2_llm.json      -- LLM-only spans
+    data/config3_hybrid.json   -- merged spans (union + deduplication)
+
+Usage:
+    python extract.py
+    python extract.py --skip-llm   # dict + hybrid only
+    python extract.py --llm-only   # re-run LLM only
+"""
+
+import asyncio
+import json
+import os
+import sys
+import argparse
+from pathlib import Path
+
+# Ensure project root is on sys.path so backend imports work
+_project_root = Path(__file__).resolve().parents[3]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from backend.services.ner_engine import ner_service
+
+
+# -- Paths (relative to this script's location) --------------------------------
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_DATA_DIR   = _SCRIPT_DIR.parent / "data"
+GOLD_PATH   = str(_DATA_DIR / "gold.json")
+CHECKPOINT  = str(_DATA_DIR / "config2_llm_checkpoint.json")
+
+
+# -----------------------------------------------------------------------------
+# PART 1 -- Load texts from gold standard
+# -----------------------------------------------------------------------------
+
+def load_texts(gold_path: str, max_docs: int = 0) -> dict:
+    """Extract {doc_id: text} from Label Studio export."""
+    with open(gold_path, encoding="utf-8") as f:
+        tasks = json.load(f)
+    texts = {}
+    for task in tasks:
+        if max_docs and len(texts) >= max_docs:
+            break
+        anns = task.get("annotations", [])
+        if not anns:
+            continue
+        doc_id = task["data"].get("doc_id") or task["data"].get("doi", str(task["id"]))
+        texts[doc_id] = task["data"]["text"]
+    print(f"  Loaded {len(texts)} documents (max_docs={max_docs or 'all'})")
+    return texts
+
+
+# -----------------------------------------------------------------------------
+# PART 2 -- Config 1: Dictionary (SpaCy PhraseMatcher)
+# -----------------------------------------------------------------------------
+
+def run_dictionary(text: str) -> list:
+    """Dictionary matchers via production NER engine."""
+    entities = ner_service._match_dictionary_in_text(text)
+    return [{"text": e["text"], "label": e["label"], "start": e["start"], "end": e["end"]}
+            for e in entities]
+
+
+def run_config1(texts: dict) -> dict:
+    print("Config 1 -- Dictionary (SpaCy PhraseMatcher)...")
+    config1 = {}
+    for doc_id, text in texts.items():
+        config1[doc_id] = run_dictionary(text)
+    total = sum(len(v) for v in config1.values())
+    print(f"  {len(config1)} docs processed -- {total} total entities")
+    return config1
+
+
+# -----------------------------------------------------------------------------
+# PART 3 -- Config 2: LLM (production NER engine)
+# -----------------------------------------------------------------------------
+
+async def _llm_for_doc(text: str) -> list:
+    """LLM extraction via production NER engine (prompt, provider chain,
+    json_repair, validation-retry). Returns entities with offsets for
+    EVERY occurrence of each unique (text, label) in the document.
+
+    The LLM may return the same entity once or multiple times. We dedup
+    to unique (text, label) pairs, then find all occurrences in the
+    original text -- matching production's deduplicate() which also
+    counts all occurrences via text matching.
+    """
+    try:
+        entities = await ner_service._extract_entities_with_retry(text)
+    except Exception as e:
+        print(f" LLM extraction error: {e}")
+        return []
+
+    # Dedup LLM output to unique (text, label) pairs
+    seen_pairs = set()
+    unique = []
+    for ent in entities:
+        label = ent.get("label", "")
+        span = ent.get("text", "").strip()
+        if not span or not label:
+            continue
+        key = (span, label)
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            unique.append((span, label))
+
+    # Find ALL occurrences of each unique entity in the text
+    valid = []
+    for span, label in unique:
+        pos = 0
+        while True:
+            pos = text.find(span, pos)
+            if pos == -1:
+                break
+            valid.append({
+                "text": span,
+                "label": label,
+                "start": pos,
+                "end": pos + len(span),
+            })
+            pos += 1
+
+    # Sort: same start → longer span first so exact matches precede overlapping partials.
+    # nervaluate's strict strategy is greedy — first overlapping pred claims the gold entity.
+    valid.sort(key=lambda s: (s["start"], -(s["end"] - s["start"])))
+    return valid
+
+
+def run_config2(texts: dict) -> dict:
+    """Run production LLM on all documents. Saves a checkpoint every 10
+    abstracts so a crash does not lose progress."""
+    # Resume from checkpoint if it exists
+    config2 = {}
+    if os.path.exists(CHECKPOINT):
+        with open(CHECKPOINT) as f:
+            config2 = json.load(f)
+        print(f"  Resuming from checkpoint -- {len(config2)}/{len(texts)} already done")
+
+    doc_ids = list(texts.keys())
+    remaining = [d for d in doc_ids if d not in config2]
+
+    config_name = "LLM (production NER engine)"
+    print(f"Config 2 -- {config_name} -- {len(remaining)} abstracts to process...")
+
+    async def _run_all():
+        for i, doc_id in enumerate(remaining):
+            n = doc_ids.index(doc_id) + 1
+            print(f"  [{n:3d}/{len(doc_ids)}] {doc_id[-20:]}...", end=" ", flush=True)
+            entities = await _llm_for_doc(texts[doc_id])
+            config2[doc_id] = entities
+            print(f"-> {len(entities)} entities")
+
+            if (i + 1) % 10 == 0:
+                with open(CHECKPOINT, "w") as f:
+                    json.dump(config2, f)
+
+        with open(CHECKPOINT, "w") as f:
+            json.dump(config2, f)
+        return config2
+
+    result = asyncio.run(_run_all())
+    total = sum(len(v) for v in result.values())
+    print(f"  Done -- {total} total entities")
+    return result
+
+
+# -----------------------------------------------------------------------------
+# PART 4 -- Config 3: Hybrid merger
+# -----------------------------------------------------------------------------
+
+def merge_spans(dict_spans: list, llm_spans: list) -> list:
+    """Union with exact-position + type deduplication.  Spans with the
+    same (start, end, label) are dedup'd; different labels at the same
+    position are kept -- nervaluate evaluates per type independently."""
+    merged = list(dict_spans)
+    seen   = {(s["start"], s["end"], s["label"]) for s in dict_spans}
+    for span in llm_spans:
+        key = (span["start"], span["end"], span["label"])
+        if key not in seen:
+            merged.append(span)
+            seen.add(key)
+    # Same-start entities sorted longest-first (exact match before overlapping partial)
+    merged.sort(key=lambda s: (s["start"], -(s["end"] - s["start"])))
+    return merged
+
+
+def run_config3(texts: dict, config1: dict, config2: dict) -> dict:
+    print("Config 3 -- Hybrid (Dictionary + LLM union)...")
+    config3 = {
+        doc_id: merge_spans(
+            config1.get(doc_id, []),
+            config2.get(doc_id, [])
+        )
+        for doc_id in texts
+    }
+    total = sum(len(v) for v in config3.values())
+    print(f"  {len(config3)} docs processed -- {total} total entities")
+    return config3
+
+
+# -----------------------------------------------------------------------------
+# MAIN
+# -----------------------------------------------------------------------------
+
+def save(data: dict, path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"  Saved {path}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-llm",  action="store_true",
+                        help="Run dict and hybrid only (skip Ollama)")
+    parser.add_argument("--llm-only",  action="store_true",
+                        help="Re-run LLM only and rebuild hybrid")
+    parser.add_argument("--max-docs",  type=int, default=0,
+                        help="Limit to N documents (default: all)")
+    args = parser.parse_args()
+
+    print("=" * 55)
+    print("  Extract -- Run System Configurations")
+    print("=" * 55)
+
+    texts = load_texts(GOLD_PATH, max_docs=args.max_docs)
+    print(f"Loaded {len(texts)} documents from {GOLD_PATH}\n")
+
+    # -- Config 1 --------------------------------------------------------------
+    if not args.llm_only:
+        config1 = run_config1(texts)
+        save(config1, str(_DATA_DIR / "config1_dict.json"))
+    else:
+        with open(_DATA_DIR / "config1_dict.json") as f:
+            config1 = json.load(f)
+        print(f"Config 1 -- loaded from {_DATA_DIR / 'config1_dict.json'} (--llm-only)")
+
+    # -- Config 2 --------------------------------------------------------------
+    if args.skip_llm:
+        p = _DATA_DIR / "config2_llm.json"
+        if p.exists():
+            with open(p) as f:
+                config2 = json.load(f)
+            print(f"Config 2 -- loaded from {p} (--skip-llm)")
+        else:
+            print("Config 2 -- skipped (no existing file found)")
+            config2 = {doc_id: [] for doc_id in texts}
+    else:
+        config2 = run_config2(texts)
+        save(config2, str(_DATA_DIR / "config2_llm.json"))
+
+    # -- Config 3 --------------------------------------------------------------
+    config3 = run_config3(texts, config1, config2)
+    save(config3, str(_DATA_DIR / "config3_hybrid.json"))
+
+    print()
+    print("=" * 55)
+    print("  All configs saved. Run evaluate.py next.")
+    print("=" * 55)
