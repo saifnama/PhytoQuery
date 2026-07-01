@@ -37,13 +37,19 @@ class SpeciesMatcher:
         self._load_or_build()
 
     def _load_or_build(self) -> None:
-        if CACHE_FILE.exists():
+        if CACHE_FILE.exists() and DATA_FILE.exists():
             try:
+                csv_mtime = DATA_FILE.stat().st_mtime
                 with open(CACHE_FILE, "rb") as f:
                     cache = pickle.load(f)
 
                 if ENTITY_TYPE in cache:
                     data = cache[ENTITY_TYPE]
+                    if "source_mtime" not in data or data["source_mtime"] != csv_mtime:
+                        logger.info("[SpeciesMatcher] CSV changed; rebuilding")
+                        self._build_from_csv()
+                        return
+
                     terms = data["terms"]
                     self.canonical_map = data.get("canonical_map", {})
                     self.metadata_map = data.get("metadata_map", {})
@@ -181,6 +187,7 @@ class SpeciesMatcher:
                 "canonical_map": canonical_map,
                 "metadata_map": metadata_map,
                 "aliases_by_canonical": aliases_by_canonical,
+                "source_mtime": DATA_FILE.stat().st_mtime,
             }
         }
         with open(CACHE_FILE, "wb") as f:

@@ -23,6 +23,7 @@ BASE_DIR = Path(__file__).parent.parent  # backend/
 DATA_DIR = BASE_DIR / "gazetteer" / "data"
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 CACHE_FILE = BUILD_DIR / "development_stage_cache.pkl"
+DATA_FILE = DATA_DIR / "development_stage.csv"
 
 
 class DevelopmentStageMatcher:
@@ -37,13 +38,19 @@ class DevelopmentStageMatcher:
 
     def _load_or_build(self):
         """Load from cache or build new."""
-        if CACHE_FILE.exists():
+        if CACHE_FILE.exists() and DATA_FILE.exists():
             try:
+                csv_mtime = DATA_FILE.stat().st_mtime
                 with open(CACHE_FILE, "rb") as f:
                     cache = pickle.load(f)
 
                 if ENTITY_TYPE in cache:
                     data = cache[ENTITY_TYPE]
+                    if "source_mtime" not in data or data["source_mtime"] != csv_mtime:
+                        logger.info("[DevelopmentStageMatcher] CSV changed; rebuilding")
+                        self._build_from_csv()
+                        return
+
                     terms = data["terms"]
                     canonical_map = data.get("canonical_map", {})
 
@@ -126,6 +133,7 @@ class DevelopmentStageMatcher:
             ENTITY_TYPE: {
                 "terms": terms,
                 "canonical_map": self.canonical_map,
+                "source_mtime": DATA_FILE.stat().st_mtime,
             }
         }
 

@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).parent.parent  # backend/
 DATA_DIR = BASE_DIR / "gazetteer" / "data"
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 CACHE_FILE = BUILD_DIR / "plant_part_cache.pkl"
+DATA_FILE = DATA_DIR / "plant_part.csv"
 
 ENTITY_TYPE = "PLANT PART"
 
@@ -36,13 +37,19 @@ class PlantPartMatcher:
 
     def _load_or_build(self):
         """Load from cache or build new."""
-        if CACHE_FILE.exists():
+        if CACHE_FILE.exists() and DATA_FILE.exists():
             try:
+                csv_mtime = DATA_FILE.stat().st_mtime
                 with open(CACHE_FILE, "rb") as f:
                     cache = pickle.load(f)
 
                 if ENTITY_TYPE in cache:
                     data = cache[ENTITY_TYPE]
+                    if "source_mtime" not in data or data["source_mtime"] != csv_mtime:
+                        logger.info("[PlantPartMatcher] CSV changed; rebuilding")
+                        self._build_from_csv()
+                        return
+
                     terms = data["terms"]
                     canonical_map = data.get("canonical_map", {})
 
@@ -125,6 +132,18 @@ class PlantPartMatcher:
                             canonical_map[alias.strip().lower()] = primary
 
         self.canonical_map = canonical_map
+
+        # Cache the built data with source_mtime for staleness detection
+        cache_data = {
+            ENTITY_TYPE: {
+                "terms": terms,
+                "canonical_map": canonical_map,
+                "source_mtime": DATA_FILE.stat().st_mtime,
+            }
+        }
+        BUILD_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CACHE_FILE, "wb") as f:
+            pickle.dump(cache_data, f)
 
         # Create matcher
         self.matcher = PhraseMatcher(self.nlp.vocab, attr="LOWER")

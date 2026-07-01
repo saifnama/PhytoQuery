@@ -49,7 +49,7 @@ def build_matcher(category: str, csv_file: Path) -> dict:
         headers = next(reader)  # Skip header
 
         # Check for aliases column
-        has_aliases = headers and len(headers) > 1 and "alias" in headers[1].lower()
+        has_aliases = headers and len(headers) > 1 and ("alias" in headers[1].lower() or "synonym" in headers[1].lower())
 
         for row in reader:
             if not row or not row[0].strip():
@@ -90,15 +90,18 @@ def build_species_matcher(csv_file: Path) -> dict:
     with open(csv_file, "r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            scientific_name_input = (row.get("scientific_name_input") or "").strip()
+            scientific_name_input = (
+                row.get("scientific_name") or
+                row.get("scientific_name_input") or
+                row.get("scientific_name_verified") or
+                ""
+            ).strip()
             scientific_name_verified = (
-                row.get("scientific_name_verified") or ""
+                row.get("scientific_name_verified") or
+                row.get("scientific_name") or
+                scientific_name_input
             ).strip()
-            accepted_scientific_name = (
-                row.get("accepted_scientific_name")
-                or scientific_name_verified
-                or scientific_name_input
-            ).strip()
+            accepted_scientific_name = scientific_name_verified or scientific_name_input
             common_name = (row.get("common_name") or "").strip()
             source_db = (row.get("source_db") or "").strip()
             source_url = (row.get("source_url") or "").strip()
@@ -147,6 +150,21 @@ def build_species_matcher(csv_file: Path) -> dict:
                 terms.append(alias_lower)
                 canonical_map[alias_lower] = canonical
                 metadata_map[alias_lower] = {**base_metadata, "name_type": "scientific"}
+
+            # Generate abbreviated forms: "A. annua" and "A.annua"
+            parts = canonical.split()
+            if len(parts) == 2 and len(parts[0]) > 1:
+                genus_initial = parts[0][0] + "."
+                species_epithet = parts[1]
+                abbrev_spaced = (genus_initial + " " + species_epithet).lower()
+                abbrev_nospace = (genus_initial + species_epithet).lower()
+                for abbrev in (abbrev_spaced, abbrev_nospace):
+                    if abbrev not in terms:
+                        terms.append(abbrev)
+                        canonical_map[abbrev] = canonical
+                        metadata_map[abbrev] = {
+                            **base_metadata, "name_type": "scientific",
+                        }
 
             if common_name:
                 common_lower = common_name.lower()

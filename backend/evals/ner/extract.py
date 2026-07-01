@@ -15,11 +15,11 @@ Usage:
     python extract.py --llm-only   # re-run LLM only
 """
 
+import argparse
 import asyncio
 import json
 import os
 import sys
-import argparse
 from pathlib import Path
 
 # Ensure project root is on sys.path so backend imports work
@@ -29,17 +29,17 @@ if str(_project_root) not in sys.path:
 
 from backend.services.ner_engine import ner_service
 
-
 # -- Paths (relative to this script's location) --------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_DATA_DIR   = _SCRIPT_DIR.parent / "data"
-GOLD_PATH   = str(_DATA_DIR / "gold.json")
-CHECKPOINT  = str(_DATA_DIR / "config2_llm_checkpoint.json")
+_DATA_DIR = _SCRIPT_DIR.parent / "data"
+GOLD_PATH = str(_DATA_DIR / "gold.json")
+CHECKPOINT = str(_DATA_DIR / "config2_llm_checkpoint.json")
 
 
 # -----------------------------------------------------------------------------
 # PART 1 -- Load texts from gold standard
 # -----------------------------------------------------------------------------
+
 
 def load_texts(gold_path: str, max_docs: int = 0) -> dict:
     """Extract {doc_id: text} from Label Studio export."""
@@ -62,11 +62,14 @@ def load_texts(gold_path: str, max_docs: int = 0) -> dict:
 # PART 2 -- Config 1: Dictionary (SpaCy PhraseMatcher)
 # -----------------------------------------------------------------------------
 
+
 def run_dictionary(text: str) -> list:
     """Dictionary matchers via production NER engine."""
     entities = ner_service._match_dictionary_in_text(text)
-    return [{"text": e["text"], "label": e["label"], "start": e["start"], "end": e["end"]}
-            for e in entities]
+    return [
+        {"text": e["text"], "label": e["label"], "start": e["start"], "end": e["end"]}
+        for e in entities
+    ]
 
 
 def run_config1(texts: dict) -> dict:
@@ -82,6 +85,7 @@ def run_config1(texts: dict) -> dict:
 # -----------------------------------------------------------------------------
 # PART 3 -- Config 2: LLM (production NER engine)
 # -----------------------------------------------------------------------------
+
 
 async def _llm_for_doc(text: str) -> list:
     """LLM extraction via production NER engine (prompt, provider chain,
@@ -120,12 +124,14 @@ async def _llm_for_doc(text: str) -> list:
             pos = text.find(span, pos)
             if pos == -1:
                 break
-            valid.append({
-                "text": span,
-                "label": label,
-                "start": pos,
-                "end": pos + len(span),
-            })
+            valid.append(
+                {
+                    "text": span,
+                    "label": label,
+                    "start": pos,
+                    "end": pos + len(span),
+                }
+            )
             pos += 1
 
     # Sort: same start → longer span first so exact matches precede overlapping partials.
@@ -176,12 +182,13 @@ def run_config2(texts: dict) -> dict:
 # PART 4 -- Config 3: Hybrid merger
 # -----------------------------------------------------------------------------
 
+
 def merge_spans(dict_spans: list, llm_spans: list) -> list:
     """Union with exact-position + type deduplication.  Spans with the
     same (start, end, label) are dedup'd; different labels at the same
     position are kept -- nervaluate evaluates per type independently."""
     merged = list(dict_spans)
-    seen   = {(s["start"], s["end"], s["label"]) for s in dict_spans}
+    seen = {(s["start"], s["end"], s["label"]) for s in dict_spans}
     for span in llm_spans:
         key = (span["start"], span["end"], span["label"])
         if key not in seen:
@@ -195,10 +202,7 @@ def merge_spans(dict_spans: list, llm_spans: list) -> list:
 def run_config3(texts: dict, config1: dict, config2: dict) -> dict:
     print("Config 3 -- Hybrid (Dictionary + LLM union)...")
     config3 = {
-        doc_id: merge_spans(
-            config1.get(doc_id, []),
-            config2.get(doc_id, [])
-        )
+        doc_id: merge_spans(config1.get(doc_id, []), config2.get(doc_id, []))
         for doc_id in texts
     }
     total = sum(len(v) for v in config3.values())
@@ -210,6 +214,7 @@ def run_config3(texts: dict, config1: dict, config2: dict) -> dict:
 # MAIN
 # -----------------------------------------------------------------------------
 
+
 def save(data: dict, path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -219,12 +224,15 @@ def save(data: dict, path: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--skip-llm",  action="store_true",
-                        help="Run dict and hybrid only (skip Ollama)")
-    parser.add_argument("--llm-only",  action="store_true",
-                        help="Re-run LLM only and rebuild hybrid")
-    parser.add_argument("--max-docs",  type=int, default=0,
-                        help="Limit to N documents (default: all)")
+    parser.add_argument(
+        "--skip-llm", action="store_true", help="Run dict and hybrid only (skip Ollama)"
+    )
+    parser.add_argument(
+        "--llm-only", action="store_true", help="Re-run LLM only and rebuild hybrid"
+    )
+    parser.add_argument(
+        "--max-docs", type=int, default=0, help="Limit to N documents (default: all)"
+    )
     args = parser.parse_args()
 
     print("=" * 55)

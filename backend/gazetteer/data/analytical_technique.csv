@@ -1,6 +1,6 @@
 term,synonyms
 gas chromatography,glc|gc|capillary gc
-gas chromatography-mass spectrometry,gcms|gc-ms|gc-mass spectrometry|capillary gas chromatography-mass spectrometry|gc coupled with mass spectrometry|gas chromatography-mass spectroscopy
+gas chromatography-mass spectrometry,gcms|gc-ms|gc-mass spectrometry|capillary gas chromatography-mass spectrometry|gc coupled with mass spectrometry|gas chromatography-mass spectroscopy|gas chromatography coupled to mass spectrometry
 gas chromatography-flame ionization detection-mass spectrometry,gc-fid-ms|gc-fid-itms|gas chromatography coupled with flame ionization detector and ion trap mass spectrometry
 gas chromatography-flame ionization detector,gcfid|gc-fid|gas chromatography coupled to flame ionisation detector|gc-flame ionization detector|gas chromatography-flame ionization detection|gas chromatography with flame ionization detector|flame ionization gas chromatography
 gas chromatography-isotope ratio mass spectrometry,gc-irms
@@ -55,7 +55,7 @@ raman spectroscopy,
 surface enhanced raman spectroscopy,sers
 dpph assay,dpph
 reducing power assay,reducing power
-ferric reducing antioxidant power,frap
+ferric reducing antioxidant power,frap|ferric ion reducing antioxidant power
 oxygen radical absorbance capacity,orac
 trolox equivalent antioxidant capacity,teac
 total radical trapping antioxidant parameter,trap

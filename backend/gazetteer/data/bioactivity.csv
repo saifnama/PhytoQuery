@@ -14,7 +14,7 @@ immunomodulator,immunomodulator
 protease inhibitor,
 lipoxygenase inhibitor,
 analgesic, 
-herbicide,herbicidal
+herbicide,herbicidal|bioherbicide
 insecticide,insecticidal
 histaminergic, 
 gabaergic,GABA agent 
@@ -55,7 +55,7 @@ anti diabetic,anti hyperglycemic|antidiabetic
 anti fibrinolytic, 
 anti hypertensive, 
 anti convulsant, 
-anti fungal,anti mycotic|fungistat|antifungal|anti-mycotic|fungistatic|fungitoxic
+anti fungal,anti mycotic|fungistat|antifungal|anti-mycotic|fungistatic|fungitoxic|anticandidal
 anti parasitic, 
 anti inflammatory,anti-inflammatory
 anti protozoal, 

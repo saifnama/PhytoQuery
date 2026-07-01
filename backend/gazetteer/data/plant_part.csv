@@ -28,7 +28,6 @@ fruit,fruits
 berry,berries
 drupe,drupes
 pome,pomes
-legume,legumes
 follicle,follicles
 capsule,capsules
 pod,pods
@@ -58,6 +57,7 @@ hilum,
 micropyle,micropyles
 funiculus,funiculi
 aril,arils
+placenta,placentas
 pellicle,pellicles
 # === ROOTS ===,
 root,roots
@@ -135,10 +135,7 @@ inflorescence,inflorescences
 raceme,racemes
 panicle,panicles
 cyme,cymes
-spike,spikes
-spikelet,spikelets
 glomerulus,glomeruli
-umbel,umbels
 capitulum,capitula
 catkin,catkins
 # === FLOWER STALKS ===,
@@ -163,9 +160,6 @@ pistil,pistils
 ovary,ovaries
 gynoecium,gynoecia
 androecium,androecia
-# === HERBS & HERBAGE ===,
-herb,herbs
-herbage,herbage
 aerial part,aerial parts
 flowering top,flowering tops
 # === OTHER ===,

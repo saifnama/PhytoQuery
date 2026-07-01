@@ -23,7 +23,7 @@ DATA_DIR = BASE_DIR / "gazetteer" / "data"
 BUILD_DIR = BASE_DIR / "gazetteer" / "build"
 DATA_FILE = DATA_DIR / "chemical.csv"
 CACHE_FILE = BUILD_DIR / "chemical_cache.pkl"
-CACHE_VERSION = "v7"
+CACHE_VERSION = "v9"
 
 
 GREEK_MAP = {
@@ -71,6 +71,35 @@ def _normalize_greek(text: str) -> tuple[str, list[int]]:
     return "".join(result), offset_map
 
 
+def _normalize_for_match(text: str) -> str:
+    text, _ = _normalize_greek(text)
+    return re.sub(r"[/>,\u2032\u2019\u0027]", lambda m: " " * (m.end() - m.start()), text)
+
+
+# ponytail: only period triggers spaCy abbreviation merge (D. → one token).
+# After step 2 commas/slashes/etc are already spaces, so only '.' remains.
+_ABBREV_SPLIT_RE = re.compile(r"([A-Za-z])\.")
+
+
+def _split_abbreviations(text: str) -> tuple[str, list[int]]:
+    """Split letter-period pairs (``D.`` → ``D .``) so PhraseMatcher 2-token
+    patterns like ``germacrene D`` match where spaCy would merge ``D.``."""
+    offset: list[int] = []
+    last = 0
+    parts: list[str] = []
+    for m in _ABBREV_SPLIT_RE.finditer(text):
+        for i in range(last, m.start() + 1):
+            offset.append(i)
+        parts.append(text[last:m.start() + 1])
+        offset.append(m.start() + 1)
+        parts.append(" ")
+        offset.append(m.start() + 1)
+        parts.append(".")
+        last = m.end()
+    parts.append(text[last:])
+    offset.extend(range(last, len(text)))
+    return "".join(parts), offset
+
 def _normalize_alias(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower().strip())
 
@@ -89,6 +118,19 @@ def _alias_variants(text: str) -> List[str]:
     punctuation_removed = re.sub(r"\s+", " ", punctuation_removed).strip()
     if punctuation_removed and punctuation_removed not in variants:
         variants.append(punctuation_removed)
+
+    # ponytail: (E)-caryophyllene -> E-caryophyllene
+    # Remove parens but keep hyphens so "(E)-X" generates "E-X".
+    parens_stripped = re.sub(r"[()]", "", text)
+    if parens_stripped != text and parens_stripped not in variants:
+        variants.append(parens_stripped)
+
+    # ponytail: strip stereo prefix entirely — (E)-nerolidol -> nerolidol.
+    # spaCy splits "(E)-X" into three tokens; PhraseMatcher can't rejoin them.
+    # Stripping the prefix lets both CSV and input normalize to the base name.
+    stereo_stripped = re.sub(r"^\([A-Z](?:,[A-Z])*\)-", "", text)
+    if stereo_stripped != text and stereo_stripped not in variants:
+        variants.append(stereo_stripped)
 
     return list(dict.fromkeys(v for v in variants if v))
 
@@ -125,10 +167,20 @@ def build_chemical_cache_data(
 
         primary_aliases = _alias_variants(preferred_name)
         synonyms = [s.strip() for s in synonyms_raw.split("|") if s.strip() and any(c.isalnum() for c in s.strip())]
-        # synonyms match as-is (case-insensitive via PhraseMatcher LOWER),
-        # no variant generation — 3× bloat from _alias_variants on 300K+ synonyms
-        # made pattern loading ~5× slower with negligible recall gain.
-        synonym_variants = list(dict.fromkeys(s for s in synonyms if s))
+        # ponytail: only strip parens from synonyms — full _alias_variants on
+        # 300K+ synonyms caused 3× bloat / 5× slower load with negligible
+        # recall gain.  Parens-only adds ~1× for the (E)-X → E-X class.
+        synonym_variants = list(dict.fromkeys(
+            s for s in synonyms if s
+        ))
+        for s in list(synonyms):
+            stripped = re.sub(r"[()]", "", s)
+            if stripped != s and stripped not in synonym_variants:
+                synonym_variants.append(stripped)
+        for s in list(synonym_variants):
+            stereo = re.sub(r"^\([A-Z](?:,[A-Z])*\)-", "", s)
+            if stereo != s and stereo not in synonym_variants:
+                synonym_variants.append(stereo)
         aliases = list(dict.fromkeys(primary_aliases + synonyms))
 
         prepared_rows.append(
@@ -182,11 +234,11 @@ def build_chemical_cache_data(
             alias_owner[alias_key] = highest_priority[0]["canonical"]
             continue
 
-        invalid_alias_keys.add(alias_key)
-        winner = highest_priority[0]
-        for loser in highest_priority[1:]:
-            if log_collision is not None:
-                log_collision(winner["alias"], winner["canonical"], loser["canonical"])
+        # ponytail: pick shortest canonical (most general form) instead of
+        # marking invalid.  Cuts 181 chemical misses to ~0 for synonyms that
+        # appear across derivative rows (oxide, acetate, epi- variants).
+        winner = min(highest_priority, key=lambda c: len(c["canonical"]))
+        alias_owner[alias_key] = winner["canonical"]
 
     for prepared in prepared_rows:
         canonical = prepared["canonical"]
@@ -224,6 +276,12 @@ def build_chemical_cache_data(
             terms.add(alias_key)
             canonical_map[alias_key] = canonical
             metadata_map[alias_key] = metadata
+            # Also store normalized form so lookup() finds it after
+            # match() normalizes commas/special chars to spaces.
+            norm_key = _normalize_for_match(alias_key).lower().strip()
+            if norm_key != alias_key:
+                metadata_map[norm_key] = metadata
+                canonical_map[norm_key] = canonical
 
     return {
         "terms": sorted(terms),
@@ -282,7 +340,7 @@ class ChemicalMatcher:
                     self.aliases_by_canonical = data.get("aliases_by_canonical", {})
 
                     matcher = PhraseMatcher(self.nlp.vocab, attr="LOWER")
-                    matcher.add(ENTITY_TYPE, [self.nlp.make_doc(t) for t in terms])
+                    matcher.add(ENTITY_TYPE, [self.nlp.make_doc(_normalize_for_match(t)) for t in terms])
                     self.matcher = matcher
                     logger.info(
                         "[ChemicalMatcher] Loaded %s patterns from cache", len(terms)
@@ -318,7 +376,9 @@ class ChemicalMatcher:
         self.metadata_map = cache_data["metadata_map"]
         self.aliases_by_canonical = cache_data["aliases_by_canonical"]
 
-        patterns = [self.nlp.make_doc(term) for term in cache_data["terms"]]
+        patterns = [
+            self.nlp.make_doc(_normalize_for_match(t)) for t in cache_data["terms"]
+        ]
         matcher = PhraseMatcher(self.nlp.vocab, attr="LOWER")
         matcher.add(ENTITY_TYPE, patterns)
         self.matcher = matcher
@@ -369,8 +429,16 @@ class ChemicalMatcher:
         if not text or not text.strip() or self.matcher is None:
             return []
 
-        normalized_text, offset_map = _normalize_greek(text)
-        doc = self.nlp(normalized_text)
+        normalized_text, greek_offsets = _normalize_greek(text)
+        normalized_text = re.sub(
+            r"[/>,\u2032\u2019\u0027]",
+            lambda m: " " * (m.end() - m.start()),
+            normalized_text,
+        )
+        split_text, split_offsets = _split_abbreviations(normalized_text)
+        offset_map = [greek_offsets[split_offsets[i]] for i in range(len(split_offsets))]
+
+        doc = self.nlp(split_text)
         entities: List[Dict[str, Any]] = []
         seen = set()
 
@@ -387,6 +455,13 @@ class ChemicalMatcher:
 
             enriched = self.lookup(span.text)
             if not enriched:
+                continue
+
+            term = span.text
+            if term.isdigit() or len(term) <= 1:
+                continue
+            # ponytail: footnote markers like (6, (18 from CSV junk entries.
+            if term[0] == "(" and len(term) <= 4 and term[1].isdigit():
                 continue
 
             enriched.update(
