@@ -8,8 +8,8 @@ Run this after extract.py has produced the 3 config JSON files.
 Re-run this as many times as you like -- it reads files, calls no APIs.
 
 Outputs:
-    results/evaluation_results.csv          -- overall P/R/F1 per config
-    results/evaluation_results_per_type.csv -- per entity type F1
+    results/results.csv          -- overall P/R/F1 per config
+    results/results_per_type.csv -- per entity type F1
 
 Usage:
     python evaluate.py
@@ -22,15 +22,15 @@ from pathlib import Path
 
 # -- Paths (relative to this script's location) --------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_DATA_DIR   = _SCRIPT_DIR.parent / "data"
-_RESULTS_DIR = _SCRIPT_DIR.parent / "results"
+_DATA_DIR   = _SCRIPT_DIR / "data"
+_RESULTS_DIR = _SCRIPT_DIR / "results"
 
-GOLD_PATH = str(_DATA_DIR / "gold.json")
+GOLD_PATH = str(_DATA_DIR / "annotated_data.json")
 
 CONFIGS = {
-    "Config 1 - Dictionary": str(_DATA_DIR / "config1_dict.json"),
-    "Config 2 - LLM":        str(_DATA_DIR / "config2_llm.json"),
-    "Config 3 - Hybrid":     str(_DATA_DIR / "config3_hybrid.json"),
+    "Dictionary": str(_DATA_DIR / "dictionary.json"),
+    "LLM":        str(_DATA_DIR / "llm.json"),
+    "Hybrid":     str(_DATA_DIR / "hybrid.json"),
 }
 
 # -- Entity types --------------------------------------------------------------
@@ -41,15 +41,15 @@ ALL_TYPES = [
 ]
 
 CONFIG_TYPES = {
-    "Config 1 - Dictionary": [
+    "Dictionary": [
         "CHEMICAL", "SPECIES", "BIOACTIVITY",
         "ANALYTICAL TECHNIQUE", "EXTRACTION METHOD",
         "PLANT PART", "DEVELOPMENT STAGE", "SEASON",
     ],
-    "Config 2 - LLM": [
+    "LLM": [
         "CHEMICAL", "SPECIES", "BIOACTIVITY", "LOCATION", "DISEASE",
     ],
-    "Config 3 - Hybrid": [
+    "Hybrid": [
         "CHEMICAL", "SPECIES", "BIOACTIVITY", "LOCATION", "DISEASE",
         "ANALYTICAL TECHNIQUE", "EXTRACTION METHOD",
         "PLANT PART", "DEVELOPMENT STAGE", "SEASON",
@@ -215,7 +215,7 @@ def evaluate(gold: dict, configs: dict) -> dict:
 
 def save_csv(results: dict, base_path: str | None = None):
     if base_path is None:
-        base_path = str(_RESULTS_DIR / "evaluation_results.csv")
+        base_path = str(_RESULTS_DIR / "results.csv")
     os.makedirs(os.path.dirname(base_path), exist_ok=True)
 
     # Overall results
@@ -299,5 +299,5 @@ if __name__ == "__main__":
 
     print()
     print(f"  Copy to paper from:")
-    print(f"    {_RESULTS_DIR / 'evaluation_results.csv'}")
-    print(f"    {_RESULTS_DIR / 'evaluation_results_per_type.csv'}")
+    print(f"    {_RESULTS_DIR / 'results.csv'}")
+    print(f"    {_RESULTS_DIR / 'results_per_type.csv'}")

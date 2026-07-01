@@ -5,9 +5,9 @@ Runs your 3 NER system configurations on the gold standard texts and
 saves each output as a JSON file. Run this once per system change.
 
 Outputs:
-    data/config1_dict.json     -- dictionary-only spans
-    data/config2_llm.json      -- LLM-only spans
-    data/config3_hybrid.json   -- merged spans (union + deduplication)
+    data/dictionary.json       -- dictionary-only spans
+    data/llm.json              -- LLM-only spans
+    data/hybrid.json           -- merged spans (union + deduplication)
 
 Usage:
     python extract.py
@@ -31,8 +31,8 @@ from backend.services.ner_engine import ner_service
 
 # -- Paths (relative to this script's location) --------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_DATA_DIR = _SCRIPT_DIR.parent / "data"
-GOLD_PATH = str(_DATA_DIR / "gold.json")
+_DATA_DIR = _SCRIPT_DIR / "data"
+GOLD_PATH = str(_DATA_DIR / "annotated_data.json")
 CHECKPOINT = str(_DATA_DIR / "config2_llm_checkpoint.json")
 
 
@@ -245,15 +245,15 @@ if __name__ == "__main__":
     # -- Config 1 --------------------------------------------------------------
     if not args.llm_only:
         config1 = run_config1(texts)
-        save(config1, str(_DATA_DIR / "config1_dict.json"))
+        save(config1, str(_DATA_DIR / "dictionary.json"))
     else:
-        with open(_DATA_DIR / "config1_dict.json") as f:
+        with open(_DATA_DIR / "dictionary.json") as f:
             config1 = json.load(f)
-        print(f"Config 1 -- loaded from {_DATA_DIR / 'config1_dict.json'} (--llm-only)")
+        print(f"Config 1 -- loaded from {_DATA_DIR / 'dictionary.json'} (--llm-only)")
 
     # -- Config 2 --------------------------------------------------------------
     if args.skip_llm:
-        p = _DATA_DIR / "config2_llm.json"
+        p = _DATA_DIR / "llm.json"
         if p.exists():
             with open(p) as f:
                 config2 = json.load(f)
@@ -263,11 +263,11 @@ if __name__ == "__main__":
             config2 = {doc_id: [] for doc_id in texts}
     else:
         config2 = run_config2(texts)
-        save(config2, str(_DATA_DIR / "config2_llm.json"))
+        save(config2, str(_DATA_DIR / "llm.json"))
 
     # -- Config 3 --------------------------------------------------------------
     config3 = run_config3(texts, config1, config2)
-    save(config3, str(_DATA_DIR / "config3_hybrid.json"))
+    save(config3, str(_DATA_DIR / "hybrid.json"))
 
     print()
     print("=" * 55)
