@@ -71,7 +71,7 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 ### Dashboards (over the SQLite knowledge base)
 - Per-entity-type counts and timelines
 - Journal-distribution widget, entity doughnut, publication timeline
-- Plant-origin geo heatmap (ECharts `effectScatter`)
+- Plant-origin geo heatmap (react-simple-maps)
 - 3D entity-co-occurrence graph
 
 ---
@@ -488,14 +488,14 @@ PhytoQuery/
 
 | File | Entries |
 |------|---------|
-| `chemical.csv` | 107K+ compounds |
-| `species.csv` | 235K+ species |
-| `plant_part.csv` | ~345 terms |
-| `analytical_technique.csv` | ~184 techniques |
-| `extraction_method.csv` | ~77 methods |
-| `development_stage.csv` | ~45 stages |
-| `season.csv` | ~55 terms |
-| `bioactivity.csv` | ~124 activities |
+| `chemical.csv` | 68,940 compounds |
+| `species.csv` | 236,575 species |
+| `plant_part.csv` | 198 terms |
+| `analytical_technique.csv` | 139 techniques |
+| `extraction_method.csv` | 37 methods |
+| `development_stage.csv` | 29 stages |
+| `season.csv` | 34 terms |
+| `bioactivity.csv` | 83 activities |
 
 ---
 
