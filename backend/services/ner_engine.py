@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
@@ -53,121 +54,40 @@ def get_active_provider():
 
 
 # --- System Prompt for NER ---
-SYSTEM_PROMPT = """You are a highly precise Named Entity Recognition (NER) specialist for phytochemical and ethnobotanical research.
+SYSTEM_PROMPT = """You are a precise Named Entity Recognition (NER) specialist for phytochemical and ethnobotanical research.
 
-Your task is to extract named entities from scientific text and return them as a structured JSON array.
-
+Extract named entities from scientific text and return ONLY a JSON array — no prose, no markdown fences.
 
 ENTITY TYPES (exactly five — extract nothing else)
 
-1. CHEMICAL
-Any chemical compound, constituent, or substance. Includes phytoconstituents, flavonoids, alkaloids, terpenes, phenolics, solvents, reagents, and pharmacological inducers. Extract individual named compounds only; do not extract bulk mixtures such as essential oil, crude extract, or fractions as a whole.
-Examples: eugenol, quercetin, linalool, beta-caryophyllene, methanol, streptozotocin
+1. CHEMICAL — named compounds, phytoconstituents, solvents, reagents. NOT bulk mixtures (essential oil, crude extract).
+   Examples: eugenol, quercetin, methanol, streptozotocin
 
-2. SPECIES
-Plant species referenced by scientific name only. Extract the binomial name (genus + species epithet) only; do not include infraspecific epithets (var., subsp., f.) or taxonomic author abbreviations. Do not extract common or vernacular names. Do not extract non-plant organisms such as fungi, bacteria, insects, or animals.
-Examples: Ocimum sanctum, Cinnamomum verum, Azadirachta indica, Piper nigrum
+2. SPECIES — plant binomial name only (genus + species). NO common names, NO non-plant organisms.
+   Examples: Ocimum sanctum, Cinnamomum verum, Azadirachta indica
 
-3. LOCATION
-Geographic region where an organism was collected, studied, or reported. Includes countries, states, districts, and forest names.
-Examples: Western Ghats, Wayanad, Kerala, Tamil Nadu
+3. LOCATION — geographic region, country, state, district, forest.
+   Examples: Western Ghats, Wayanad, Kerala, Tamil Nadu
 
-4. BIOACTIVITY
-A biological or pharmacological activity or property attributed to a compound or extract.
-Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic, antifungal, larvicidal, antidiabetic, pro-apoptotic
+4. BIOACTIVITY — biological or pharmacological activity.
+   Examples: antimicrobial, antioxidant, anti-inflammatory, cytotoxic
 
-5. DISEASE
-A named clinical or veterinary disease that the study explicitly targets as a therapeutic or biological endpoint. The condition must be diagnosable in a patient or organism — not a subcellular mechanism. Do not extract oxidative stress, inflammation, apoptosis, or similar mechanisms; these are captured through BIOACTIVITY entities (antioxidant, anti-inflammatory, pro-apoptotic, etc.).
-Examples: malaria, diabetes, tuberculosis, leishmaniasis, candidiasis, dengue, cancer, Alzheimer's disease
+5. DISEASE — named clinical/veterinary condition (NOT mechanisms like apoptosis or oxidative stress).
+   Examples: malaria, diabetes, tuberculosis, cancer
 
+RULES
+- Solvents/pharmacological inducers are always CHEMICAL.
+- Extract nested entities separately: "streptozotocin-induced diabetes" → CHEMICAL + DISEASE.
+- Never include concentration values in spans: "Eugenol (72.4%)" → span is "Eugenol".
+- linked_to is only for BIOACTIVITY → name of the performing CHEMICAL, or null.
 
-DISAMBIGUATION RULES
+OUTPUT SCHEMA — JSON array, each object:
+{"span":"verbatim substring","type":"CHEMICAL|SPECIES|LOCATION|BIOACTIVITY|DISEASE","start":0,"end":7,"name_type":"scientific|null","linked_to":"chemical span|null"}
 
-1. Solvents and pharmacological inducers are always CHEMICAL regardless of their functional role in the sentence. ("methanol" used for extraction -> CHEMICAL; "streptozotocin" used to induce a disease model -> CHEMICAL)
+name_type is "scientific" for SPECIES, null for all others.
+linked_to is only populated for BIOACTIVITY when the performing chemical is named in the text.
 
-2. If a bioactivity is attributed to a crude extract or unspecified fraction rather than a named compound, set "linked_to": null.
-
-3. Extract nested entities separately. Within "streptozotocin-induced diabetes": extract "streptozotocin" as CHEMICAL and "diabetes" as DISEASE independently.
-
-4. Never include concentration spans in any entity span. The span for "Eugenol (72.4%)" is "Eugenol", not "Eugenol (72.4%)".
-
-5. A named clinical condition is DISEASE ("diabetes", "malaria"); the activity that counteracts it is BIOACTIVITY ("antidiabetic", "antimalarial"). Subcellular mechanisms (oxidative stress, inflammation, apoptosis) belong to neither — do not extract them.
-
-
-REASONING STEP (mandatory before JSON)
-
-<reasoning>
-1. Candidate spans: [all potential entities found in the text]
-2. Ambiguities: [spans that could fit multiple types; state your resolution]
-3. Nested entities: [overlapping spans that must be extracted separately]
-4. linked_to assignments: [for each BIOACTIVITY: the linked chemical span, or why it is null]
-</reasoning>
-
-
-OUTPUT SCHEMA
-
-Return a JSON array where every entity is an object with these fields:
-
-{
-  "span":      "<exact substring from the input — no paraphrasing>",
-  "type":      "<CHEMICAL | SPECIES | LOCATION | BIOACTIVITY | DISEASE>",
-  "start":     <integer — zero-indexed, inclusive>,
-  "end":       <integer — zero-indexed, exclusive; text[start:end] == span>,
-  "name_type": "<scientific | null>",
-  "linked_to": "<span of the chemical performing the activity, or null>"
-}
-
-"span" must be the verbatim substring from the input; confirm it with start and end.
-"name_type" is "scientific" for SPECIES; null for all other types.
-"linked_to" is populated only for BIOACTIVITY, and only when the performing chemical is explicitly named in the text and itself present as a CHEMICAL entity in the array. Set null in all other cases, and for every non-BIOACTIVITY entity without exception.
-
-Return ONLY the <reasoning> block followed by the JSON array. No extra text. No markdown code fences.
-
-
-EXAMPLES
-
-Each input below is a single continuous line. Character offsets are computed on that single-line string; do not count any line breaks introduced by display formatting.
-
--- EXAMPLE 1 --
-
-Input:
-"Eugenol (72.4%), the major constituent of Cinnamomum verum essential oil collected from Wayanad, Kerala, exhibited strong antimicrobial activity against Staphylococcus aureus."
-
-<reasoning>
-1. Candidate spans: Eugenol (chemical), Cinnamomum verum (species), Wayanad, Kerala (location), antimicrobial (bioactivity), Staphylococcus aureus (species candidate).
-2. Ambiguities: "(72.4%)" is a concentration value — excluded from the Eugenol span. "essential oil" is a bulk mixture — not extracted. "Staphylococcus aureus" is a bacterium, not a plant — not extracted.
-3. Nested entities: None.
-4. linked_to assignments: antimicrobial -> "Eugenol" is the explicitly named compound exhibiting the activity and is itself extracted as CHEMICAL.
-</reasoning>
-
-[
-  {"span": "Eugenol",          "type": "CHEMICAL",    "start": 0,   "end": 7,   "name_type": null,         "linked_to": null},
-  {"span": "Cinnamomum verum", "type": "SPECIES",     "start": 42,  "end": 58,  "name_type": "scientific", "linked_to": null},
-  {"span": "Wayanad, Kerala",  "type": "LOCATION",    "start": 88,  "end": 103, "name_type": null,         "linked_to": null},
-  {"span": "antimicrobial",    "type": "BIOACTIVITY", "start": 122, "end": 135, "name_type": null,         "linked_to": "Eugenol"}
-]
-
--- EXAMPLE 2 --
-
-Input:
-"Leaves of neem (Azadirachta indica) collected from Tamil Nadu were extracted with methanol. The extract showed antifungal activity against Candida albicans and antidiabetic potential in streptozotocin-induced diabetes models."
-
-<reasoning>
-1. Candidate spans: neem (species candidate), Azadirachta indica (species), Tamil Nadu (location), methanol (chemical), antifungal (bioactivity), Candida albicans (species candidate), antidiabetic (bioactivity), streptozotocin (chemical), diabetes (disease).
-2. Ambiguities: "neem" is a common name — not extracted; only scientific names are extracted. "Candida albicans" is a fungus, not a plant — not extracted. "streptozotocin" is a pharmacological inducer -> CHEMICAL per rule 1. "Leaves" does not match any of the five types — not extracted. "The extract" is a bulk fraction — not extracted.
-3. Nested entities: Within "streptozotocin-induced diabetes": extract "streptozotocin" as CHEMICAL and "diabetes" as DISEASE independently per rule 3.
-4. linked_to assignments: antifungal -> attributed to "The extract", which is not an extracted CHEMICAL entity -> null. antidiabetic -> same reasoning -> null.
-</reasoning>
-
-[
-  {"span": "Azadirachta indica", "type": "SPECIES",     "start": 16,  "end": 34,  "name_type": "scientific", "linked_to": null},
-  {"span": "Tamil Nadu",         "type": "LOCATION",    "start": 51,  "end": 61,  "name_type": null,         "linked_to": null},
-  {"span": "methanol",           "type": "CHEMICAL",    "start": 82,  "end": 90,  "name_type": null,         "linked_to": null},
-  {"span": "antifungal",         "type": "BIOACTIVITY", "start": 111, "end": 121, "name_type": null,         "linked_to": null},
-  {"span": "antidiabetic",       "type": "BIOACTIVITY", "start": 160, "end": 172, "name_type": null,         "linked_to": null},
-  {"span": "streptozotocin",     "type": "CHEMICAL",    "start": 186, "end": 200, "name_type": null,         "linked_to": null},
-  {"span": "diabetes",           "type": "DISEASE",     "start": 209, "end": 217, "name_type": null,         "linked_to": null}
-]"""
+Return ONLY the JSON array."""
 
 # --- Label Definitions ---
 LABEL_DEFINITIONS = {
@@ -359,11 +279,11 @@ class NERService:
                 all_dict_entities.append(ent)
 
         # LLM extraction in parallel across sections, bounded by a
-        # semaphore so we don't trip free-tier concurrency limits on
-        # the provider (OpenRouter free models, llama.cpp / vLLM rate caps, etc).
-        # Each call still goes through ``_extract_entities_with_retry``
-        # so the validation-retry safety net is intact.
-        sem = asyncio.Semaphore(3)
+        # semaphore so we don't overwhelm a single-GPU llama.cpp server
+        # with concurrent requests. Default 1 for local GPU; set
+        # NER_LLM_CONCURRENCY env var to raise for cloud providers.
+        _llm_concurrency = int(os.environ.get("NER_LLM_CONCURRENCY", "1"))
+        sem = asyncio.Semaphore(_llm_concurrency)
 
         async def _llm_for_section(section: Dict[str, str]) -> List[Dict[str, Any]]:
             section_title = section.get("title", "Unknown")
@@ -695,7 +615,7 @@ class NERService:
     async def _extract_entities_with_retry(
         self,
         text_chunk: str,
-        max_attempts: int = 2,
+        max_attempts: int = 1,
     ) -> List[Dict[str, Any]]:
         """LLM entity extraction with validation-retry.
 
@@ -729,7 +649,9 @@ class NERService:
         error_hint: Optional[str] = None
 
         for attempt in range(max_attempts):
+            t0 = time.perf_counter()
             raw = await self.call_llm(text_chunk, error_hint=error_hint)
+            llm_ms = (time.perf_counter() - t0) * 1000
             if not raw:
                 error_hint = (
                     "Your previous response was empty. Return a JSON "
@@ -810,6 +732,8 @@ class NERService:
                     "text": text,
                     "label": label,
                     "score": score,
+                    "start": e.get("start"),
+                    "end": e.get("end"),
                     "name_type": e.get("name_type"),
                     "linked_to": e.get("linked_to"),
                 })
@@ -831,7 +755,11 @@ class NERService:
                 logger.info(
                     f"NER extraction succeeded on attempt {attempt + 1}/"
                     f"{max_attempts} after validation-retry "
-                    f"({len(result)} entities)"
+                    f"({len(result)} entities, {llm_ms:.0f}ms LLM)"
+                )
+            else:
+                logger.info(
+                    f"NER extraction: {len(result)} entities in {llm_ms:.0f}ms"
                 )
             return result
 
@@ -887,16 +815,20 @@ class NERService:
             ],
             "stream": False,
             "temperature": 0.0,
+            "max_tokens": 4096,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
 
-        max_retries = 3
-        base_delay = 2.0
+        max_retries = 2
+        base_delay = 1.0
         for attempt in range(max_retries):
             try:
                 client = await HttpClientManager.get_client()
+                t0 = time.perf_counter()
                 response = await client.post(
                     url, json=payload, headers=headers, timeout=120.0
                 )
+                elapsed_ms = (time.perf_counter() - t0) * 1000
 
                 # Handle rate limiting (429) with retry
                 if response.status_code == 429:
@@ -914,6 +846,10 @@ class NERService:
 
                 if response.status_code == 200:
                     result = response.json()
+                    logger.info(
+                        f"{provider_name} OK in {elapsed_ms:.0f}ms "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
                     return (
                         result.get("choices", [{}])[0]
                         .get("message", {})
@@ -921,19 +857,37 @@ class NERService:
                     )
                 # Non-200 non-429 → fall through to next retry/provider
                 logger.warning(
-                    f"{provider_name} returned status {response.status_code}: "
+                    f"{provider_name} status {response.status_code} in {elapsed_ms:.0f}ms: "
                     f"{response.text[:200]}"
                 )
             except Exception as e:
                 err_str = str(e)
-                if "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper():
+                # Reset the connection pool on connection-level errors so
+                # the next attempt gets a fresh socket instead of reusing
+                # a stale one from the dead tunnel / crashed server.
+                is_conn_error = any(
+                    kw in err_str.upper()
+                    for kw in ("CONNECT", "REMOTE", "POOL", "RESET", "PIPE")
+                )
+                is_ssl_error = "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper()
+
+                if is_ssl_error:
                     logger.error(
                         f"SSL handshake failed calling {provider_name} at {url}: {e}. "
                         f"Check that the URL scheme matches the server."
                     )
+                    # SSL failures are non-retryable
+                    return ""
+                elif is_conn_error:
+                    logger.warning(
+                        f"Connection error calling {provider_name}: {e}. "
+                        f"Resetting connection pool (attempt {attempt + 1}/{max_retries})"
+                    )
+                    await HttpClientManager.reset_client()
+                    await asyncio.sleep(base_delay * (2 ** attempt))
                 else:
                     logger.error(f"Error calling {provider_name} LLM: {e}")
-                await asyncio.sleep(base_delay * (2**attempt))
+                    await asyncio.sleep(base_delay * (2 ** attempt))
                 continue
 
         return ""

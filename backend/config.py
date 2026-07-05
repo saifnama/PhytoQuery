@@ -145,7 +145,7 @@ RAG_USE_FLASH_ATTENTION = env_bool("RAG_USE_FLASH_ATTENTION", True)
 # NER Settings
 # ---------------------------------------------------------------------------
 
-NER_OLLAMA_URL = env("NER_OLLAMA_URL", "https://trycloudflare.com")
+NER_OLLAMA_URL = env("NER_OLLAMA_URL", "")
 NER_OLLAMA_MODEL = env("NER_OLLAMA_MODEL", "llama3.1:8b")
 NER_OPENROUTER_API_KEY = env("NER_OPENROUTER_API_KEY")
 NER_OPENROUTER_MODEL = env("NER_OPENROUTER_MODEL", "qwen/qwen3.6-plus:free")

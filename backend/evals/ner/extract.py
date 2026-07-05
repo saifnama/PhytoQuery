@@ -168,6 +168,11 @@ def run_config2(texts: dict) -> dict:
                 with open(CHECKPOINT, "w") as f:
                     json.dump(config2, f)
 
+            # Small delay between requests to avoid overwhelming a
+            # Cloudflare tunnel or rate-limited server.
+            if i < len(remaining) - 1:
+                await asyncio.sleep(1)
+
         with open(CHECKPOINT, "w") as f:
             json.dump(config2, f)
         return config2
