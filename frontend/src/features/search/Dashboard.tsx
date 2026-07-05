@@ -239,7 +239,7 @@ const Dashboard: React.FC = () => {
   // wires data through them.
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 'var(--content-max)' }}>
+    <div className="mx-auto" style={{ maxWidth: 'var(--content-max)', fontFamily: 'var(--font-google-sans)' }}>
       <div className="px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
         <div className="flex items-center justify-between mb-5 mt-14">
         <div>

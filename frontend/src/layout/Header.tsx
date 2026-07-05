@@ -5,7 +5,6 @@ import {
   ListMagnifyingGlass,
   Chats,
   Circle,
-  Flower,
 } from '@phosphor-icons/react';
 import { useSearchStore } from '../stores/searchStore';
 
@@ -142,8 +141,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
 
   return (
     <header className="app-header">
-      <div className="flex items-center gap-[10px]">
-        <Flower size={36} color="#EC407A" weight="fill" />
+      <div className="flex items-center gap-[2px]">
         {/* Clicking the brand resets the persisted search store AND
             clears URL search params, so NerPage's `!lastQuery` branch
             kicks in and the Dashboard surfaces. Without the reset,
@@ -153,10 +151,11 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
           to="/"
           search={{}}
           onClick={() => useSearchStore.getState().resetSearch()}
-          className="hover:opacity-80 transition-opacity"
+          className="flex items-center gap-[2px] hover:opacity-80 transition-opacity"
         >
-          <span className="text-[22px] font-bold" style={{ fontFamily: 'var(--font-roboto)' }}>
-            PhytoQuery
+          <img src="/BloomIndex.svg" alt="BloomIndex logo" className="h-[30px] w-auto" />
+          <span className="text-[23px] font-bold" style={{ fontFamily: 'var(--font-google-sans, sans-serif)' }}>
+            BloomIndex
           </span>
         </Link>
       </div>
@@ -211,6 +210,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
                   to={item.to}
                   ref={(el) => { itemRefs.current[idx] = el; }}
                   activeOptions={item.to === '/' ? { exact: true } : undefined}
+                  style={{ fontFamily: 'var(--font-google-sans)' }}
                   className={[
                     'relative z-[1] inline-flex items-center gap-[8px] h-[40px] px-[18px] rounded-full',
                     'text-[14px] cursor-pointer no-underline transition-colors duration-200',

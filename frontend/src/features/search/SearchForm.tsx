@@ -181,6 +181,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           inline-flex items-center justify-between gap-2 h-[34px] px-3 rounded-full
           ${open ? 'bg-surface-c' : 'bg-transparent'}
@@ -207,6 +208,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
                 key={opt.key || '__type__'}
                 type="button"
                 onClick={() => { onChange(opt.key); setOpen(false); }}
+                style={{ fontFamily: 'var(--font-google-sans)' }}
                 className={`
                   w-full text-left px-3 py-2 rounded-md text-[13.5px]
                   ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
@@ -247,6 +249,7 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           inline-flex items-center gap-1.5 h-[34px] px-3 rounded-full
           ${open ? 'bg-surface-c' : 'bg-transparent'}
@@ -278,6 +281,7 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
                   onChange({ type: opt, dir: opt === 'Date' ? (value.dir || 'desc') : 'desc' });
                   if (opt !== 'Date') setOpen(false);
                 }}
+                style={{ fontFamily: 'var(--font-google-sans)' }}
                 className={`
                   flex w-full items-center justify-between
                   px-3 py-2 rounded-md text-[13.5px]
@@ -532,6 +536,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               placeholder="Search scholarly publications (DOI, PMID, PMCID, or keywords)…"
               autoComplete="off"
               spellCheck={false}
+              style={{ fontFamily: 'var(--font-google-sans)' }}
               className="
                 flex-1 min-w-0 h-[44px]
                 bg-transparent border-none outline-none
