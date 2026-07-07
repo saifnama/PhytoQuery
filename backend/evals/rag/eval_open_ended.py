@@ -1,0 +1,215 @@
+import json
+import os
+import ast
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from openai import AsyncOpenAI
+
+from ragas.llms import llm_factory
+from ragas.embeddings.base import embedding_factory
+from ragas.metrics.collections import (
+    Faithfulness,
+    AnswerRelevancy,
+    AnswerCorrectness,
+    ContextPrecision,
+    ContextRecall,
+)
+
+OUTPUT_DIR = Path(os.getenv("EVAL_OUTPUT_DIR", "backend/evals/rag/results"))
+INPUT_CSV = OUTPUT_DIR / "rag_outputs_open_ended.csv"
+OUTPUT_CSV = OUTPUT_DIR / "open_ended_eval_results.csv"
+CHECKPOINT = OUTPUT_DIR / ".checkpoints/open_ended_eval_checkpoint.json"
+
+OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
+CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_checkpoint() -> int:
+    if CHECKPOINT.exists():
+        return json.loads(CHECKPOINT.read_text()).get("last_index", -1)
+    return -1
+
+
+def save_checkpoint(idx: int):
+    CHECKPOINT.write_text(json.dumps({"last_index": idx}))
+
+
+def append_row(row: dict):
+    df = pd.DataFrame([row])
+    df.to_csv(
+        OUTPUT_CSV,
+        mode="a",
+        header=not OUTPUT_CSV.exists(),
+        index=False,
+        quoting=1,
+        escapechar="\\",
+    )
+
+
+def _get_ragas_base_url() -> str:
+    from backend.config import get_rag_provider
+
+    provider = get_rag_provider()
+    url = provider.get("url", "")
+    if not url:
+        return "http://localhost:11434/v1"
+    for suffix in ["/v1/chat/completions", "/api/chat", "/v1"]:
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+            break
+    return url.rstrip("/") + "/v1"
+
+
+def _get_provider(key, default=""):
+    from backend.config import get_rag_provider
+    return get_rag_provider().get(key, default)
+
+
+df = pd.read_csv(INPUT_CSV)
+print(f"Loaded {len(df)} generated RAG samples")
+
+start_idx = load_checkpoint()
+print(f"Resuming from index {start_idx + 1}")
+
+local_client = AsyncOpenAI(
+    api_key=os.getenv("RAGAS_LLM_API_KEY", "") or _get_provider("api_key", "ollama"),
+    base_url=os.getenv("RAGAS_LLM_BASE_URL", "") or _get_ragas_base_url(),
+    timeout=300.0,
+    max_retries=5,
+)
+
+eval_llm = llm_factory(
+    model=os.getenv("RAGAS_LLM_MODEL", "") or _get_provider("model", "qwen3.5:27b"),
+    provider=os.getenv("RAGAS_LLM_PROVIDER", "openai"),
+    client=local_client,
+    max_tokens=8192,
+    temperature=0,
+)
+
+print(f"Using {eval_llm} for Eval")
+
+embeddings = embedding_factory(
+    "huggingface",
+    model=os.getenv("RAGAS_EMBEDDING_MODEL", os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")),
+)
+
+faithfulness = Faithfulness(llm=eval_llm)
+relevancy = AnswerRelevancy(llm=eval_llm, embeddings=embeddings)
+correctness = AnswerCorrectness(llm=eval_llm, embeddings=embeddings)
+ctx_precision = ContextPrecision(llm=eval_llm)
+ctx_recall = ContextRecall(llm=eval_llm)
+
+for idx, row in df.iterrows():
+    if idx <= start_idx:
+        continue
+
+    print(f"Evaluating {idx + 1}/{len(df)}")
+
+    error_msg = None
+    contexts = None
+    answer = row.get("answer")
+
+    try:
+        if pd.notna(row.get("contexts")) and str(row["contexts"]).strip():
+            contexts = ast.literal_eval(row["contexts"])
+            if not isinstance(contexts, list) or len(contexts) == 0:
+                contexts = None
+        else:
+            contexts = None
+    except Exception:
+        contexts = None
+
+    if contexts is None:
+        error_msg = "retrieved_contexts is missing"
+
+    if pd.isna(answer) or not str(answer).strip():
+        error_msg = (
+            f"{error_msg}; generated_answer is missing"
+            if error_msg
+            else "generated_answer is missing"
+        )
+
+    if error_msg:
+        append_row({
+            "id": row.get("id"),
+            "question": row.get("question"),
+            "faithfulness": np.nan,
+            "answer_relevancy": np.nan,
+            "answer_correctness": np.nan,
+            "context_precision": np.nan,
+            "context_recall": np.nan,
+            "error": error_msg,
+        })
+        save_checkpoint(idx)
+        print(f"  Row {idx}: {error_msg}")
+        continue
+
+    reference = row.get("reference")
+    metrics_result = {}
+
+    metric_defs = [
+        ("faithfulness", lambda: faithfulness.score(
+            user_input=row["question"], response=answer, retrieved_contexts=contexts,
+        ).value),
+        ("answer_relevancy", lambda: relevancy.score(
+            user_input=row["question"], response=answer,
+        ).value),
+        ("answer_correctness", lambda: correctness.score(
+            user_input=row["question"], response=answer, reference=reference,
+        ).value),
+        ("context_precision", lambda: ctx_precision.score(
+            user_input=row["question"], reference=reference, retrieved_contexts=contexts,
+        ).value),
+        ("context_recall", lambda: ctx_recall.score(
+            user_input=row["question"], reference=reference, retrieved_contexts=contexts,
+        ).value),
+    ]
+
+    for metric_name, score_fn in metric_defs:
+        try:
+            metrics_result[metric_name] = score_fn()
+        except Exception as e:
+            metrics_result[metric_name] = np.nan
+            print(f"  {metric_name} failed: {e}")
+
+    has_errors = any(np.isnan(v) for v in metrics_result.values())
+    result = {
+        "id": row.get("id"),
+        "question": row["question"],
+        "answer": answer,
+        "reference": reference,
+        "contexts": row.get("contexts"),
+        **metrics_result,
+        "error": "partial" if has_errors else None,
+    }
+
+    append_row(result)
+    save_checkpoint(idx)
+
+if OUTPUT_CSV.exists():
+    out_df = pd.read_csv(OUTPUT_CSV, engine="python", on_bad_lines="skip")
+
+    total = len(out_df)
+    failed = out_df["error"].notna().sum()
+    success = total - failed
+
+    print("\nOpen-ended RAGAS evaluation complete\n")
+    print("Evaluation Summary")
+    print("---------------------")
+    print(f"Total samples        : {total}")
+    print(f"Successfully scored  : {success}")
+    print(f"Failed samples       : {failed}")
+    print(f"Success rate         : {(success / total) * 100:.2f}%")
+
+    valid_df = out_df[out_df["error"].isna()]
+    if not valid_df.empty:
+        print("\nAverage Scores (valid samples only):")
+        print(valid_df[["faithfulness", "answer_relevancy", "answer_correctness", "context_precision", "context_recall"]].mean())
+    else:
+        print("\nNo valid samples available for averaging")
+
+    print("\nFailure breakdown:")
+    print(out_df["error"].value_counts(dropna=True))
+else:
+    print("No evaluation output found (CSV not created)")

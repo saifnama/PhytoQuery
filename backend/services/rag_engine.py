@@ -3130,11 +3130,13 @@ class RAGService:
                     # tokenizers can yield zero-length tensors for these.
                     pairs = []
                     valid_candidates = []
+                    reranker_budget = self._get_reranker_max_tokens() // 2
                     for res in filtered_candidates:
                         passage = (res["doc"].page_content or "").strip()
                         if not passage:
                             continue
-                        pairs.append([instructed_query, passage])
+                        pairs.append([self._truncate_for_reranker(instructed_query, reranker_budget),
+                                      self._truncate_for_reranker(passage, reranker_budget)])
                         valid_candidates.append(res)
                     if not pairs:
                         reranked_children = filtered_candidates
