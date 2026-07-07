@@ -443,6 +443,10 @@ class OllamaLLM:
         else:
             raise ValueError("Either prompt or messages must be provided")
 
+        # Disable LLM thinking for all providers
+        if msg_list and msg_list[-1]["role"] == "user":
+            msg_list[-1]["content"] += "\n\n/no_think"
+
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
                 "RAG is not configured. Set RAG_LLAMACPP_URL, "
@@ -466,6 +470,7 @@ class OllamaLLM:
                 "model": self.model,
                 "messages": msg_list,
                 "temperature": self.temperature,
+                "chat_template_kwargs": {"enable_thinking": False},
             }
             if response_format is not None:
                 payload["response_format"] = response_format
@@ -595,6 +600,10 @@ class OllamaLLM:
         else:
             raise ValueError("Either prompt or messages must be provided")
 
+        # Disable LLM thinking for all providers
+        if msg_list and msg_list[-1]["role"] == "user":
+            msg_list[-1]["content"] += "\n\n/no_think"
+
         if self.provider == "unconfigured":
             raise RAGProviderAuthError(
                 "RAG is not configured. Set RAG_LLAMACPP_URL, "
@@ -615,6 +624,7 @@ class OllamaLLM:
                 "messages": msg_list,
                 "temperature": self.temperature,
                 "stream": True,
+                "chat_template_kwargs": {"enable_thinking": False},
             }
             # Same defensive header handling as ``invoke``: self-hosted
             # OpenAI-compatible servers usually run without an API key,
