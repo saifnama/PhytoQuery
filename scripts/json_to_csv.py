@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""Convert a JSON QA dataset to CSV format for rag_mcq.py and eval_mcq.py.
+"""Convert a JSON QA dataset to CSV files for eval scripts.
 
 Usage:
-    python scripts/json_to_csv.py <input.json> [output.csv]
+    python scripts/json_to_csv.py <input.json> [output_dir]
 
-If output is omitted, writes to backend/evals/rag/data/mcq.csv.
+Writes MCQ items to <output_dir>/mcq.csv and open-ended items to
+<output_dir>/open_ended.csv.  Skips types not present in the JSON.
+
+If output_dir is omitted, defaults to backend/evals/rag/data/.
 """
 import json
 import csv
 import sys
 from pathlib import Path
 
+MCQ_FIELDS = ["id", "question", "option_a", "option_b", "option_c",
+              "option_d", "correct_option", "difficulty"]
+OPEN_ENDED_FIELDS = ["id", "question", "reference", "difficulty"]
 
-def convert(input_path: Path, output_path: Path):
+DEFAULT_OUTPUT_DIR = Path("backend/evals/rag/data")
+
+
+def load_json(input_path: Path) -> list:
     with open(input_path, encoding="utf-8") as f:
         raw = f.read()
 
@@ -23,34 +32,44 @@ def convert(input_path: Path, output_path: Path):
     if not raw.endswith("]"):
         raw += "]"
 
-    data = json.loads(raw)
+    return json.loads(raw)
 
-    # Filter to MCQ items only
-    mcq_items = [item for item in data if item.get("type") == "mcq"]
 
-    if not mcq_items:
-        print(f"No MCQ items found in {input_path}")
-        sys.exit(1)
-
+def write_csv(items: list, output_path: Path, fieldnames: list):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    fieldnames = ["id", "question", "option_a", "option_b", "option_c", "option_d", "correct_option", "difficulty"]
-
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        for item in mcq_items:
+        for item in items:
             writer.writerow(item)
+    print(f"  {len(items)} items -> {output_path}")
 
-    print(f"Converted {len(mcq_items)} MCQ items → {output_path}")
+
+def convert(input_path: Path, output_dir: Path):
+    data = load_json(input_path)
+
+    mcq_items = [item for item in data if item.get("type") == "mcq"]
+    open_ended_items = [item for item in data if item.get("type") == "open_ended"]
+
+    if not mcq_items and not open_ended_items:
+        print(f"No MCQ or open-ended items found in {input_path}")
+        sys.exit(1)
+
+    print(f"Converting {input_path.name} ({len(data)} total items):")
+
+    if mcq_items:
+        write_csv(mcq_items, output_dir / "mcq.csv", MCQ_FIELDS)
+
+    if open_ended_items:
+        write_csv(open_ended_items, output_dir / "open_ended.csv", OPEN_ENDED_FIELDS)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/json_to_csv.py <input.json> [output.csv]")
+        print("Usage: python scripts/json_to_csv.py <input.json> [output_dir]")
         sys.exit(1)
 
     input_file = Path(sys.argv[1])
-    output_file = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("backend/evals/rag/data/mcq.csv")
+    output_directory = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_OUTPUT_DIR
 
-    convert(input_file, output_file)
+    convert(input_file, output_directory)
