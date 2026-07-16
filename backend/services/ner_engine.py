@@ -399,6 +399,16 @@ class NERService:
                 "start": e.get("start"),
                 "end": e.get("end"),
                 "canonical": e.get("canonical"),
+                "aliases": e.get("aliases"),
+                "name_type": e.get("name_type"),
+                "accepted_scientific_name": e.get("accepted_scientific_name"),
+                "common_name": e.get("common_name"),
+                "source_db": e.get("source_db"),
+                "source_url": e.get("source_url"),
+                "taxon_id": e.get("taxon_id"),
+                "match_status": e.get("match_status"),
+                "review_required": e.get("review_required"),
+                "scientific_name_verified": e.get("scientific_name_verified"),
             })
 
         # 7. Chemicals

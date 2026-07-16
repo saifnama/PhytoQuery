@@ -137,12 +137,11 @@ const PaperPage: React.FC = () => {
         
         setPaperData(data);
         
-        // Use DB entities if they exist, otherwise fallback to NER output if any
-        if (dbData && dbData.entities && dbData.entities.length > 0) {
-          setEntities(dbData.entities);
-          setIsExtracted(true);
-        } else if (data.entities && data.entities.length > 0) {
+        if (data.entities && data.entities.length > 0) {
           setEntities(data.entities);
+          setIsExtracted(true);
+        } else if (dbData && dbData.entities && dbData.entities.length > 0) {
+          setEntities(dbData.entities);
           setIsExtracted(true);
         }
         

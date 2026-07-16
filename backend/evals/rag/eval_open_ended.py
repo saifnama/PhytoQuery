@@ -1,6 +1,7 @@
 import json
 import os
 import ast
+import time
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -23,6 +24,44 @@ CHECKPOINT = OUTPUT_DIR / ".checkpoints/open_ended_eval_checkpoint.json"
 
 OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
 CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
+
+METRIC_MAX_RETRIES = int(os.getenv("METRIC_MAX_RETRIES", "3"))
+METRIC_BASE_DELAY = float(os.getenv("METRIC_BASE_DELAY", "30"))
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    from openai import (
+        APIConnectionError,
+        APITimeoutError,
+        InternalServerError,
+        RateLimitError,
+    )
+    if isinstance(exc, (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)):
+        return True
+    try:
+        from instructor.v2.core.errors import InstructorRetryException
+        if isinstance(exc, InstructorRetryException):
+            return True
+    except ImportError:
+        pass
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("524", "502", "503", "504", "timeout", "timed out", "connection"))
+
+
+def score_with_retry(score_fn, metric_name: str, max_retries: int = METRIC_MAX_RETRIES):
+    last_exc = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return score_fn()
+        except Exception as e:
+            last_exc = e
+            if attempt < max_retries and _is_transient_error(e):
+                delay = METRIC_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"  {metric_name} attempt {attempt}/{max_retries} failed (transient), retrying in {delay:.0f}s: {e}")
+                time.sleep(delay)
+            else:
+                break
+    raise last_exc
 
 
 def load_checkpoint() -> int:
@@ -73,17 +112,17 @@ start_idx = load_checkpoint()
 print(f"Resuming from index {start_idx + 1}")
 
 local_client = AsyncOpenAI(
-    api_key=os.getenv("RAGAS_LLM_API_KEY", "") or _get_provider("api_key", "ollama"),
+    api_key=os.getenv("RAGAS_LLM_API_KEY", "") or _get_provider("api_key") or "ollama",
     base_url=os.getenv("RAGAS_LLM_BASE_URL", "") or _get_ragas_base_url(),
     timeout=300.0,
     max_retries=5,
 )
 
 eval_llm = llm_factory(
-    model=os.getenv("RAGAS_LLM_MODEL", "") or _get_provider("model", "qwen3.5:27b"),
+    model=os.getenv("RAGAS_LLM_MODEL", "") or _get_provider("model") or "qwen3.5:27b",
     provider=os.getenv("RAGAS_LLM_PROVIDER", "openai"),
     client=local_client,
-    max_tokens=8192,
+    max_tokens=4096,
     temperature=0,
 )
 
@@ -168,10 +207,10 @@ for idx, row in df.iterrows():
 
     for metric_name, score_fn in metric_defs:
         try:
-            metrics_result[metric_name] = score_fn()
+            metrics_result[metric_name] = score_with_retry(score_fn, metric_name)
         except Exception as e:
             metrics_result[metric_name] = np.nan
-            print(f"  {metric_name} failed: {e}")
+            print(f"  {metric_name} failed after retries: {e}")
 
     has_errors = any(np.isnan(v) for v in metrics_result.values())
     result = {

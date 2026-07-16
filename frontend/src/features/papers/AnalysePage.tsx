@@ -1,8 +1,26 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, FlowerLotus, Table, ChartBar, X, DotsThreeVertical, Trash } from '@phosphor-icons/react';
+import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, Equals, DotsThreeVertical } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import type { Entity } from '../../types';
 import { useAnalyseStore, type UploadedPaper } from '../../stores/analyseStore';
+
+const PdfIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <rect width="160" height="160" rx="28" fill="#E21101"/>
+    <text
+      x="50%"
+      y="54%"
+      textAnchor="middle"
+      fill="#FFFFFF"
+      fontFamily="Arial, Helvetica, sans-serif"
+      fontSize="56"
+      fontWeight="700"
+      dominantBaseline="middle"
+    >
+      PDF
+    </text>
+  </svg>
+);
 
 const ENTITY_GROUP_ORDER = [
   'CHEMICAL',
@@ -67,9 +85,28 @@ const AnalysePage = () => {
   const [viewerLoadingPaperId, setViewerLoadingPaperId] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
-  const [activePaperMenu, setActivePaperMenu] = useState<string | null>(null);
+  
+  // Dashboard layout states
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
+  const [rightSidebarMode, setRightSidebarMode] = useState<'entities' | 'graph'>('entities');
+  const [hoverRightSidebarMode, setHoverRightSidebarMode] = useState<'entities' | 'graph' | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  
+  const exportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+
+  // close the export menu on outside click
+  useEffect(() => {
+    if (!exportOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [exportOpen]);
 
   // Check localStorage queue for papers added from PaperPage
   useEffect(() => {
@@ -100,15 +137,8 @@ const AnalysePage = () => {
     };
   }, [viewerSrc]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setActivePaperMenu(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  // Auto-load PDF when active paper changes is moved down
+
 
   const closeViewer = () => {
     if (viewerSrc) {
@@ -178,7 +208,6 @@ const AnalysePage = () => {
       console.error('Delete paper failed:', err);
     } finally {
       removePaper(paper.id);
-      setActivePaperMenu(null);
     }
   };
 
@@ -340,13 +369,45 @@ const AnalysePage = () => {
     });
     const csv = lines.join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const filename = isCompareMode
       ? `compared_entities_${activePapers.length}_papers`
       : (activePapers[0]?.name.replace(/[^a-zA-Z0-9]/g, '_') || 'entities');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
     a.download = `${filename}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportGraph = () => {
+    if (activePapers.length === 0) return;
+    const nodes: any[] = graphEntities.map(e => ({
+      id: `${e.label}-${e.text.toLowerCase()}`,
+      label: e.text,
+      type: e.label,
+      count: (e as any).count || 1
+    }));
+    const edges: { from: string, to: string }[] = [];
+    activePapers.forEach(paper => {
+      const pid = `paper-${paper.doi || paper.id}`;
+      nodes.push({ id: pid, label: paper.name, type: 'PAPER', count: 1 });
+      Object.entries(paper.entity_counts).forEach(([label, items]) => {
+        items.forEach(item => {
+          edges.push({
+            from: pid,
+            to: `${label}-${(item.canonical || item.text).toLowerCase()}`
+          });
+        });
+      });
+    });
+
+    const json = JSON.stringify({ nodes, edges }, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `graph_export.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -356,402 +417,503 @@ const AnalysePage = () => {
     entityConfig[label] = { accentVar: getEntityAccentVar(label) };
   });
 
-  const showGraph = graphEntities.length > 0;
   const isComparing = isCompareMode && compareSelection.length >= 2;
 
+  // Auto-load PDF when active paper changes
+  useEffect(() => {
+    if (!isCompareMode && activePapers.length === 1) {
+      const paper = activePapers[0];
+      if (paper.pdfUrl && paper.id !== viewerPaper?.id && paper.id !== viewerLoadingPaperId) {
+        void openViewer(paper);
+      } else if (!paper.pdfUrl) {
+        closeViewer();
+      }
+    } else if (isCompareMode) {
+      closeViewer();
+    }
+  }, [activePapers, isCompareMode, viewerPaper?.id, viewerLoadingPaperId]);
+
   return (
-    <div className="flex h-full">
-      {/* Left Sidebar */}
-      <div className="w-56 flex-shrink-0 border-r border-border bg-background flex flex-col">
-        <div className="p-3 border-b border-surface-c">
-          <h2 className="text-sm font-semibold text-on-surface flex items-center gap-2">
-            <FlowerLotus size={18} className="text-primary" />
-            Analyse
-          </h2>
-          <p className="text-xs text-on-surface-muted mt-0.5">Upload PDFs · Extract entities</p>
-        </div>
-
-        <div className="px-3 py-2 space-y-2">
-          {papers.length >= 2 && (
-            <button
-              onClick={() => {
-                if (isCompareMode) {
-                  setIsCompareMode(false);
-                  clearCompareSelection();
-                } else {
-                  setIsCompareMode(true);
-                  if (selectedPaper) {
-                    setCompareSelection([selectedPaper.id]);
-                  }
-                }
-              }}
-              className={`flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-lg text-xs font-medium transition-colors ${
-                isCompareMode
-                  ? 'bg-violet-100 text-violet-700 border border-violet-200'
-                  : 'border border-border text-on-surface-variant hover:bg-surface-c'
-              }`}
+    <div className="flex h-screen bg-background text-on-background overflow-hidden flex-col">
+      <main className="flex flex-1 overflow-hidden">
+        
+        {/* Left Sidebar: PDF Library & Actions */}
+        {papers.length > 0 && (
+          <aside className={`sidebar-transition border-r border-outline-variant bg-surface-bright flex flex-col shrink-0 relative ${leftSidebarCollapsed ? 'sidebar-collapsed' : 'w-72'}`} id="library-sidebar">
+            {/* Integrated Sidebar Toggle (Top Right) */}
+            <button 
+              className="toggle-btn-left absolute right-3 top-3 z-50 w-8 h-8 bg-surface-container-low border border-outline-variant rounded-full flex items-center justify-center shadow-sm hover:bg-surface-container-high transition-all" 
+              onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
             >
-              {isCompareMode ? <X size={14} /> : <ChartBar size={14} />}
-              {isCompareMode ? 'Cancel Compare' : 'Compare Papers'}
+              <SidebarSimple size={18} />
             </button>
-          )}
-
-          <label className="block relative">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf"
-              multiple
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <div className={`flex items-center justify-center gap-1.5 py-2 px-3 border border-dashed rounded-lg cursor-pointer transition-colors text-xs font-medium ${
-              isUploading
-                ? 'border-primary/30 bg-primary/10 text-primary'
-                : 'border-primary/20 hover:border-primary hover:bg-primary/10 text-primary'
-            }`}>
-              {isUploading ? (
-                <>
-                  <svg className="animate-spin h-3.5 w-3.5 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <span>{uploadProgress.current} / {uploadProgress.total}</span>
-                </>
-              ) : (
-                <>
-                  <Plus size={14} />
-                  <span>Upload PDFs</span>
-                </>
-              )}
+            
+            {/* Mini View (Icons only) */}
+            <div className={`sidebar-mini-view ${leftSidebarCollapsed ? 'flex' : 'hidden'} flex-col items-center pt-16 gap-6 h-full w-full`}>
+              <PdfIcon size={24} className="opacity-70 mt-4 cursor-pointer" />
             </div>
-          </label>
-        </div>
 
-        <div className="flex-1 overflow-y-auto">
-          {papers.map(paper => {
-            const isSelected = selectedPaper?.id === paper.id;
-            const isInCompare = compareSelection.includes(paper.id);
-
-            return (
-              <div
-                key={paper.id}
-                onClick={() => {
-                  if (isCompareMode) {
-                    toggleCompareSelection(paper.id);
-                  } else {
-                    setSelectedPaperId(paper.id);
-                    const initial: Record<string, boolean> = {};
-                    ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
-                    setExpandedGroups(initial);
-                  }
-                }}
-                className={`group flex items-center gap-2 px-3 py-2 cursor-pointer border-l-2 transition-colors ${
-                  isSelected && !isCompareMode
-                    ? 'border-primary bg-primary/10'
-                    : isInCompare && isCompareMode
-                    ? 'border-violet-500 bg-violet-50'
-                    : 'border-transparent hover:bg-surface-c'
-                }`}
-              >
-                {isCompareMode && (
-                  <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
-                    isInCompare ? 'bg-violet-600 border-violet-600' : 'border-outline'
-                  }`}>
-                    {isInCompare && (
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                        <polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+            {/* Main Sidebar Content */}
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden ${leftSidebarCollapsed ? 'hidden' : ''}`}>
+              <div className="pt-14 space-y-1 px-4 pb-2">
+                <label className="block relative">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <div className="w-full py-2 px-4 bg-white border border-outline-variant text-on-surface hover:bg-surface-c rounded-full flex items-center justify-center gap-2 text-sm font-semibold shadow-sm transition-all cursor-pointer">
+                    {isUploading ? (
+                      <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                    ) : (
+                      <Plus size={16} weight="bold" className="text-on-surface-variant" />
                     )}
+                    {isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Upload'}
                   </div>
-                )}
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void openViewer(paper);
-                  }}
-                  disabled={!paper.pdfUrl}
-                  title={paper.pdfUrl ? `Open PDF for ${paper.name}` : 'PDF viewer unavailable for this paper'}
-                  className={`w-6 h-7 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0 transition-colors ${
-                    paper.pdfUrl
-                      ? 'bg-red-100 text-red-600 hover:bg-red-200 cursor-pointer'
-                      : 'bg-surface-c/50 text-on-surface-muted cursor-not-allowed'
-                  }`}
-                >
-                  {viewerLoadingPaperId === paper.id ? (
-                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
-                  ) : (
-                    'PDF'
-                  )}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-on-surface truncate">{paper.name}</p>
-                  <p className="text-[10px] text-on-surface-muted truncate">{paper.doi || 'No DOI'}</p>
-                </div>
-
-                {/* Three-dots menu */}
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setActivePaperMenu(activePaperMenu === paper.id ? null : paper.id);
+                </label>
+                
+                {papers.length >= 2 && (
+                  <button 
+                    onClick={() => {
+                      if (isCompareMode) {
+                        setIsCompareMode(false);
+                        clearCompareSelection();
+                      } else {
+                        setIsCompareMode(true);
+                        if (selectedPaper) setCompareSelection([selectedPaper.id]);
+                      }
                     }}
-                    className="opacity-0 group-hover:opacity-100 inline-flex h-6 w-6 items-center justify-center rounded text-on-surface-muted transition-opacity hover:text-on-surface-variant"
-                    title="Paper options"
+                    className={`w-full py-1.5 px-4 border rounded-full flex items-center justify-center gap-2 font-medium transition-colors ${isCompareMode ? 'bg-violet-100 border-violet-200 text-violet-700' : 'border-outline-variant text-on-surface-variant hover:bg-surface-container'}`}
                   >
-                    <DotsThreeVertical size={16} weight="bold" />
+                    {isCompareMode ? <X size={20} /> : <Equals size={20} />}
+                    {isCompareMode ? 'Cancel Compare' : 'Compare'}
                   </button>
+                )}
+              </div>
 
-                  {activePaperMenu === paper.id && (
-                    <div
-                      ref={menuRef}
-                      className="absolute right-0 top-7 z-20 w-44 rounded-lg border border-border bg-background py-1 shadow-lg"
+              <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-6 space-y-1">
+                {papers.map((paper) => {
+                  const isSelected = selectedPaper?.id === paper.id;
+                  const isInCompare = compareSelection.includes(paper.id);
+                  const active = (isSelected && !isCompareMode) || (isInCompare && isCompareMode);
+
+                  return (
+                    <div 
+                      key={paper.id}
+                      onClick={() => {
+                        if (isCompareMode) {
+                          toggleCompareSelection(paper.id);
+                        } else {
+                          setSelectedPaperId(paper.id);
+                          const initial: Record<string, boolean> = {};
+                          ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
+                          setExpandedGroups(initial);
+                        }
+                      }}
+                      className={`p-3 relative group cursor-pointer transition-all flex items-center gap-3 rounded-xl ${active ? 'bg-[#f0f2f8] shadow-sm ring-1 ring-black/5' : 'bg-white hover:bg-slate-50'}`}
                     >
+                      <PdfIcon size={24} className="shrink-0" />
+                      <div className="flex-1 min-w-0 pr-6">
+                        <h4 className={`text-[14px] line-clamp-2 leading-tight ${active ? 'font-semibold text-slate-900' : 'font-medium text-slate-700'}`}>{paper.name}</h4>
+                      </div>
+                      
+                      {/* Delete Menu Trigger */}
                       <button
                         type="button"
                         onClick={(event) => {
                           event.stopPropagation();
                           void deletePaper(paper);
                         }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-red-600 hover:bg-red-50 transition-colors"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1.5 text-on-surface-muted hover:text-red-500 transition-opacity bg-white rounded-md shadow-sm"
+                        title="Delete paper"
                       >
-                        <Trash size={14} weight="bold" />
-                        <span>Delete</span>
+                        <TrashSimple size={16} weight="regular" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </aside>
+        )}
+
+        {/* Center Viewport: Document Reader or Upload Hero */}
+        <section className="flex-1 bg-surface-dim overflow-y-auto custom-scrollbar flex flex-col items-center relative">
+          {papers.length === 0 ? (
+            <div className="flex-1 relative dot-pattern flex flex-col items-center justify-center overflow-hidden w-full h-full bg-background">
+              {/* Abstract Background Shapes */}
+              <div className="absolute top-[20%] left-[10%] w-64 h-64 bg-teal-500 opacity-10 blur-[100px] rounded-full pointer-events-none" />
+              <div className="absolute bottom-[20%] right-[10%] w-96 h-96 bg-purple-500 opacity-10 blur-[120px] rounded-full pointer-events-none" />
+              
+              <div className="relative z-10 w-full max-w-2xl px-6">
+                <label 
+                  className={`upload-dashed pulse-border relative w-full aspect-[1.6/1] bg-surface-lowest/50 flex flex-col items-center justify-center transition-all duration-500 cursor-pointer group hover:bg-surface-c/80 hover:scale-[1.005] ${isUploading ? 'bg-surface-high' : ''}`}
+                >
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  
+                  {!isUploading ? (
+                    <div className="flex flex-col items-center transition-all duration-500 relative z-10">
+                      <div className="mb-6 group-hover:scale-110 transition-transform duration-500">
+                        <FileArrowUp size={64} weight="light" className="text-teal-600" />
+                      </div>
+                      <h1 className="text-2xl font-bold text-primary mb-2 tracking-tight font-display">Upload Research Papers</h1>
+                      <p className="text-base text-on-surface-variant">Analyze documents and extract structured entities automatically.</p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center w-full max-w-md relative z-10">
+                      <div className="w-20 h-20 bg-teal-50 flex items-center justify-center rounded-xl mb-6 shadow-sm border border-teal-100">
+                        <div className="w-10 h-10 border-4 border-teal-200 border-t-teal-600 rounded-full animate-spin" />
+                      </div>
+                      <h2 className="text-xl font-semibold text-primary mb-1">Processing Papers...</h2>
+                      <p className="text-sm text-on-surface-variant mb-8">
+                        {uploadProgress.current} of {uploadProgress.total} documents
+                      </p>
+                      <div className="w-full h-1.5 bg-surface-variant rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-teal-500 transition-all duration-300 ease-out" 
+                          style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </label>
+              </div>
+            </div>
+          ) : activePapers.length > 0 ? (
+            <>
+              {/* Doc Header Toolbar */}
+              <div className="w-full bg-surface-bright border-b border-outline-variant px-6 py-4 sticky top-0 z-40 shadow-sm flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  {isCompareMode ? (
+                    <h3 className="font-serif font-semibold text-on-surface">Comparing {activePapers.length} Papers</h3>
+                  ) : (
+                    <div className="flex flex-col">
+                      <h3 className="font-serif font-semibold text-on-surface truncate max-w-2xl">{activePapers[0]?.name}</h3>
+                      {activePapers[0]?.doi && (
+                        <span className="text-[11px] text-on-surface-variant mt-0.5">{activePapers[0].doi}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-4">
+                  {/* Export removed from here, now in right sidebar */}
+                </div>
+              </div>
+              
+              {/* iframe Container */}
+              <div className="flex-1 w-full max-w-5xl mx-auto p-4 md:p-8 flex flex-col">
+                {isCompareMode && activePapers.length >= 2 ? (
+                  <div className="flex-1 grid grid-cols-2 gap-4 h-full">
+                    {[activePapers[0], activePapers[1]].map((p, idx) => (
+                      <div key={idx} className="flex flex-col bg-white rounded-xl shadow-xl border border-white overflow-hidden h-[min(80vh,800px)]">
+                        <div className="bg-surface-bright p-3 border-b border-outline-variant text-xs font-semibold truncate">{p.name}</div>
+                        <div className="flex-1 flex items-center justify-center bg-surface-c">
+                           <span className="text-sm text-on-surface-muted text-center px-4">PDF viewer optimization in compare mode coming soon.</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex-1 bg-white rounded-xl shadow-xl border border-white overflow-hidden flex flex-col w-full h-[min(80vh,1100px)] relative">
+                    {isViewerLoading ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-c/50 backdrop-blur-sm z-10">
+                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-200 border-t-teal-600 mb-4" />
+                        <span className="text-sm text-on-surface-variant font-medium">Loading PDF...</span>
+                      </div>
+                    ) : viewerError ? (
+                      <div className="absolute inset-0 flex items-center justify-center bg-red-50 text-red-600 text-sm font-medium">
+                        {viewerError}
+                      </div>
+                    ) : null}
+                    <iframe
+                      src={viewerSrc || undefined}
+                      title={`PDF viewer`}
+                      className="w-full h-full border-none"
+                    />
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-on-surface-muted text-sm">
+              {isCompareMode
+                ? 'Select at least 2 papers to compare'
+                : 'Select a paper to view its analysis'}
+            </div>
+          )}
+        </section>
+
+        {/* Right Sidebar: Insights & Entity Index */}
+        {activePapers.length > 0 && (
+          <aside className={`sidebar-transition border-l border-outline-variant bg-surface flex flex-col shrink-0 relative ${rightSidebarCollapsed ? 'sidebar-collapsed' : 'w-[400px]'}`} id="insights-sidebar">
+            {/* Integrated Sidebar Toggle (Top Left) */}
+            <button 
+              className="toggle-btn-right absolute left-3 top-3 z-50 w-8 h-8 bg-surface-container-low border border-outline-variant rounded-full flex items-center justify-center shadow-sm hover:bg-surface-container-high transition-all"
+              onClick={() => setRightSidebarCollapsed(!rightSidebarCollapsed)}
+            >
+              <SidebarSimple size={18} className="rotate-180" />
+            </button>
+
+            {/* Mini View (Icons only) */}
+            <div className={`sidebar-mini-view ${rightSidebarCollapsed ? 'flex' : 'hidden'} flex-col items-center pt-16 gap-6 h-full w-full`}>
+              <button onClick={() => { setRightSidebarMode('entities'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors">
+                <ListNumbers className={`text-xl ${rightSidebarMode === 'entities' ? 'text-primary' : 'text-on-surface-variant'}`} />
+              </button>
+              <button onClick={() => { setRightSidebarMode('graph'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors">
+                <Graph className={`text-xl ${rightSidebarMode === 'graph' ? 'text-primary' : 'text-on-surface-variant'}`} />
+              </button>
+            </div>
+
+            {/* Main Sidebar Content */}
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden ${rightSidebarCollapsed ? 'hidden' : ''}`}>
+              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14, marginTop: 56 }}>
+                <div style={{
+                  display: "inline-flex", gap: 2,
+                  padding: 5, borderRadius: 999,
+                  border: "none", background: "var(--surface-c)"
+                }}>
+                  {(
+                    [
+                      { id: 'entities', icon: ListNumbers, label: 'Entity Index' },
+                      { id: 'graph', icon: Graph, label: 'Graph View' }
+                    ] as const
+                  ).map(({ id, icon: Icon, label }) => {
+                    const isActive = rightSidebarMode === id;
+                    const expanded = hoverRightSidebarMode === id;
+                    return (
+                      <button key={id}
+                        data-tab={id}
+                        onClick={() => setRightSidebarMode(id)}
+                        onMouseEnter={() => setHoverRightSidebarMode(id)}
+                        onMouseLeave={() => setHoverRightSidebarMode(null)}
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+                          height: 34, borderRadius: 999,
+                          width: expanded ? "auto" : 38,
+                          padding: expanded ? "0 14px" : 0,
+                          background: isActive ? "#FFFFFF" : "transparent",
+                          boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                          border: "none", cursor: "pointer",
+                          fontSize: 13, fontWeight: isActive ? 600 : 500,
+                          color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
+                          whiteSpace: "nowrap", overflow: "hidden",
+                          transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
+                        }}>
+                          {expanded ? <span>{label}</span> : <Icon size={16} />}
+                        </button>
+                    );
+                  })}
+                </div>
+
+                {/* Export options pinned right */}
+                <div
+                  ref={exportRef}
+                  style={{ position: "absolute", right: 0, top: 0 }}
+                >
+                  <button 
+                    onClick={() => setExportOpen((o) => !o)} 
+                    title="Export options" 
+                    style={{
+                      width: 40, height: 40, borderRadius: 999,
+                      background: exportOpen ? "var(--surface-c)" : "transparent",
+                      color: "var(--on-surface-variant)",
+                      border: "none", cursor: "pointer",
+                      display: "grid", placeItems: "center",
+                      transition: "background .15s"
+                    }}
+                  >
+                    <DotsThreeVertical size={20} weight="bold" />
+                  </button>
+                  {exportOpen && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", right: 0,
+                      width: "max-content",
+                      background: "#FFFFFF",
+                      border: "1px solid var(--border)", borderRadius: 12,
+                      boxShadow: "0 2px 6px 2px rgba(0, 0, 0, 0.08)",
+                      padding: 5, zIndex: 100,
+                      animation: "fadeUp .16s ease"
+                    }}>
+                      <button 
+                        className="export-opt" 
+                        onClick={() => {
+                          setExportOpen(false);
+                          exportCSV();
+                        }}
+                      >
+                        <span>Export CSV</span>
+                      </button>
+                      <button 
+                        className="export-opt" 
+                        onClick={() => {
+                          setExportOpen(false);
+                          exportGraph();
+                        }}
+                      >
+                        <span>Export Graph</span>
                       </button>
                     </div>
                   )}
                 </div>
               </div>
-            );
-          })}
-          {papers.length === 0 && (
-            <p className="text-xs text-on-surface-muted text-center py-8">No papers uploaded</p>
-          )}
-        </div>
-      </div>
 
-      {/* Main Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {activePapers.length > 0 ? (
-          <>
-            <div className="border-b border-border p-4">
-              {isComparing ? (
-                <div>
-                  <h3 className="text-base font-semibold text-on-surface font-serif">
-                    Comparing {activePapers.length} Papers
-                  </h3>
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {activePapers.map(p => (
-                      <span key={p.id} className="text-[10px] bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full border border-violet-100 truncate max-w-[200px]">
-                        {p.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : (
+              {/* Entity Index Content */}
+              {rightSidebarMode === 'entities' ? (
                 <>
-                  <h3 className="text-base font-semibold text-on-surface font-serif">{activePapers[0]?.name}</h3>
-                  <p className="text-xs text-on-surface-variant mt-1 font-mono">{activePapers[0]?.doi || 'No DOI'}</p>
-                </>
-              )}
-            </div>
+                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
+                    {groupedEntities.map((group) => {
+                      const isExpanded = expandedGroups[group.label] !== false;
+                      const accentColor = getEntityAccentColor(group.label);
+                      const empty = group.termCount === 0;
 
-            <div className="flex-1 flex overflow-hidden">
-              {/* Entity Index */}
-              <div className="w-[380px] flex-shrink-0 border-r border-border flex flex-col bg-surface-c/20 overflow-hidden">
-                <div className="flex flex-col flex-1 p-8 space-y-6 overflow-y-auto custom-scrollbar">
-                  <button
-                    onClick={exportCSV}
-                    className="w-full px-6 py-3 rounded-xl font-bold transition-all flex items-center justify-center space-x-2 text-[11px] uppercase tracking-widest shadow-lg bg-teal-600 hover:bg-teal-700 text-white shadow-teal-100 cursor-pointer"
-                  >
-                    <Table size={16} weight="bold" />
-                    <span>Export Entities</span>
-                  </button>
-
-                  <div className="flex items-center justify-between pb-3 border-b border-border">
-                    <span className="text-[14px] font-semibold text-on-surface font-display">Entity Index</span>
-                    <span className="text-[10px] text-on-surface-muted">
-                      {activePapers.reduce((sum, p) => sum + p.entity_count, 0).toLocaleString()} entities
-                    </span>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-                    <div className="flex flex-col bg-background rounded-xl border border-border overflow-hidden shadow-sm">
-                      {groupedEntities.map((group) => {
-                        const isExpanded = expandedGroups[group.label] !== false;
-                        const accentColor = getEntityAccentColor(group.label);
-                        const accentRgbVar = getEntityAccentVar(group.label) + '-rgb';
-
-                        return (
-                          <div
-                            key={group.label}
-                            className="relative border-b-[0.5px] border-border last:border-0"
-                            style={{ borderLeft: isExpanded ? `2.5px solid ${accentColor}` : '2.5px solid transparent' }}
+                      return (
+                        <div 
+                          key={group.label} 
+                          style={{ borderBottom: "1px solid var(--border)" }}
+                        >
+                          {/* Accordion Row (.ent-cat) */}
+                          <button 
+                            type="button"
+                            className="ent-cat"
+                            onClick={empty ? undefined : () => {
+                              toggleGroup(group.label);
+                            }}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 12,
+                              width: "100%", padding: "13px 4px",
+                              background: "transparent", border: "none",
+                              cursor: empty ? "default" : "pointer",
+                              opacity: empty ? 0.5 : 1
+                            }}
                           >
-                            <div
-                              className="flex items-center gap-3 py-2.5 px-3 cursor-pointer transition-colors hover:bg-surface-c"
-                              onClick={() => toggleGroup(group.label)}
-                            >
-                              <div
-                                className="w-[3px] h-8 rounded-sm shrink-0"
-                                style={{ backgroundColor: accentColor, opacity: group.termCount === 0 ? 0.3 : 1 }}
-                              />
-                              <div className="flex-1 flex flex-col gap-[2px] min-w-0">
-                                <span 
-                                  className="text-[11px] font-semibold text-on-surface font-display truncate"
-                                  style={{ color: isExpanded ? accentColor : undefined }}
-                                >
-                                  {LABEL_NAMES[group.label] || group.label}
-                                </span>
-                                {group.termCount > 0 && (
-                                  <div
-                                    className="h-2 w-full rounded-[2px] transition-opacity"
+                            {/* Left category accent dot bar */}
+                            <span style={{
+                              width: 4, height: 20, borderRadius: 999,
+                              background: accentColor, flexShrink: 0,
+                              opacity: empty ? 0.3 : 1
+                            }} />
+                            
+                            <span style={{
+                              flex: 1, textAlign: "left", fontSize: 14, fontWeight: 600,
+                              color: isExpanded ? accentColor : "var(--on-surface)",
+                              transition: "color .15s",
+                              textTransform: "capitalize"
+                            }}>
+                              {LABEL_NAMES[group.label] || group.label.toLowerCase()}
+                            </span>
+
+                            {/* Hover caret transitions slot */}
+                            <span style={{ flexShrink: 0 }}>
+                              {empty ? (
+                                <span style={{ fontSize: 14, color: "var(--on-surface-variant)" }}>–</span>
+                              ) : (
+                                <span style={{ position: "relative", display: "inline-grid", placeItems: "center", minWidth: 22, height: 16 }}>
+                                  <span className="ent-count" style={{
+                                    fontSize: 13.5, fontWeight: 600, color: "var(--on-surface-variant)",
+                                    opacity: isExpanded ? 0 : 1
+                                  }}>{group.termCount}</span>
+                                  <span className={"ent-caret" + (isExpanded ? " is-open" : "")}
                                     style={{
-                                      backgroundColor: `rgb(var(${accentRgbVar}) / 0.13)`,
-                                      opacity: 1
-                                    }}
-                                  />
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span
-                                  className="text-[10px] font-mono text-right min-w-[1.5rem]"
-                                  style={{ color: group.termCount === 0 ? '#cbd5e1' : accentColor }}
-                                >
-                                  {group.termCount || '—'}
-                                </span>
-                                {group.termCount > 0 && (
-                                  <button
-                                    type="button"
-                                    className={`text-[9px] text-on-surface-muted transition-transform duration-200 px-1.5 py-1 hover:text-on-surface-variant ${isExpanded ? 'rotate-90' : ''}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      toggleGroup(group.label);
+                                      position: "absolute", inset: 0, margin: "auto",
+                                      transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                                      transition: "transform .2s ease, opacity .15s ease",
+                                      fontSize: 9, color: "var(--on-surface-variant)",
+                                      display: "inline-grid", placeItems: "center",
+                                      fontWeight: "bold"
                                     }}
                                   >
-                                    ▶
-                                  </button>
-                                )}
-                              </div>
+                                    ▼
+                                  </span>
+                                </span>
+                              )}
+                            </span>
+                          </button>
+
+                          {/* Values expanded container */}
+                          {isExpanded && !empty && (
+                            <div style={{ padding: "0 4px 12px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
+                              {group.items.map((ent, eIdx) => {
+                                const name = ent.text;
+                                return (
+                                  <div 
+                                    key={eIdx}
+                                    className="ent-row"
+                                    style={{
+                                      display: "flex", alignItems: "center", gap: 10,
+                                      padding: "6px 10px", borderRadius: 7, cursor: "pointer",
+                                      transition: "background .12s"
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = "var(--surface-low)";
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = "transparent";
+                                    }}
+                                  >
+                                    {/* Item dot */}
+                                    <span style={{ width: 7, height: 7, borderRadius: 999, background: accentColor, flexShrink: 0 }} />
+                                    
+                                    {/* Item name */}
+                                    <span style={{
+                                      flex: 1, fontSize: 13.5,
+                                      color: "var(--on-surface)",
+                                      fontStyle: group.label === "SPECIES" ? "italic" : "normal"
+                                    }}>
+                                      {name}
+                                    </span>
+
+                                    <span className="mono" style={{ fontSize: 12, color: "var(--on-surface-variant)" }}>
+                                      {ent.count}
+                                    </span>
+                                  </div>
+                                );
+                              })}
                             </div>
-
-                            <div className={`grid transition-[grid-template-rows] duration-300 ease-in-out bg-background ${isExpanded && group.items.length > 0 ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-                              <div className="overflow-hidden min-h-0">
-                                <div className="flex flex-col py-1 border-t-[0.5px] border-surface-c">
-                                  {group.items.map((ent, eIdx) => (
-                                    <div key={eIdx} className="flex flex-col border-b-[0.5px] border-surface-c last:border-0">
-                                      <div className="flex items-center gap-2 py-1.5 pr-3 pl-8 transition-colors hover:bg-surface-c">
-                                        <div className="w-[6px] h-[6px] rounded-full shrink-0" style={{ backgroundColor: accentColor }} />
-                                        <div className="flex-1 min-w-0 pr-2">
-                                          <span 
-                                            className="text-[11px] font-display block truncate text-on-surface-variant"
-                                          >
-                                            {ent.text}
-                                          </span>
-                                        </div>
-                                        <span className="text-[9px] font-mono text-on-surface font-semibold">{ent.count}</span>
-                                      </div>
-                                      {isComparing && ent.papers.size > 0 && (
-                                        <div className="pl-8 pr-3 pb-1 flex flex-wrap gap-1">
-                                          {activePapers
-                                            .filter(p => ent.papers.has(p.id))
-                                            .map(p => (
-                                              <span key={p.id} className="text-[9px] bg-surface-c text-on-surface-variant px-1.5 py-0.5 rounded truncate max-w-[120px]" title={p.name}>
-                                                {p.name}
-                                              </span>
-                                            ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-              </div>
-
-              {/* Knowledge Graph — Right Side */}
-              {showGraph && (
-                <div className="flex-1 bg-background overflow-hidden flex flex-col">
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-surface-c">
-                    <span className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">Entity View</span>
-                    {isComparing && (
-                      <span className="text-[10px] text-on-surface-muted">Compare mode</span>
-                    )}
-                  </div>
-
-                  <div className="flex-1 overflow-hidden">
-                    <KnowledgeGraph
-                      entities={graphEntities}
-                      paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
-                      paperIdentifiers={isComparing ? paperIdentifiers : undefined}
-                      entityConfig={entityConfig}
-                      entityPaperMap={isComparing ? entityPaperMap : undefined}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-on-surface-muted text-sm">
-            {isCompareMode
-              ? 'Select at least 2 papers to compare'
-              : 'Select a paper or upload a new PDF'}
-          </div>
-        )}
-      </div>
-
-      {viewerPaper && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-on-surface/70 p-4" onClick={closeViewer}>
-          <div
-            className="flex h-[min(92vh,56rem)] w-[min(96vw,72rem)] flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border px-5 py-4">
-              <div className="min-w-0">
-                <h3 className="truncate text-sm font-semibold text-on-surface">{viewerPaper.name}</h3>
-              </div>
-              <button
-                type="button"
-                onClick={closeViewer}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-on-surface-variant transition-colors hover:border-outline hover:text-on-surface"
-                title="Close PDF viewer"
-              >
-                <X size={18} weight="bold" />
-              </button>
-            </div>
-
-            <div className="flex-1 bg-surface-c p-3">
-              {isViewerLoading ? (
-                <div className="flex h-full items-center justify-center rounded-xl border border-border bg-background text-sm text-on-surface-variant">
-                  <div className="flex items-center gap-3">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-teal-200 border-t-teal-500" />
-                    <span>Loading PDF preview...</span>
-                  </div>
-                </div>
-              ) : viewerError ? (
-                <div className="flex h-full items-center justify-center rounded-xl border border-red-100 bg-background px-6 text-center text-sm text-red-500">
-                  {viewerError}
-                </div>
+                </>
               ) : (
-                <iframe
-                  src={viewerSrc || undefined}
-                  title={`PDF viewer for ${viewerPaper.name}`}
-                  className="h-full w-full rounded-xl border border-border bg-background"
-                />
+                <div className="flex-1 flex flex-col overflow-hidden p-2">
+                  <KnowledgeGraph
+                    entities={graphEntities}
+                    paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
+                    paperIdentifiers={isComparing ? paperIdentifiers : undefined}
+                    entityConfig={entityConfig}
+                    entityPaperMap={isComparing ? entityPaperMap : undefined}
+                  />
+                </div>
               )}
             </div>
+          </aside>
+        )}
+      </main>
+
+      {/* Global Footer / Status Bar */}
+      <footer className="h-8 border-t border-outline-variant bg-surface flex items-center px-6 justify-between text-[11px] text-on-surface-variant font-mono shrink-0">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse-slow"></span>
+            <span>AI Extraction Ready</span>
           </div>
+          <div>Project: PhytoQuery Dashboard</div>
         </div>
-      )}
+        <div className="flex items-center gap-4">
+          <span>{activePapers.length > 0 ? 'Active' : 'Idle'}</span>
+          {uploadProgress.total > 0 && <span>Processed: {uploadProgress.total}</span>}
+        </div>
+      </footer>
     </div>
   );
 };

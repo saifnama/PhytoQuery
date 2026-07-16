@@ -74,13 +74,16 @@ def _entity_row_to_dict(pe: PaperEntity) -> dict:
     if not isinstance(aliases, list):
         aliases = []
 
+    # Flatten metadata into the top-level entity dict. The frontend Entity
+    # type reads flat fields like entity.accepted_scientific_name,
+    # entity.smiles, etc. — not nested under entity.metadata.
     return {
         "label": pe.label,
         "text": pe.canonical_text,
         "canonical": pe.canonical_text,
         "count": pe.frequency,
-        "metadata": metadata,
         "aliases": aliases,
+        **metadata,
     }
 
 

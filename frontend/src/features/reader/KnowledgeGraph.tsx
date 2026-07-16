@@ -722,15 +722,15 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                 >
                   Labels
                 </button>
-                <button
-                  onClick={downloadHTML}
-                  className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
-                  title="Download Graph as HTML"
-                >
-                  <DownloadSimple weight="bold" size={18} />
-                </button>
               </>
             )}
+            <button
+              onClick={downloadHTML}
+              className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
+              title="Download Graph as HTML"
+            >
+              <DownloadSimple weight="bold" size={18} />
+            </button>
             <button
               onClick={() => setIsFullscreen(!isFullscreen)}
               className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"

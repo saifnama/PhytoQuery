@@ -1008,27 +1008,22 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   useEffect(() => {
     const roots = getInteractiveRoots();
+    console.log('[SpeciesEffect] roots:', roots.length, roots.map(r => r.id || r.tagName));
     if (roots.length === 0) return;
 
     const handleSpeciesClick = (event: MouseEvent) => {
       const clickedEl = event.target as HTMLElement;
+      console.log('[SpeciesClick] event.target:', clickedEl.tagName, clickedEl.className, clickedEl.textContent?.slice(0, 30));
       
       // Only handle clicks on highlighted species elements
       if (!clickedEl.classList.contains('ent-species') && !clickedEl.closest('.ent-species')) {
+        console.log('[SpeciesClick] NO ent-species class found, skipping');
         return;
       }
       
       // Get the text content and lookup in speciesLookup
       const textContent = clickedEl.textContent?.trim();
       if (!textContent) return;
-      
-      const normalizedKey = normalizeLookupText(textContent);
-      const species = speciesLookup.get(normalizedKey);
-      
-      if (!species) {
-        const species2 = speciesLookup.get(textContent.toLowerCase());
-        if (!species2) return;
-      }
       
       event.preventDefault();
 
@@ -1040,6 +1035,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         return;
       }
 
+      console.log('[SpeciesClick] calling openSpeciesPopup with:', targetEl.textContent?.slice(0, 30));
       openSpeciesPopup(targetEl as HTMLElement);
     };
 
@@ -1163,28 +1159,22 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   // Chemical popup click/key handlers
   useEffect(() => {
     const roots = getInteractiveRoots();
+    console.log('[ChemicalEffect] roots:', roots.length, roots.map(r => r.id || r.tagName));
     if (roots.length === 0) return;
 
     const handleChemicalClick = (event: MouseEvent) => {
       const clickedEl = event.target as HTMLElement;
+      console.log('[ChemicalClick] event.target:', clickedEl.tagName, clickedEl.className, clickedEl.textContent?.slice(0, 30));
       
       // Only handle clicks on highlighted chemical elements
       if (!clickedEl.classList.contains('ent-chemical') && !clickedEl.closest('.ent-chemical')) {
+        console.log('[ChemicalClick] NO ent-chemical class found, skipping');
         return;
       }
       
       // Get the text content and lookup in chemicalLookup
       const textContent = clickedEl.textContent?.trim();
       if (!textContent) return;
-      
-      const normalizedKey = normalizeLookupText(textContent);
-      const chemical = chemicalLookup.get(normalizedKey);
-      
-      if (!chemical) {
-        // Try with original text as fallback
-        const chemical2 = chemicalLookup.get(textContent.toLowerCase());
-        if (!chemical2) return;
-      }
       
       event.preventDefault();
 
@@ -1196,6 +1186,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         return;
       }
 
+      console.log('[ChemicalClick] calling openChemicalPopup with:', targetEl.textContent?.slice(0, 30));
       openChemicalPopup(targetEl as HTMLElement);
     };
 
