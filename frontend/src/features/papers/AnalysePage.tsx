@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, Equals, DotsThreeVertical } from '@phosphor-icons/react';
+import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
+import { CompareMatrix } from './CompareMatrix';
 import type { Entity } from '../../types';
 import { useAnalyseStore, type UploadedPaper } from '../../stores/analyseStore';
 
@@ -440,22 +441,91 @@ const AnalysePage = () => {
         {/* Left Sidebar: PDF Library & Actions */}
         {papers.length > 0 && (
           <aside className={`sidebar-transition border-r border-outline-variant bg-surface-bright flex flex-col shrink-0 relative ${leftSidebarCollapsed ? 'sidebar-collapsed' : 'w-72'}`} id="library-sidebar">
-            {/* Integrated Sidebar Toggle (Top Right) */}
-            <button 
-              className="toggle-btn-left absolute right-3 top-3 z-50 w-8 h-8 bg-surface-container-low border border-outline-variant rounded-full flex items-center justify-center shadow-sm hover:bg-surface-container-high transition-all" 
-              onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
-            >
-              <SidebarSimple size={18} />
-            </button>
+            {/* Unified Top Header Bar */}
+            <div className="px-3.5 h-14 border-b border-outline-variant/40 flex items-center justify-between shrink-0">
+              <h2 className={`text-[18px] font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-200 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
+                Sources
+              </h2>
+              <button 
+                className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low transition-colors outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`} 
+                onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
+                title={leftSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              >
+                <SidebarSimple size={20} />
+              </button>
+            </div>
             
             {/* Mini View (Icons only) */}
-            <div className={`sidebar-mini-view ${leftSidebarCollapsed ? 'flex' : 'hidden'} flex-col items-center pt-16 gap-6 h-full w-full`}>
-              <PdfIcon size={24} className="opacity-70 mt-4 cursor-pointer" />
+            <div className="sidebar-mini-view flex-col items-center pt-3 gap-2.5 h-full w-full overflow-y-auto custom-scrollbar pb-6">
+              {/* Mini Action Buttons */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-2 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center justify-center"
+                title="Add sources"
+              >
+                {isUploading ? (
+                  <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                ) : (
+                  <Plus size={20} weight="bold" />
+                )}
+              </button>
+
+              {papers.length >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isCompareMode) {
+                      setIsCompareMode(false);
+                      clearCompareSelection();
+                    } else {
+                      setIsCompareMode(true);
+                      if (selectedPaper) setCompareSelection([selectedPaper.id]);
+                    }
+                  }}
+                  className={`p-2 rounded-lg transition-colors flex items-center justify-center ${
+                    isCompareMode
+                      ? 'bg-violet-50 text-violet-700'
+                      : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                  title={isCompareMode ? 'Cancel Compare' : 'Compare'}
+                >
+                  <ChartBar size={20} weight="bold" />
+                </button>
+              )}
+
+              {/* Divider before paper stack */}
+              <div className="w-6 h-[1.5px] bg-slate-200 rounded-full mx-auto my-1.5" />
+
+              {papers.map((paper) => {
+                const isSelected = selectedPaper?.id === paper.id;
+                const isInCompare = compareSelection.includes(paper.id);
+                const active = (isSelected && !isCompareMode) || (isInCompare && isCompareMode);
+                return (
+                  <button 
+                    key={paper.id}
+                    title={paper.name}
+                    onClick={() => {
+                        if (isCompareMode) {
+                          toggleCompareSelection(paper.id);
+                        } else {
+                          setSelectedPaperId(paper.id);
+                          const initial: Record<string, boolean> = {};
+                          ENTITY_GROUP_ORDER.forEach(k => initial[k] = false);
+                          setExpandedGroups(initial);
+                        }
+                    }}
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${active ? 'bg-[#edf2fa] opacity-100' : 'hover:bg-slate-50 opacity-70 hover:opacity-100'}`}
+                  >
+                    <PdfIcon size={26} />
+                  </button>
+                );
+              })}
             </div>
 
             {/* Main Sidebar Content */}
-            <div className={`sidebar-content h-full flex flex-col overflow-hidden ${leftSidebarCollapsed ? 'hidden' : ''}`}>
-              <div className="pt-14 space-y-1 px-4 pb-2">
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-72 transition-opacity duration-200 ${leftSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+              <div className="pt-3 space-y-2 px-4 pb-3">
                 <label className="block relative">
                   <input
                     ref={fileInputRef}
@@ -465,13 +535,13 @@ const AnalysePage = () => {
                     onChange={handleFileChange}
                     className="hidden"
                   />
-                  <div className="w-full py-2 px-4 bg-white border border-outline-variant text-on-surface hover:bg-surface-c rounded-full flex items-center justify-center gap-2 text-sm font-semibold shadow-sm transition-all cursor-pointer">
+                  <div className="w-full py-2 px-4 bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 rounded-full flex items-center justify-center gap-2 text-sm font-medium transition-colors cursor-pointer">
                     {isUploading ? (
                       <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
                     ) : (
-                      <Plus size={16} weight="bold" className="text-on-surface-variant" />
+                      <Plus size={16} weight="bold" className="text-slate-900" />
                     )}
-                    {isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Upload'}
+                    {isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add sources'}
                   </div>
                 </label>
                 
@@ -486,15 +556,22 @@ const AnalysePage = () => {
                         if (selectedPaper) setCompareSelection([selectedPaper.id]);
                       }
                     }}
-                    className={`w-full py-1.5 px-4 border rounded-full flex items-center justify-center gap-2 font-medium transition-colors ${isCompareMode ? 'bg-violet-100 border-violet-200 text-violet-700' : 'border-outline-variant text-on-surface-variant hover:bg-surface-container'}`}
+                    className={`w-full py-2 px-4 rounded-full flex items-center justify-center gap-2 text-sm transition-colors border ${
+                      isCompareMode 
+                        ? 'bg-violet-50 border-violet-200 text-violet-700 font-semibold' 
+                        : 'bg-white border-slate-200 text-slate-900 hover:bg-slate-50 font-medium'
+                    }`}
                   >
-                    {isCompareMode ? <X size={20} /> : <Equals size={20} />}
+                    {isCompareMode ? <X size={16} weight="bold" /> : <ChartBar size={16} weight="bold" className="text-slate-900" />}
                     {isCompareMode ? 'Cancel Compare' : 'Compare'}
                   </button>
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-6 space-y-1">
+              {/* Subtle divider before paper stack in uncollapsed state */}
+              <div className="mx-4 mb-2.5 h-[1px] bg-slate-200/60 shrink-0" />
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar px-3 pb-6 space-y-1.5">
                 {papers.map((paper) => {
                   const isSelected = selectedPaper?.id === paper.id;
                   const isInCompare = compareSelection.includes(paper.id);
@@ -513,11 +590,11 @@ const AnalysePage = () => {
                           setExpandedGroups(initial);
                         }
                       }}
-                      className={`p-3 relative group cursor-pointer transition-all flex items-center gap-3 rounded-xl ${active ? 'bg-[#f0f2f8] shadow-sm ring-1 ring-black/5' : 'bg-white hover:bg-slate-50'}`}
+                      className={`p-3 relative group cursor-pointer transition-all flex items-center gap-3 rounded-2xl ${active ? 'bg-[#edf2fa] opacity-100' : 'bg-white hover:bg-slate-50 opacity-70 hover:opacity-100'}`}
                     >
                       <PdfIcon size={24} className="shrink-0" />
                       <div className="flex-1 min-w-0 pr-6">
-                        <h4 className={`text-[14px] line-clamp-2 leading-tight ${active ? 'font-semibold text-slate-900' : 'font-medium text-slate-700'}`}>{paper.name}</h4>
+                        <h4 className={`text-[14px] line-clamp-2 leading-tight ${active ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>{paper.name}</h4>
                       </div>
                       
                       {/* Delete Menu Trigger */}
@@ -527,7 +604,7 @@ const AnalysePage = () => {
                           event.stopPropagation();
                           void deletePaper(paper);
                         }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1.5 text-on-surface-muted hover:text-red-500 transition-opacity bg-white rounded-md shadow-sm"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition-colors"
                         title="Delete paper"
                       >
                         <TrashSimple size={16} weight="regular" />
@@ -609,21 +686,12 @@ const AnalysePage = () => {
                 </div>
               </div>
               
-              {/* iframe Container */}
-              <div className="flex-1 w-full max-w-5xl mx-auto p-4 md:p-8 flex flex-col">
+              {/* Main Content Area */}
+              <div className="flex-1 w-full flex flex-col min-h-0">
                 {isCompareMode && activePapers.length >= 2 ? (
-                  <div className="flex-1 grid grid-cols-2 gap-4 h-full">
-                    {[activePapers[0], activePapers[1]].map((p, idx) => (
-                      <div key={idx} className="flex flex-col bg-white rounded-xl shadow-xl border border-white overflow-hidden h-[min(80vh,800px)]">
-                        <div className="bg-surface-bright p-3 border-b border-outline-variant text-xs font-semibold truncate">{p.name}</div>
-                        <div className="flex-1 flex items-center justify-center bg-surface-c">
-                           <span className="text-sm text-on-surface-muted text-center px-4">PDF viewer optimization in compare mode coming soon.</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <CompareMatrix papers={activePapers} />
                 ) : (
-                  <div className="flex-1 bg-white rounded-xl shadow-xl border border-white overflow-hidden flex flex-col w-full h-[min(80vh,1100px)] relative">
+                  <div className="flex-1 bg-white border border-outline-variant overflow-hidden flex flex-col w-full h-[min(85vh,1200px)] relative">
                     {isViewerLoading ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-c/50 backdrop-blur-sm z-10">
                         <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-200 border-t-teal-600 mb-4" />
@@ -657,62 +725,70 @@ const AnalysePage = () => {
           <aside className={`sidebar-transition border-l border-outline-variant bg-surface flex flex-col shrink-0 relative ${rightSidebarCollapsed ? 'sidebar-collapsed' : 'w-[400px]'}`} id="insights-sidebar">
             {/* Integrated Sidebar Toggle (Top Left) */}
             <button 
-              className="toggle-btn-right absolute left-3 top-3 z-50 w-8 h-8 bg-surface-container-low border border-outline-variant rounded-full flex items-center justify-center shadow-sm hover:bg-surface-container-high transition-all"
+              className="toggle-btn-right absolute left-3 top-3 z-50 p-1.5 text-on-surface-variant rounded-full flex items-center justify-center hover:bg-surface-low transition-all outline-none focus:outline-none focus:ring-0"
               onClick={() => setRightSidebarCollapsed(!rightSidebarCollapsed)}
             >
-              <SidebarSimple size={18} className="rotate-180" />
+              <SidebarSimple size={20} className="rotate-180" />
             </button>
 
             {/* Mini View (Icons only) */}
-            <div className={`sidebar-mini-view ${rightSidebarCollapsed ? 'flex' : 'hidden'} flex-col items-center pt-16 gap-6 h-full w-full`}>
-              <button onClick={() => { setRightSidebarMode('entities'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors">
-                <ListNumbers className={`text-xl ${rightSidebarMode === 'entities' ? 'text-primary' : 'text-on-surface-variant'}`} />
-              </button>
-              <button onClick={() => { setRightSidebarMode('graph'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors">
+            <div className={`sidebar-mini-view ${rightSidebarCollapsed ? 'flex opacity-100' : 'hidden opacity-0 pointer-events-none'} flex-col items-center pt-16 gap-6 h-full w-full transition-opacity duration-200`}>
+              {!isCompareMode && (
+                <button onClick={() => { setRightSidebarMode('entities'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors" title="Entity Index">
+                  <ListNumbers className={`text-xl ${rightSidebarMode === 'entities' ? 'text-primary' : 'text-on-surface-variant'}`} />
+                </button>
+              )}
+              <button onClick={() => { setRightSidebarMode('graph'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors" title="Graph View">
                 <Graph className={`text-xl ${rightSidebarMode === 'graph' ? 'text-primary' : 'text-on-surface-variant'}`} />
               </button>
             </div>
 
             {/* Main Sidebar Content */}
-            <div className={`sidebar-content h-full flex flex-col overflow-hidden ${rightSidebarCollapsed ? 'hidden' : ''}`}>
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-[400px] transition-opacity duration-200 ${rightSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
               <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14, marginTop: 56 }}>
-                <div style={{
-                  display: "inline-flex", gap: 2,
-                  padding: 5, borderRadius: 999,
-                  border: "none", background: "var(--surface-c)"
-                }}>
-                  {(
-                    [
-                      { id: 'entities', icon: ListNumbers, label: 'Entity Index' },
-                      { id: 'graph', icon: Graph, label: 'Graph View' }
-                    ] as const
-                  ).map(({ id, icon: Icon, label }) => {
-                    const isActive = rightSidebarMode === id;
-                    const expanded = hoverRightSidebarMode === id;
-                    return (
-                      <button key={id}
-                        data-tab={id}
-                        onClick={() => setRightSidebarMode(id)}
-                        onMouseEnter={() => setHoverRightSidebarMode(id)}
-                        onMouseLeave={() => setHoverRightSidebarMode(null)}
-                        style={{
-                          display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
-                          height: 34, borderRadius: 999,
-                          width: expanded ? "auto" : 38,
-                          padding: expanded ? "0 14px" : 0,
-                          background: isActive ? "#FFFFFF" : "transparent",
-                          boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
-                          border: "none", cursor: "pointer",
-                          fontSize: 13, fontWeight: isActive ? 600 : 500,
-                          color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
-                          whiteSpace: "nowrap", overflow: "hidden",
-                          transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
-                        }}>
-                          {expanded ? <span>{label}</span> : <Icon size={16} />}
-                        </button>
-                    );
-                  })}
-                </div>
+                {!isCompareMode ? (
+                  <div style={{
+                    display: "inline-flex", gap: 2,
+                    padding: 5, borderRadius: 999,
+                    border: "none", background: "var(--surface-c)"
+                  }}>
+                    {(
+                      [
+                        { id: 'entities', icon: ListNumbers, label: 'Entity Index' },
+                        { id: 'graph', icon: Graph, label: 'Graph View' }
+                      ] as const
+                    ).map(({ id, icon: Icon, label }) => {
+                      const isActive = rightSidebarMode === id;
+                      const expanded = hoverRightSidebarMode === id;
+                      return (
+                        <button key={id}
+                          data-tab={id}
+                          onClick={() => setRightSidebarMode(id)}
+                          onMouseEnter={() => setHoverRightSidebarMode(id)}
+                          onMouseLeave={() => setHoverRightSidebarMode(null)}
+                          style={{
+                            display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+                            height: 34, borderRadius: 999,
+                            width: expanded ? "auto" : 38,
+                            padding: expanded ? "0 14px" : 0,
+                            background: isActive ? "#FFFFFF" : "transparent",
+                            boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                            border: "none", cursor: "pointer",
+                            fontSize: 13, fontWeight: isActive ? 600 : 500,
+                            color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
+                            whiteSpace: "nowrap", overflow: "hidden",
+                            transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
+                          }}>
+                            {expanded ? <span>{label}</span> : <Icon size={16} />}
+                          </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center">
+                    <span className="text-[14px] font-semibold text-slate-800 tracking-tight">Graph View</span>
+                  </div>
+                )}
 
                 {/* Export options pinned right */}
                 <div
@@ -767,7 +843,7 @@ const AnalysePage = () => {
               </div>
 
               {/* Entity Index Content */}
-              {rightSidebarMode === 'entities' ? (
+              {(!isCompareMode && rightSidebarMode === 'entities') ? (
                 <>
                   <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
                     {groupedEntities.map((group) => {
@@ -783,7 +859,7 @@ const AnalysePage = () => {
                           {/* Accordion Row (.ent-cat) */}
                           <button 
                             type="button"
-                            className="ent-cat"
+                            className="ent-cat group"
                             onClick={empty ? undefined : () => {
                               toggleGroup(group.label);
                             }}
@@ -815,23 +891,20 @@ const AnalysePage = () => {
                             <span style={{ flexShrink: 0 }}>
                               {empty ? (
                                 <span style={{ fontSize: 14, color: "var(--on-surface-variant)" }}>–</span>
+                              ) : isExpanded ? (
+                                <span className="relative flex items-center justify-center min-w-[24px] h-[20px] text-on-surface-variant">
+                                  <CaretUp size={16} weight="bold" />
+                                </span>
                               ) : (
-                                <span style={{ position: "relative", display: "inline-grid", placeItems: "center", minWidth: 22, height: 16 }}>
-                                  <span className="ent-count" style={{
-                                    fontSize: 13.5, fontWeight: 600, color: "var(--on-surface-variant)",
-                                    opacity: isExpanded ? 0 : 1
-                                  }}>{group.termCount}</span>
-                                  <span className={"ent-caret" + (isExpanded ? " is-open" : "")}
-                                    style={{
-                                      position: "absolute", inset: 0, margin: "auto",
-                                      transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                                      transition: "transform .2s ease, opacity .15s ease",
-                                      fontSize: 9, color: "var(--on-surface-variant)",
-                                      display: "inline-grid", placeItems: "center",
-                                      fontWeight: "bold"
-                                    }}
-                                  >
-                                    ▼
+                                <span className="relative flex items-center justify-center min-w-[24px] h-[20px]">
+                                  {/* Entity Count: visible without cursor, fades out on hover */}
+                                  <span className="transition-all duration-200 text-[13px] font-semibold text-on-surface-variant group-hover:opacity-0 group-hover:scale-75">
+                                    {group.termCount}
+                                  </span>
+                                  
+                                  {/* Caret: animates into view on hover */}
+                                  <span className="absolute inset-0 m-auto flex items-center justify-center transition-all duration-200 text-on-surface-variant opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100">
+                                    <CaretDown size={16} weight="bold" />
                                   </span>
                                 </span>
                               )}
@@ -899,21 +972,6 @@ const AnalysePage = () => {
           </aside>
         )}
       </main>
-
-      {/* Global Footer / Status Bar */}
-      <footer className="h-8 border-t border-outline-variant bg-surface flex items-center px-6 justify-between text-[11px] text-on-surface-variant font-mono shrink-0">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse-slow"></span>
-            <span>AI Extraction Ready</span>
-          </div>
-          <div>Project: PhytoQuery Dashboard</div>
-        </div>
-        <div className="flex items-center gap-4">
-          <span>{activePapers.length > 0 ? 'Active' : 'Idle'}</span>
-          {uploadProgress.total > 0 && <span>Processed: {uploadProgress.total}</span>}
-        </div>
-      </footer>
     </div>
   );
 };

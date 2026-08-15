@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -1943,7 +1943,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         {/* Accordion Row (.ent-cat) */}
                         <button 
                           type="button"
-                          className="ent-cat"
+                          className="ent-cat group"
                           onClick={empty ? undefined : () => {
                             toggleEntityGroup(group.label);
                           }}
@@ -1975,23 +1975,20 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                           <span style={{ flexShrink: 0 }}>
                             {empty ? (
                               <span style={{ fontSize: 14, color: "var(--on-surface-variant)" }}>–</span>
+                            ) : isExpanded ? (
+                              <span className="relative flex items-center justify-center min-w-[24px] h-[20px] text-on-surface-variant">
+                                <CaretUp size={16} weight="bold" />
+                              </span>
                             ) : (
-                              <span style={{ position: "relative", display: "inline-grid", placeItems: "center", minWidth: 22, height: 16 }}>
-                                <span className="ent-count" style={{
-                                  fontSize: 13.5, fontWeight: 600, color: "var(--on-surface-variant)",
-                                  opacity: isExpanded ? 0 : 1
-                                }}>{group.termCount}</span>
-                                <span className={"ent-caret" + (isExpanded ? " is-open" : "")}
-                                  style={{
-                                    position: "absolute", inset: 0, margin: "auto",
-                                    transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                                    transition: "transform .2s ease, opacity .15s ease",
-                                    fontSize: 9, color: "var(--on-surface-variant)",
-                                    display: "inline-grid", placeItems: "center",
-                                    fontWeight: "bold"
-                                  }}
-                                >
-                                  ▼
+                              <span className="relative flex items-center justify-center min-w-[24px] h-[20px]">
+                                {/* Entity Count: visible without cursor, fades out on hover */}
+                                <span className="transition-all duration-200 text-[13px] font-semibold text-on-surface-variant group-hover:opacity-0 group-hover:scale-75">
+                                  {group.termCount}
+                                </span>
+                                
+                                {/* Caret: animates into view on hover */}
+                                <span className="absolute inset-0 m-auto flex items-center justify-center transition-all duration-200 text-on-surface-variant opacity-0 scale-75 group-hover:opacity-100 group-hover:scale-100">
+                                  <CaretDown size={16} weight="bold" />
                                 </span>
                               </span>
                             )}

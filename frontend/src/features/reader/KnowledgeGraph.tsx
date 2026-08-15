@@ -668,10 +668,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
   const tooltipInfo = tooltip ? nodeInfo.get(tooltip.nodeId) : null;
 
   return (
-    <div className="mt-8 flex flex-col">
-      <h2 className="text-[14px] font-semibold text-on-surface font-display mb-3 px-2">
-        Graph View
-      </h2>
+    <div className="flex flex-col">
 
       <div
         className={

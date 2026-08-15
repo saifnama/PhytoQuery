@@ -1,4 +1,4 @@
-﻿/* =============================================================================
+/* =============================================================================
    PhytoQuery â€” design system
    ============================================================================= */
 
@@ -1411,12 +1411,20 @@ mark.ner-default {
   }
 
   .sidebar-transition {
-    transition: width 0.2s ease, opacity 0.2s ease;
+    transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.28s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
     overflow: hidden;
+    will-change: width;
   }
 
-  .sidebar-collapsed { width: 56px !important; }
-  .sidebar-collapsed .sidebar-content { display: none; }
+  .sidebar-mini-view { display: none; }
+  .sidebar-content { display: flex; }
+
+  .sidebar-collapsed { 
+    width: 56px !important; 
+    min-width: 56px !important; 
+    max-width: 56px !important;
+  }
+  .sidebar-collapsed .sidebar-content { display: none !important; }
   .sidebar-collapsed .sidebar-mini-view { display: flex !important; }
   .animate-pulse-slow { animation: pulse-slow 2.5s ease-in-out infinite; }
 }
