@@ -100,7 +100,6 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
           }}
         />
 
-        <TypingIndicator />
         <ScrollToBottomButton />
       </ThreadPrimitive.Viewport>
 
@@ -149,27 +148,7 @@ const ExportAnswerPdfButton: FC = () => {
   );
 };
 
-/** Typing indicator — three staggered-delay bouncing dots inside a
- * muted bubble. The `animate-typing-dot` keyframe is defined in index.css. */
-const TypingIndicator: FC = () => {
-  const thread = useThread();
-  if (!thread.isRunning) return null;
-  return (
-    <div className="flex justify-start">
-      <div className="inline-flex items-center gap-1 rounded-2xl bg-muted px-4 py-3">
-        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot" />
-        <span
-          className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot"
-          style={{ animationDelay: '0.2s' }}
-        />
-        <span
-          className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot"
-          style={{ animationDelay: '0.4s' }}
-        />
-      </div>
-    </div>
-  );
-};
+
 
 const ScrollToBottomButton: FC = () => (
   <ThreadPrimitive.ScrollToBottom asChild>
@@ -363,6 +342,8 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
   const sources = customData.sources ?? [];
   const citations = customData.citations ?? [];
+  const text = readMessageText(message);
+  const isPending = !text;
 
   const handleCitationClick = useCallback(
     (chunkId: string) => {
@@ -376,13 +357,21 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   return (
     <CitationClickContext.Provider value={handleCitationClick}>
       <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group animate-in fade-in slide-in-from-bottom-1 duration-150">
-        <div className="inline-block max-w-[85%] rounded-2xl border border-border bg-card px-4 py-3 text-foreground shadow-sm">
-          <MessagePrimitive.Content components={{ Text: MarkdownText }} />
-        </div>
+        {isPending ? (
+          <div className="py-2.5 px-1 flex items-center">
+            <span className="h-3.5 w-3.5 rounded-full bg-foreground animate-chatgpt-dot" />
+          </div>
+        ) : (
+          <>
+            <div className="inline-block max-w-[85%] rounded-2xl border border-border bg-card px-4 py-3 text-foreground shadow-sm">
+              <MessagePrimitive.Content components={{ Text: MarkdownText }} />
+            </div>
 
-        <AssistantActionBar />
+            <AssistantActionBar />
 
-        <BranchPicker />
+            <BranchPicker />
+          </>
+        )}
       </MessagePrimitive.Root>
     </CitationClickContext.Provider>
   );
