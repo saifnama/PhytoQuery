@@ -1,18 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { useNavigate, useLocation } from '@tanstack/react-router';
 import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import {
   Plus,
   FileText,
-  FilePdf,
   FileDoc,
   File as FileIcon,
-  StackSimple,
   Check,
-  Trash,
-  Warning,
+  TrashSimple,
   SidebarSimple,
-  Eye,
+  Fire,
   X,
   ArrowsOutSimple,
 } from '@phosphor-icons/react';
@@ -36,20 +33,38 @@ interface RagLocationState {
   };
 }
 
-/** Return the correct Phosphor icon for a given file extension. */
-function FileTypeIcon({ ext, size = 20 }: { ext: string; size?: number }) {
-  const className = 'text-primary flex-shrink-0';
+const PdfIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+    <rect width="160" height="160" rx="28" fill="#E21101"/>
+    <text
+      x="50%"
+      y="54%"
+      textAnchor="middle"
+      fill="#FFFFFF"
+      fontFamily="Arial, Helvetica, sans-serif"
+      fontSize="56"
+      fontWeight="700"
+      dominantBaseline="middle"
+    >
+      PDF
+    </text>
+  </svg>
+);
+
+/** Return the correct icon for a given file extension. */
+function FileTypeIcon({ ext, size = 24, className = "" }: { ext: string; size?: number; className?: string }) {
+  const defaultClass = 'text-primary flex-shrink-0';
   switch (ext) {
     case '.pdf':
-      return <FilePdf size={size} weight="duotone" className={className} />;
+      return <PdfIcon size={size} className={className || 'shrink-0'} />;
     case '.doc':
     case '.docx':
-      return <FileDoc size={size} weight="duotone" className={className} />;
+      return <FileDoc size={size} weight="duotone" className={className || defaultClass} />;
     case '.txt':
     case '.md':
-      return <FileText size={size} weight="duotone" className={className} />;
+      return <FileText size={size} weight="duotone" className={className || defaultClass} />;
     default:
-      return <FileIcon size={size} weight="duotone" className={className} />;
+      return <FileIcon size={size} weight="duotone" className={className || defaultClass} />;
   }
 }
 
@@ -70,10 +85,11 @@ function CustomCheckbox({
         transition-all duration-150 border
         ${
           checked
-            ? 'bg-teal-600 border-teal-600 text-white'
+            ? 'text-white'
             : 'bg-background border-outline hover:border-on-surface-muted'
         }
       `}
+      style={checked ? { backgroundColor: '#ff6dba', borderColor: '#ff6dba' } : undefined}
     >
       {checked && <Check size={14} weight="bold" />}
     </button>
@@ -101,15 +117,13 @@ function SimplePdfViewer({
 // chatStore (key `pq_chat_state`), same sessionStorage backing.
 const RagPage: React.FC = () => {
   const navigate = useNavigate();
-  const locationState = useRouterState({
-    select: (s) => s.location.state as unknown as RagLocationState | null,
-  });
+  const location = useLocation();
+  const locationState = location.state as RagLocationState | undefined;
   // Upload status + isUploading live in the shared Zustand store so
   // RagPage and the layout Sidebar always agree on whether an upload
   // is in flight (see frontend/src/stores/uploadStore.ts). The store
   // selectors use individual getters so re-renders only fire when
   // the slice the component reads actually changes.
-  const uploadStatus = useUploadStore((s) => s.status);
   const setUploadStatus = useUploadStore((s) => s.setStatus);
   const isUploading = useUploadStore((s) => s.isUploading);
   const setIsUploading = useUploadStore((s) => s.setIsUploading);
@@ -399,9 +413,6 @@ const RagPage: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  // --- Selection logic ---
-  const allSelected = uploadedFiles.length > 0 && uploadedFiles.every((f) => f.selected);
-
   const handleDeleteFile = async (filename: string, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't toggle checkbox
     try {
@@ -415,11 +426,6 @@ const RagPage: React.FC = () => {
     }
   };
 
-  const toggleSelectAll = () => {
-    const newVal = !allSelected;
-    setUploadedFiles((prev) => prev.map((f) => ({ ...f, selected: newVal })));
-  };
-
   const toggleFile = (name: string) => {
     setUploadedFiles((prev) =>
       prev.map((f) => (f.name === name ? { ...f, selected: !f.selected } : f))
@@ -428,7 +434,7 @@ const RagPage: React.FC = () => {
 
   const handleResetAll = async () => {
     const confirmMessage =
-      "Are you sure you want to permanently delete ALL chat history and source files? This cannot be undone.";
+      "Delete all chats and source files? This cannot be undone.";
     if (window.confirm(confirmMessage)) {
       try {
         await ragApi.resetChat();
@@ -463,72 +469,77 @@ const RagPage: React.FC = () => {
         }`}
       >
         {sidebarCollapsed ? (
-          /* ── Collapsed: icon strip ── */
-          <div className="flex flex-col items-center py-3 space-y-3 h-full">
-            {/* Toggle */}
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className="p-2 rounded-lg hover:bg-surface-c text-on-surface-variant hover:text-on-surface transition-colors"
-              title="Expand sources"
-            >
-              <SidebarSimple size={18} />
-            </button>
-
-            <div className="w-6 border-t border-surface-c" />
-
-            {/* Add */}
-            <button
-              onClick={handleUploadClick}
-              disabled={isUploading}
-              className="p-2 rounded-lg hover:bg-surface-c text-on-surface-variant hover:text-on-surface transition-colors disabled:opacity-50"
-              title="Add sources"
-            >
-              <Plus size={18} />
-            </button>
-
-            {/* File icons */}
-            {uploadedFiles.map((file) => (
+          /* ── Collapsed: icon strip matching Compare mode ── */
+          <div className="flex flex-col h-full w-full">
+            {/* Top Header Bar matching expanded h-14 */}
+            <div className="h-14 border-b border-surface-c flex items-center justify-center shrink-0">
               <button
-                key={file.name}
-                onClick={() => openPdfViewer(file)}
-                className={`p-1.5 rounded-lg transition-colors ${
-                  activePdfFile?.name === file.name
-                    ? 'bg-primary/10 text-primary ring-1 ring-primary/20'
-                    : file.selected
-                      ? 'bg-surface-c text-primary'
-                      : 'text-on-surface-muted hover:text-on-surface-variant'
-                }`}
-                title={file.name}
+                onClick={() => setSidebarCollapsed(false)}
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c transition-colors outline-none"
+                title="Expand sidebar"
               >
-                <FileTypeIcon ext={file.fileType} size={18} />
+                <SidebarSimple size={20} />
               </button>
-            ))}
+            </div>
+
+            {/* Mini View Icons */}
+            <div className="flex flex-col items-center pt-3 gap-2.5 flex-1 w-full overflow-y-auto custom-scrollbar pb-6">
+              {/* Add sources button */}
+              <button
+                type="button"
+                onClick={handleUploadClick}
+                disabled={isUploading}
+                className="p-2 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center justify-center disabled:opacity-50"
+                title="Add sources"
+              >
+                {isUploading ? (
+                  <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                ) : (
+                  <Plus size={20} weight="bold" />
+                )}
+              </button>
+
+              {/* File icons */}
+              {uploadedFiles.map((file) => {
+                const isActive = activePdfFile?.name === file.name;
+                return (
+                  <button
+                    key={file.name}
+                    onClick={() => openPdfViewer(file)}
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all shrink-0 border-0 outline-none shadow-none ${
+                      isActive
+                        ? 'bg-[#fff5fa] opacity-100'
+                        : file.selected
+                          ? 'hover:bg-slate-50 opacity-100'
+                          : 'hover:bg-slate-50 opacity-60 hover:opacity-100'
+                    }`}
+                    title={file.name}
+                  >
+                    <FileTypeIcon ext={file.fileType} size={26} />
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : (
           /* ── Expanded: full panel ── */
           <>
             {/* Header */}
-            <div className="px-5 pt-5 pb-3 flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <StackSimple size={18} weight="duotone" className="text-on-surface-muted" />
-                <h3 className="text-sm font-bold text-on-surface tracking-tight">Sources</h3>
-              </div>
-              <div className="flex items-center space-x-1">
-                <span className="text-xs text-on-surface-muted font-medium tabular-nums">
-                  {uploadedFiles.length}
-                </span>
-                <button
-                  onClick={() => setSidebarCollapsed(true)}
-                  className="p-1 rounded hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
-                  title="Collapse sidebar"
-                >
-                  <SidebarSimple size={16} />
-                </button>
-              </div>
+            <div className="px-3.5 h-14 border-b border-surface-c flex items-center justify-between shrink-0">
+              <span className="!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap">
+                Sources
+              </span>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c transition-colors outline-none"
+                title="Collapse sidebar"
+              >
+                <SidebarSimple size={20} />
+              </button>
             </div>
 
             {/* Upload controls */}
-            <div className="px-4 pb-3 space-y-2">
+            <div className="px-4 py-3 space-y-2">
               {/* Parser type toggle */}
               <div className="flex items-center bg-surface-c rounded-lg p-1">
                 <button
@@ -536,9 +547,10 @@ const RagPage: React.FC = () => {
                   onClick={() => setParserType('pymupdf')}
                   className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
                     parserType === 'pymupdf'
-                      ? 'bg-background text-primary shadow-sm'
+                      ? 'bg-background shadow-sm font-semibold'
                       : 'text-on-surface-variant hover:text-on-surface'
                   }`}
+                  style={parserType === 'pymupdf' ? { color: '#ff6dba' } : undefined}
                 >
                   Fast
                 </button>
@@ -547,9 +559,10 @@ const RagPage: React.FC = () => {
                   onClick={() => setParserType('docling')}
                   className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
                     parserType === 'docling'
-                      ? 'bg-background text-primary shadow-sm'
+                      ? 'bg-background shadow-sm font-semibold'
                       : 'text-on-surface-variant hover:text-on-surface'
                   }`}
+                  style={parserType === 'docling' ? { color: '#ff6dba' } : undefined}
                 >
                   Detailed
                 </button>
@@ -566,103 +579,88 @@ const RagPage: React.FC = () => {
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-primary/10 hover:bg-primary/20 text-primary rounded-lg transition-all font-medium text-sm disabled:opacity-50"
+                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg transition-all font-medium text-sm disabled:opacity-50 border hover:opacity-90"
+                style={{
+                  backgroundColor: '#ffecf6',
+                  color: '#d63384',
+                  borderColor: '#fbcfe8',
+                }}
               >
-                <Plus size={16} />
+                {isUploading ? (
+                  <div className="animate-spin h-4 w-4 border-2 border-[#ff6dba]/30 border-t-[#ff6dba] rounded-full" />
+                ) : (
+                  <Plus size={16} weight="bold" />
+                )}
                 <span>{isUploading ? 'Uploading...' : 'Add Sources'}</span>
               </button>
-              {uploadStatus && (
-                <p
-                  className={`text-xs ${
-                    uploadStatus.includes('failed') ? 'text-red-500' : 'text-green-600'
-                  }`}
-                >
-                  {uploadStatus}
-                </p>
-              )}
             </div>
 
-            {/* Select All / File List */}
-            <div className="flex-1 overflow-y-auto border-t border-surface-c">
+            {/* File List */}
+            <div className="flex-1 overflow-y-auto">
               {uploadedFiles.length > 0 ? (
-                <>
-                  {/* Select All */}
-                  <button
-                    onClick={toggleSelectAll}
-                    className="w-full flex items-center justify-between px-5 py-3 hover:bg-surface-c transition-colors border-b border-surface-c"
-                  >
-                    <span className="text-xs font-medium text-on-surface-muted">Select all sources</span>
-                    <CustomCheckbox checked={allSelected} onChange={toggleSelectAll} />
-                  </button>
-
-                  {/* File rows */}
-                  <div className="py-1">
-                    {uploadedFiles.map((file) => (
-                      <div
-                        key={file.name}
-                        onClick={() => openPdfViewer(file)}
-                        className={`w-full flex items-center space-x-3 px-5 py-2.5 transition-colors group cursor-pointer ${
-                          activePdfFile?.name === file.name
-                            ? 'bg-primary/10/80 ring-1 ring-inset ring-primary/20'
-                            : 'hover:bg-surface-c'
-                        }`}
-                      >
-                        <FileTypeIcon ext={file.fileType} size={20} />
-                        <div className="flex-1 min-w-0 text-left">
-                          <p className="text-sm text-on-surface truncate leading-tight">
-                            {displayName(file.name)}
+                <div className="py-1">
+                  {uploadedFiles.map((file) => (
+                    <div
+                      key={file.name}
+                      onClick={() => openPdfViewer(file)}
+                      className={`w-full flex items-center space-x-3 px-4 py-2.5 transition-colors group cursor-pointer border-0 shadow-none outline-none ${
+                        activePdfFile?.name === file.name
+                          ? 'bg-[#fff5fa]'
+                          : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <FileTypeIcon ext={file.fileType} size={24} />
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="text-sm text-on-surface truncate leading-tight font-medium">
+                          {displayName(file.name)}
+                        </p>
+                        {(file.authors || file.journal) && (
+                          <p className="text-[10px] text-on-surface-muted truncate leading-tight mt-0.5">
+                            {file.authors && <span>{file.authors}</span>}
+                            {file.authors && file.journal && <span> · </span>}
+                            {file.journal && <span className="italic">{file.journal}</span>}
                           </p>
-                          {(file.authors || file.journal) && (
-                            <p className="text-[10px] text-on-surface-muted truncate leading-tight mt-0.5">
-                              {file.authors && <span>{file.authors}</span>}
-                              {file.authors && file.journal && <span> · </span>}
-                              {file.journal && <span className="italic">{file.journal}</span>}
-                            </p>
-                          )}
-                          {file.summary && (
-                            <p className="text-[10px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
-                              {file.summary}
-                            </p>
-                          )}
-                        </div>
-                        <Eye size={14} className={`flex-shrink-0 transition-colors ${activePdfFile?.name === file.name ? 'text-primary' : 'text-on-surface-muted group-hover:text-on-surface-variant'}`} />
-                        <button
-                          onClick={(e) => handleDeleteFile(file.name, e)}
-                          className="text-on-surface-muted hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
-                          title={`Remove ${file.name}`}
-                        >
-                          <Trash size={14} />
-                        </button>
-                        <div onClick={(e) => e.stopPropagation()}>
-                          <CustomCheckbox
-                            checked={file.selected}
-                            onChange={() => toggleFile(file.name)}
-                          />
-                        </div>
+                        )}
+                        {file.summary && (
+                          <p className="text-[10px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
+                            {file.summary}
+                          </p>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                </>
+                      <button
+                        onClick={(e) => handleDeleteFile(file.name, e)}
+                        className="text-slate-400 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
+                        title={`Remove ${file.name}`}
+                      >
+                        <TrashSimple size={16} weight="regular" />
+                      </button>
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <CustomCheckbox
+                          checked={file.selected}
+                          onChange={() => toggleFile(file.name)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <div className="text-center py-16 px-4">
                   <FileText size={36} className="text-on-surface-muted/30 mx-auto mb-3" />
                   <p className="text-xs text-on-surface-muted leading-relaxed">
                     No sources added yet.
-                    <br />
-                    Upload research papers to get started.
                   </p>
                 </div>
               )}
             </div>
             
-            {/* Sidebar Footer: Clear All */}
-            <div className="p-4 border-t border-surface-c bg-surface-c/50 mt-auto">
+            {/* Sidebar Footer: Delete Chats */}
+            <div className="p-4 bg-background mt-auto">
               <button
                 onClick={handleResetAll}
-                className="w-full flex items-center justify-center space-x-2 py-2 px-4 bg-background border border-red-200 hover:bg-red-50 text-red-600 rounded-lg transition-all font-medium text-xs shadow-sm hover:shadow"
+                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-background border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 rounded-full transition-all font-semibold text-sm shadow-sm hover:shadow"
               >
-                <Warning size={14} weight="bold" />
-                <span>Clear All Data</span>
+                <Fire size={18} weight="regular" />
+                <span>Delete Chats</span>
               </button>
             </div>
           </>

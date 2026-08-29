@@ -445,9 +445,9 @@ const AnalysePage = () => {
           <aside className={`sidebar-transition border-r border-outline-variant bg-surface-bright flex flex-col shrink-0 relative ${leftSidebarCollapsed ? 'sidebar-collapsed' : 'w-72'}`} id="library-sidebar">
             {/* Unified Top Header Bar */}
             <div className="px-3.5 h-14 border-b border-outline-variant/40 flex items-center justify-between shrink-0">
-              <h2 className={`text-[18px] font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-200 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
+              <span className={`!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-200 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
                 Sources
-              </h2>
+              </span>
               <button 
                 className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low transition-colors outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`} 
                 onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}

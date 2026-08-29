@@ -45,8 +45,7 @@ import {
   PencilSimple,
   CaretLeft,
   CaretRight,
-  X,
-  FilePdf,
+  Export,
 } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
@@ -82,9 +81,13 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   return (
     <ThreadPrimitive.Root
       className="flex h-full flex-col bg-card"
-      style={{ ['--thread-max-width' as string]: '44rem' }}
+      style={{
+        ['--thread-max-width' as string]: '50rem',
+        ['--turn-gap-prompt-to-answer' as string]: '36px',
+        ['--turn-gap-answer-to-prompt' as string]: '50px',
+      }}
     >
-      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-6 flex flex-col gap-y-6">
+      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-8 flex flex-col">
         <ThreadPrimitive.Empty>
           <div className="flex h-full items-center justify-center text-muted-foreground">
             {emptyContent ?? <DefaultEmpty />}
@@ -141,9 +144,10 @@ const ExportAnswerPdfButton: FC = () => {
       variant="ghost"
       size="icon-xs"
       onClick={handleExport}
-      tooltip="Export Chat"
+      tooltip="Export"
+      className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
     >
-      <FilePdf size={14} weight="regular" />
+      <Export size={14} weight="regular" />
     </TooltipIconButton>
   );
 };
@@ -154,11 +158,11 @@ const ScrollToBottomButton: FC = () => (
   <ThreadPrimitive.ScrollToBottom asChild>
     <TooltipIconButton
       type="button"
-      variant="default"
+      variant="outline"
       size="icon-sm"
       side="left"
       tooltip="Scroll to latest"
-      className="absolute bottom-4 right-4 rounded-full shadow-md disabled:hidden"
+      className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-md flex items-center justify-center p-0 disabled:hidden transition-transform active:scale-95"
     >
       <ArrowDown size={16} weight="bold" />
     </TooltipIconButton>
@@ -170,8 +174,7 @@ const DefaultEmpty: FC = () => (
     <CardContent className="flex flex-col items-center gap-2 text-center">
       <CardTitle className="text-base">Ask about your papers</CardTitle>
       <CardDescription className="text-center">
-        Upload PDFs in the sidebar, then ask questions. Click a citation
-        superscript to see the exact passage in the paper.
+        Upload PDFs in the sidebar, then ask questions.
       </CardDescription>
     </CardContent>
   </Card>
@@ -209,6 +212,15 @@ const CitationLink: FC<{
 
 const markdownComponents = memoizeMarkdownComponents({
   a: CitationLink,
+  hr: () => <hr className="my-4 border-0 border-t border-slate-200" />,
+  p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed text-[15px] text-slate-800">{children}</p>,
+  h1: ({ children }) => <h1 className="text-base font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-[15px] font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-[14px] font-bold text-slate-900 mt-2 mb-1 first:mt-0">{children}</h3>,
+  ul: ({ children }) => <ul className="list-disc pl-5 mb-2.5 space-y-1 text-[15px] text-slate-800">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 mb-2.5 space-y-1.5 text-[15px] text-slate-800">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
 });
 
 const MarkdownText: FC = () => {
@@ -245,39 +257,42 @@ const MarkdownText: FC = () => {
       smooth
       components={markdownComponents}
       preprocess={preprocess}
-      className="prose prose-sm max-w-none"
+      className="w-full text-slate-800 text-[15px] leading-relaxed"
     />
   );
 };
 
-const UserMessage: FC = () => (
-  <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group animate-in fade-in slide-in-from-bottom-1 duration-150">
-    <ComposerPrimitive.If editing>
-      <UserEditComposer />
-    </ComposerPrimitive.If>
+const UserMessage: FC = () => {
+  const message = useMessage();
+  const text = readMessageText(message);
 
-    <ComposerPrimitive.If editing={false}>
-      <div
-        className="inline-block max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm"
-        style={{ backgroundColor: PINK_USER_BG, color: '#1f2937' }}
-      >
-        <MessagePrimitive.Content
-          components={{
-            Text: ({ text }) => <span className="whitespace-pre-wrap">{text}</span>,
-          }}
-        />
-      </div>
+  return (
+    <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group animate-in fade-in slide-in-from-bottom-1 duration-150 pt-[var(--turn-gap-answer-to-prompt)] first:pt-0 pb-[var(--turn-gap-prompt-to-answer)]">
+      <ComposerPrimitive.If editing>
+        <UserEditComposer />
+      </ComposerPrimitive.If>
 
-      <UserActionBar />
+      <ComposerPrimitive.If editing={false}>
+        <div className="flex items-center gap-2 w-full justify-end">
+          <UserActionBar />
 
-      <BranchPicker />
-    </ComposerPrimitive.If>
-  </MessagePrimitive.Root>
-);
+          <div
+            className="max-w-[85%] rounded-[22px] px-5 py-2.5 text-[15px] leading-normal text-slate-800 break-words whitespace-pre-wrap select-text"
+            style={{ backgroundColor: PINK_USER_BG }}
+          >
+            {text}
+          </div>
+        </div>
+
+        <BranchPicker />
+      </ComposerPrimitive.If>
+    </MessagePrimitive.Root>
+  );
+};
 
 const UserEditComposer: FC = () => (
   <ComposerPrimitive.Root className="w-full max-w-2xl">
-    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-2 shadow-sm">
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm">
       <ComposerPrimitive.Input asChild>
         <Textarea
           className="min-h-[60px] resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -286,8 +301,7 @@ const UserEditComposer: FC = () => (
       </ComposerPrimitive.Input>
       <div className="flex justify-end gap-2">
         <ComposerPrimitive.Cancel asChild>
-          <Button type="button" variant="ghost" size="sm">
-            <X size={14} weight="bold" />
+          <Button type="button" variant="ghost" size="sm" className="rounded-full px-3 text-xs font-medium">
             Cancel
           </Button>
         </ComposerPrimitive.Cancel>
@@ -295,11 +309,10 @@ const UserEditComposer: FC = () => (
           <Button
             type="submit"
             size="sm"
-            className="text-white"
+            className="rounded-full px-4 text-xs font-medium text-white hover:opacity-90 transition-opacity"
             style={{ backgroundColor: PINK_ACCENT }}
           >
-            <Check size={14} weight="bold" />
-            Update
+            Done
           </Button>
         </ComposerPrimitive.Send>
       </div>
@@ -309,17 +322,17 @@ const UserEditComposer: FC = () => (
 
 const UserActionBar: FC = () => (
   <ActionBarPrimitive.Root
-    autohide="not-last"
-    className="mt-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100"
+    className="flex items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 data-[floating=true]:opacity-100"
   >
     <ActionBarPrimitive.Edit asChild>
       <TooltipIconButton
         type="button"
         variant="ghost"
         size="icon-xs"
-        tooltip="Edit this question"
+        tooltip="Edit"
+        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
       >
-        <PencilSimple size={12} weight="regular" />
+        <PencilSimple size={14} weight="regular" />
       </TooltipIconButton>
     </ActionBarPrimitive.Edit>
   </ActionBarPrimitive.Root>
@@ -363,7 +376,7 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
           </div>
         ) : (
           <>
-            <div className="inline-block max-w-[85%] rounded-2xl border border-border bg-card px-4 py-3 text-foreground shadow-sm">
+            <div className="w-full text-foreground leading-relaxed text-[15px] pt-0">
               <MessagePrimitive.Content components={{ Text: MarkdownText }} />
             </div>
 
@@ -382,14 +395,15 @@ const AssistantActionBar: FC = () => (
     hideWhenRunning
     autohide="not-last"
     autohideFloat="single-branch"
-    className="mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
+    className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
   >
     <ActionBarPrimitive.Copy asChild>
       <TooltipIconButton
         type="button"
         variant="ghost"
         size="icon-xs"
-        tooltip="Copy answer"
+        tooltip="Copy"
+        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
       >
         <MessagePrimitive.If copied>
           <Check size={14} weight="bold" className="text-teal-600" />
@@ -405,7 +419,8 @@ const AssistantActionBar: FC = () => (
         type="button"
         variant="ghost"
         size="icon-xs"
-        tooltip="Regenerate this answer"
+        tooltip="Regenerate"
+        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
       >
         <ArrowClockwise size={14} weight="regular" />
       </TooltipIconButton>
@@ -451,17 +466,17 @@ const BranchPicker: FC = () => (
 );
 
 const Composer: FC = () => (
-  <ComposerPrimitive.Root className="border-t border-border bg-card p-4">
-    <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-[28px] border border-border bg-card px-2 py-1.5 shadow-2xl shadow-black/5 focus-within:border-muted-foreground/40">
+  <ComposerPrimitive.Root className="bg-transparent px-4 pb-6 pt-2">
+    <div className="mx-auto flex max-w-4xl items-center gap-2.5 rounded-[26px] border border-border/80 bg-background py-1.5 pl-5 pr-2 shadow-xl shadow-black/[0.04] focus-within:border-border transition-all">
       <ComposerPrimitive.Input asChild>
         <Textarea
           rows={1}
           autoFocus
           placeholder="Ask anything..."
-          className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          className="min-h-[38px] max-h-[200px] flex-1 resize-none border-0 bg-transparent py-1.5 px-0 text-[15px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/70"
         />
       </ComposerPrimitive.Input>
-      <div className="pb-1">
+      <div className="flex items-center shrink-0">
         <ThreadPrimitive.If running>
           <ComposerPrimitive.Cancel asChild>
             <TooltipIconButton
@@ -469,10 +484,10 @@ const Composer: FC = () => (
               variant="secondary"
               size="icon"
               side="top"
-              tooltip="Stop generating"
-              className="rounded-full shadow-md active:scale-95"
+              tooltip="Stop"
+              className="h-9 w-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-sm active:scale-95 flex items-center justify-center p-0 shrink-0 border-0"
             >
-              <Stop size={18} weight="fill" />
+              <Stop size={14} weight="fill" className="size-3.5" />
             </TooltipIconButton>
           </ComposerPrimitive.Cancel>
         </ThreadPrimitive.If>
@@ -482,11 +497,11 @@ const Composer: FC = () => (
               type="submit"
               size="icon"
               side="top"
-              tooltip="Send message"
-              className="rounded-full text-white shadow-md hover:shadow-lg active:scale-95 disabled:opacity-40 disabled:shadow-none"
+              tooltip="Send"
+              className="h-9 w-9 rounded-full text-white shadow-sm hover:shadow active:scale-95 disabled:opacity-35 disabled:shadow-none flex items-center justify-center p-0 shrink-0 border-0"
               style={{ backgroundColor: PINK_ACCENT }}
             >
-              <ArrowUp size={18} weight="bold" />
+              <ArrowUp size={18} weight="bold" className="size-4.5" />
             </TooltipIconButton>
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>
