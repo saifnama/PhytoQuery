@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { DownloadSimple } from '@phosphor-icons/react';
 import type { UploadedPaper } from '../../stores/analyseStore';
 
 const ENTITY_GROUP_ORDER = [
@@ -106,56 +105,16 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
     return { rows: aggregatedRows, globalMaxCount, paperTotals };
   }, [papers]);
 
-  const exportData = () => {
-    // Generate CSV for export
-    if (!papers.length) return;
-    
-    const header = ['Category', 'Entity', ...papers.map(p => `"${p.name.replace(/"/g, '""')}"`)];
-    const csvRows: string[] = [];
-    
-    let currentCategory = '';
-    matrixData.rows.forEach(row => {
-      if (row.type === 'group') {
-        currentCategory = LABEL_NAMES[row.category] || row.category;
-      } else {
-        const rowData = [
-          `"${currentCategory}"`,
-          `"${row.name.replace(/"/g, '""')}"`
-        ];
-        papers.forEach(p => {
-          rowData.push(String(row.counts[p.id] || 0));
-        });
-        csvRows.push(rowData.join(','));
-      }
-    });
-
-    const blob = new Blob([header.join(',') + '\n' + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `comparison-matrix-${papers.length}-papers.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   if (papers.length === 0) return null;
 
   return (
     <div className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 flex flex-col min-h-0 h-full overflow-hidden">
-      <div className="flex items-center justify-end pb-3 shrink-0">
-        <button onClick={exportData} className="flex items-center gap-2 px-3 py-1.5 bg-white border border-outline-variant rounded-md text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm">
-          <DownloadSimple size={16} /> Export Data
-        </button>
-      </div>
-      
       <div className="bg-white border border-outline-variant rounded-md overflow-hidden flex-1 flex flex-col min-h-0 shadow-sm">
         <div className="overflow-auto custom-scrollbar flex-1 relative">
           <table className="w-full text-left border-collapse table-fixed min-w-[1200px]">
-            <thead className="sticky top-0 z-30">
-              <tr className="bg-white border-b border-outline-variant shadow-[0_1px_0_rgba(0,0,0,0.05)]">
-                <th className="p-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant w-56 sticky left-0 bg-white z-40 border-r border-outline-variant shadow-[1px_0_0_rgba(0,0,0,0.05)]">
+            <thead className="sticky top-0 z-40">
+              <tr className="bg-white border-b border-outline-variant shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+                <th className="p-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant w-56 sticky left-0 bg-white z-50 border-r border-outline-variant shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
                   Entity Index
                 </th>
                 {papers.map((p) => (
@@ -175,16 +134,16 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                   return (
                     <tr 
                       key={`group-${row.category}`} 
-                      style={{ backgroundColor: `color-mix(in srgb, ${accentColor} 8%, transparent)` }}
+                      style={{ backgroundColor: `color-mix(in srgb, ${accentColor} 8%, #ffffff)` }}
                     >
                       <td 
-                        className="px-4 py-2 font-bold text-[10px] uppercase tracking-widest border-b border-outline-variant/60 sticky left-0 z-20 shadow-[1px_0_0_rgba(0,0,0,0.05)]"
-                        style={{ backgroundColor: 'inherit', color: accentColor }}
+                        className="px-4 py-2 font-bold text-[10px] uppercase tracking-widest border-b border-r border-outline-variant/60 sticky left-0 z-30 shadow-[2px_0_4px_rgba(0,0,0,0.03)]"
+                        style={{ backgroundColor: `color-mix(in srgb, ${accentColor} 12%, #ffffff)`, color: accentColor }}
                       >
                         {LABEL_NAMES[row.category] || row.category}
                       </td>
                       {papers.map(p => (
-                        <td key={`group-spacer-${p.id}`} className="border-b border-outline-variant/60" style={{ backgroundColor: 'inherit' }}></td>
+                        <td key={`group-spacer-${p.id}`} className="border-b border-r border-outline-variant/60" style={{ backgroundColor: 'inherit' }}></td>
                       ))}
                     </tr>
                   );
@@ -196,25 +155,26 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                 const maxCount = matrixData.globalMaxCount || 1;
                 
                 return (
-                  <tr key={`entity-${entityRow.category}-${entityRow.name}`} className="border-b border-outline-variant/40 hover:bg-surface-container-low transition-colors group">
-                    <td className="p-3 font-medium border-r border-outline-variant sticky left-0 bg-white group-hover:bg-surface-container-low transition-colors z-20 shadow-[1px_0_0_rgba(0,0,0,0.05)]">
+                  <tr key={`entity-${entityRow.category}-${entityRow.name}`} className="border-b border-outline-variant/40 hover:bg-slate-50 transition-colors group">
+                    <td className="p-3 font-medium border-r border-outline-variant sticky left-0 bg-white group-hover:bg-slate-50 transition-colors z-20 shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
                       <span className="text-on-surface truncate block pr-2" title={entityRow.name}>{entityRow.name}</span>
                     </td>
                     {papers.map(p => {
                       const count = entityRow.counts[p.id];
                       if (!count) {
-                        return <td key={`cell-${entityRow.name}-${p.id}`} className="p-2 border-r border-outline-variant/40 text-center text-on-surface-variant/40">—</td>;
+                        return <td key={`cell-${entityRow.name}-${p.id}`} className="p-1.5 px-2 border-r border-outline-variant/40 text-center text-on-surface-variant/40 text-xs">—</td>;
                       }
                       
-                      // Universal dynamic opacity percentage (14% to 92%) calculated from entity mention number
+                      // Universal dynamic opacity percentage (18% to 90%) calculated from entity mention number
                       const norm = maxCount > 1 ? count / maxCount : 0.5;
-                      const opacityPercent = Math.min(92, Math.max(14, Math.round(14 + 78 * Math.pow(norm, 0.55))));
-                      const textColor = opacityPercent > 55 ? '#ffffff' : accentColor;
+                      const opacityPercent = Math.min(90, Math.max(18, Math.round(18 + 72 * Math.pow(norm, 0.5))));
+                      // High-contrast, fairly visible numbers on both light and saturated backgrounds
+                      const textColor = opacityPercent > 55 ? '#ffffff' : `color-mix(in srgb, ${accentColor} 85%, #0f172a)`;
                       
                       return (
-                        <td key={`cell-${entityRow.name}-${p.id}`} className="p-2 border-r border-outline-variant/40 text-center">
+                        <td key={`cell-${entityRow.name}-${p.id}`} className="p-1.5 px-2 border-r border-outline-variant/40 text-center">
                           <div 
-                            className="inline-flex min-w-[36px] h-6 px-2.5 rounded-md items-center justify-center font-bold text-[11px] transition-all"
+                            className="w-full h-7 rounded-md flex items-center justify-center font-bold text-xs transition-all shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
                             style={{ 
                               backgroundColor: `color-mix(in srgb, ${accentColor} ${opacityPercent}%, transparent)`,
                               color: textColor 
@@ -230,13 +190,13 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                 );
               })}
             </tbody>
-            <tfoot className="bg-surface-container-low border-t-2 border-outline-variant sticky bottom-0 z-30 shadow-[0_-1px_0_rgba(0,0,0,0.05)]">
-              <tr className="font-bold text-on-surface text-xs">
-                <td className="p-3 border-r border-outline-variant sticky left-0 bg-surface-container-low z-40 shadow-[1px_0_0_rgba(0,0,0,0.05)]">
+            <tfoot className="bg-slate-50 border-t-2 border-outline-variant sticky bottom-0 z-40 shadow-[0_-2px_4px_rgba(0,0,0,0.04)]">
+              <tr className="font-bold text-on-surface text-xs bg-slate-50">
+                <td className="p-3 border-r border-outline-variant sticky left-0 bg-slate-50 z-50 shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
                   Total mentions
                 </td>
                 {papers.map(p => (
-                  <td key={`total-${p.id}`} className="p-3 border-r border-outline-variant text-center bg-surface-container-low">
+                  <td key={`total-${p.id}`} className="p-3 border-r border-outline-variant text-center bg-slate-50 font-bold text-slate-800">
                     {matrixData.paperTotals[p.id].toLocaleString()}
                   </td>
                 ))}

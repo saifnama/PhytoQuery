@@ -3,6 +3,7 @@ import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, D
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import { CompareMatrix } from './CompareMatrix';
 import type { Entity } from '../../types';
+import { useShallow } from 'zustand/react/shallow';
 import { useAnalyseStore, type UploadedPaper } from '../../stores/analyseStore';
 
 const PdfIcon = ({ size = 24, className = "" }: { size?: number, className?: string }) => (
@@ -54,11 +55,12 @@ const getEntityAccentColor = (label: string) => `var(${getEntityAccentVar(label)
 
 const AnalysePage = () => {
   // ── Persisted analyse state (sessionStorage-backed, per-tab) ────────────
-  const papers = useAnalyseStore((s) => s.papers);
+  // useShallow for array/object slices avoids getSnapshot loop
+  const papers = useAnalyseStore(useShallow((s) => s.papers));
   const selectedPaperId = useAnalyseStore((s) => s.selectedPaperId);
-  const expandedGroups = useAnalyseStore((s) => s.expandedGroups);
+  const expandedGroups = useAnalyseStore(useShallow((s) => s.expandedGroups));
   const isCompareMode = useAnalyseStore((s) => s.isCompareMode);
-  const compareSelection = useAnalyseStore((s) => s.compareSelection);
+  const compareSelection = useAnalyseStore(useShallow((s) => s.compareSelection));
   const addPapers = useAnalyseStore((s) => s.addPapers);
   const removePaper = useAnalyseStore((s) => s.removePaper);
   const setSelectedPaperId = useAnalyseStore((s) => s.setSelectedPaperId);

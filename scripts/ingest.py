@@ -44,9 +44,9 @@ if _REPO_ROOT not in sys.path:
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-RAW_DIR = "backend/knowledge_base/papers"  # folder holding the PDFs
-MARKDOWN_DIR = "backend/knowledge_base/parsed"  # parsed markdown cache
-STATE_DB = "backend/knowledge_base/kb.sqlite"  # papers table + parents table
+RAW_DIR = os.path.join(_REPO_ROOT, "backend/knowledge_base/papers")  # folder holding the PDFs
+MARKDOWN_DIR = os.path.join(_REPO_ROOT, "backend/knowledge_base/parsed")  # parsed markdown cache
+STATE_DB = os.path.join(_REPO_ROOT, "backend/knowledge_base/kb.sqlite")  # papers table + parents table
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "kb_papers"  # change if you re-embed with a different model

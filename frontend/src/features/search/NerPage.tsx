@@ -7,6 +7,7 @@ import React, {
   Suspense,
 } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
+import { useShallow } from 'zustand/react/shallow';
 import SearchForm from './SearchForm';
 import { nerApi } from '../../lib/api';
 import { useSearchStore } from '../../stores/searchStore';
@@ -446,7 +447,8 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
 
 const NerPage: React.FC = () => {
   // ── Persisted search state (sessionStorage-backed, per-tab) ─────────────
-  const results       = useSearchStore((s) => s.results);
+  // Universal fix: useShallow for array slices so getSnapshot is cached
+  const results       = useSearchStore(useShallow((s) => s.results));
   const pagination    = useSearchStore((s) => s.pagination);
   const currentPage   = useSearchStore((s) => s.currentPage);
   const lastQuery     = useSearchStore((s) => s.lastQuery);
@@ -459,22 +461,37 @@ const NerPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
-  const search = route.useSearch();
+  // Universal fix: pick primitives via select so getSnapshot is cached (whole search object is new each parse)
+  const q = route.useSearch({ select: (s) => s.q });
+  const oa = route.useSearch({ select: (s) => s.oa });
+  const ft = route.useSearch({ select: (s) => s.ft });
+  const type = route.useSearch({ select: (s) => s.type });
+  const sort = route.useSearch({ select: (s) => s.sort });
+  const src = route.useSearch({ select: (s) => s.src });
   const didInitFromUrl = useRef(false);
+
+  // Memoized so SearchForm doesn't get a new object every render (caused getSnapshot loop + typing lag)
+  const defaultFilters = useMemo<SearchFilters>(() => ({
+    open_access:   oa === '1',
+    has_full_text: ft === '1',
+    article_type:  type ?? '',
+    sort:          sort ?? '',
+    source:        (src ?? 'europepmc') as SearchFilters['source'],
+  }), [oa, ft, type, sort, src]);
+  const defaultQuery = q ?? '';
 
   // Restore on mount: if URL query matches cache, paint cached results.
   useEffect(() => {
     if (didInitFromUrl.current) return;
     didInitFromUrl.current = true;
 
-    const q = search.q;
     if (!q) return;
     const filters: SearchFilters = {
-      open_access:   search.oa === '1',
-      has_full_text: search.ft === '1',
-      article_type:  search.type ?? '',
-      sort:          search.sort ?? '',
-      source:        search.src ?? 'europepmc',
+      open_access:   oa === '1',
+      has_full_text: ft === '1',
+      article_type:  type ?? '',
+      sort:          sort ?? '',
+      source:        src ?? 'europepmc',
     };
     const cacheMatches =
       results.length > 0 && lastQuery === q && filtersEqual(lastFilters, filters);
@@ -636,14 +653,8 @@ const NerPage: React.FC = () => {
                 useDrawerStore.getState().requestOpenWithQuery(q);
               }}
               isLoading={isLoading}
-              defaultQuery={search.q ?? ''}
-              defaultFilters={{
-                open_access:   search.oa === '1',
-                has_full_text: search.ft === '1',
-                article_type:  search.type ?? '',
-                sort:          search.sort ?? '',
-                source:        search.src ?? 'europepmc',
-              }}
+              defaultQuery={defaultQuery}
+              defaultFilters={defaultFilters}
             />
           </div>
         )}
@@ -710,14 +721,8 @@ const NerPage: React.FC = () => {
                     useDrawerStore.getState().requestOpenWithQuery(q);
                   }}
                   isLoading={isLoading}
-                  defaultQuery={search.q ?? ''}
-                  defaultFilters={{
-                    open_access:   search.oa === '1',
-                    has_full_text: search.ft === '1',
-                    article_type:  search.type ?? '',
-                    sort:          search.sort ?? '',
-                    source:        search.src ?? 'europepmc',
-                  }}
+                  defaultQuery={defaultQuery}
+                  defaultFilters={defaultFilters}
                 />
               </div>
 

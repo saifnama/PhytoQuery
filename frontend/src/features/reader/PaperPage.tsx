@@ -9,7 +9,7 @@ const route = getRouteApi('/paper/$doi');
 
 const PaperPage: React.FC = () => {
   const { doi } = route.useParams();
-  const { src } = route.useSearch();
+  const src = route.useSearch({ select: (s) => s.src });
   const navigate = useNavigate();
   const searchSource = src ?? '';
   const [paperData, setPaperData] = useState<PaperData | null>(null);
