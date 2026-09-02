@@ -504,14 +504,14 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 .search-shell.is-focused {
     border-radius: 24px;
-    border-color: var(--blue-A700) !important;
+    border-color: #ff6dba !important;
     box-shadow:
-        0 0 0 4px color-mix(in oklab, var(--blue-A700) 14%, transparent),
-        0 12px 32px -18px rgba(41,98,255,.35);
+        0 0 0 4px color-mix(in oklab, #ff6dba 16%, transparent),
+        0 12px 32px -18px rgba(255, 109, 186, 0.35);
 }
 .search-shell:focus-within:not(.is-focused) {
-    border-color: var(--blue-700);
-    box-shadow: 0 0 0 4px color-mix(in oklab, var(--blue-700) 14%, transparent);
+    border-color: #ff6dba;
+    box-shadow: 0 0 0 4px color-mix(in oklab, #ff6dba 14%, transparent);
 }
 .search-shell.is-focused .search-trail { opacity: 1; }
 .search-shell input {
@@ -1009,9 +1009,13 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 .animate-fade-up     { animation: fadeUp 0.32s cubic-bezier(.2, .7, .2, 1) both; }
 .animate-panel-slide { animation: panelSlide 0.32s cubic-bezier(.2, .7, .2, 1) both; }
 .animate-spring-in   { animation: springIn 0.34s cubic-bezier(0.34, 1.4, 0.5, 1) both; }
-.animate-slide-up    { animation: slideUp 0.4s cubic-bezier(.16, 1, 0.3, 1) forwards; }
 .animate-pulse-ring  { animation: pulseRing 2.1s ease-out infinite; }
-.animate-map-ripple  { animation: mapRipple 2.1s ease-out infinite; }
+.map-ripple,
+.animate-map-ripple  {
+    animation: mapRipple 2.1s ease-out infinite;
+    transform-origin: center;
+    transform-box: fill-box;
+}
 .animate-typing-dot  { animation: typingDot 1.2s ease-in-out infinite; }
 .animate-chatgpt-dot { animation: chatgptDot 1.2s ease-in-out infinite; }
 .animate-header-pill { animation: headerPillFadein .22s ease both; }
@@ -1043,7 +1047,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 header.app-header {
     display: flex;
     align-items: center;
-    padding: 16px 32px;
+    height: 80px;
+    min-height: 80px;
+    padding: 0 32px;
     background: rgba(255,255,255,.85);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
@@ -1056,7 +1062,7 @@ header.app-header {
 
 #main-content-display {
     width: 100%;
-    height: calc(100vh - 81px);
+    height: calc(100vh - 80px);
     overflow-y: auto;
 }
 

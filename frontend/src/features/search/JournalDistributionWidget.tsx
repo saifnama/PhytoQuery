@@ -71,19 +71,19 @@ const JournalDistributionWidget: React.FC<Props> = ({
 
   return (
     <div
-      className="flex overflow-hidden rounded-2xl border"
-      style={{ height, borderColor: "#C8F1F8" }}
+      className="flex overflow-hidden rounded-2xl border border-slate-200 shadow-sm"
+      style={{ height }}
     >
       {/* Left pane — shadcn Card with full Header/Content/Footer composition.
           justify-between spreads the three sections across the pane. */}
       <Card
-        className="flex-1 rounded-none ring-0 gap-0 justify-between py-6"
-        style={{ background: "#F2FBFC" }}
+        className="flex-1 rounded-none ring-0 gap-0 justify-between py-6 border-0"
+        style={{ background: "#F8FAFC" }}
       >
         <CardHeader>
           <CardTitle
             className="text-sm font-medium line-clamp-2 leading-tight"
-            style={{ color: "#1A5F6B" }}
+            style={{ color: "#0F172A" }}
           >
             {dominant.name}
           </CardTitle>
@@ -92,12 +92,11 @@ const JournalDistributionWidget: React.FC<Props> = ({
         <CardContent>
           <div className="flex items-baseline gap-2">
             <span
-              className="text-6xl font-semibold tabular-nums leading-none"
-              style={{ color: "#2AACBF" }}
+              className="text-6xl font-semibold tabular-nums leading-none text-slate-900"
             >
               {dominant.value.toLocaleString()}
             </span>
-            <span className="text-sm" style={{ color: "#5BBCC8" }}>
+            <span className="text-sm text-slate-500">
               papers
             </span>
           </div>
@@ -106,44 +105,36 @@ const JournalDistributionWidget: React.FC<Props> = ({
         <CardFooter className="flex-col items-stretch gap-2">
           <div className="flex w-full items-baseline justify-between">
             <span
-              className="text-2xl font-medium tabular-nums"
-              style={{ color: "#2AACBF" }}
+              className="text-2xl font-medium tabular-nums text-slate-900"
             >
               {pct}%
             </span>
-            <span className="text-xs" style={{ color: "#5BBCC8" }}>
+            <span className="text-xs text-slate-500">
               of corpus
             </span>
           </div>
           <div
-            className="h-1.5 w-full overflow-hidden rounded-full"
-            style={{ backgroundColor: "rgba(160,228,241,0.3)" }}
+            className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200"
           >
             <div
-              className="h-full rounded-full transition-all duration-500"
+              className="h-full rounded-full transition-all duration-500 bg-slate-900"
               style={{
                 width: `${pct}%`,
-                backgroundColor: "#A0E4F1",
               }}
             />
           </div>
         </CardFooter>
       </Card>
 
-      {/* Inter-pane divider — shadcn Separator. The default --border
-          token would be too dark on this background, so it's
-          explicitly tinted with the Coastal border colour. */}
+      {/* Inter-pane divider */}
       <Separator
         orientation="vertical"
-        className="h-auto bg-[#C8F1F8]"
+        className="h-auto bg-slate-200"
       />
 
-      {/* Right pane — shadcn Card hosting the bar chart. ``flex-1`` so
-          this pane takes exactly half the row (the left pane is also
-          ``flex-1``, so 50/50 split). */}
+      {/* Right pane */}
       <Card
-        className="flex-1 rounded-none ring-0 gap-0 py-3"
-        style={{ background: "#FBFEFE" }}
+        className="flex-1 rounded-none ring-0 gap-0 py-3 border-0 bg-white"
       >
         <CardContent className="h-full px-3">
           <JournalBarsChart data={ranked} onBarClick={onJournalClick} />

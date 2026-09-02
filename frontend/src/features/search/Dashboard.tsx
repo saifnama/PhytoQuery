@@ -241,14 +241,8 @@ const Dashboard: React.FC = () => {
   return (
     <div className="mx-auto" style={{ maxWidth: 'var(--content-max)', fontFamily: 'var(--font-google-sans)' }}>
       <div className="px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        <div className="flex items-center justify-between mb-5 mt-14">
-        <div>
-          <h2 className="text-[28px] font-bold text-on-surface leading-tight tracking-[-0.005em]">Database metrics</h2>
-        </div>
-      </div>
-
-      {/* KPI Cards — shadcn Card with cva accent variants */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
+        {/* KPI Cards — shadcn Card with cva accent variants */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8 mt-10">
         <StatCard
           accent="papers"
           label="Papers indexed"
@@ -294,10 +288,10 @@ const Dashboard: React.FC = () => {
           <JournalDistributionWidget
             journals={metrics.charts.papers_by_journal}
             totalPapers={metrics.kpis.total_papers}
-            onJournalClick={(name) =>
+            onJournalClick={() =>
               openDrawer({
                 tab: 'journals',
-                filter: { kind: 'journal', label: `Journal: ${name}`, value: name },
+                filter: null,
               })
             }
           />
@@ -321,7 +315,15 @@ const Dashboard: React.FC = () => {
           </ChartCard>
 
           <ChartCard title="Publication Timeline">
-            <PublicationTimelineChart data={metrics.charts.papers_by_year} />
+            <PublicationTimelineChart
+              data={metrics.charts.papers_by_year}
+              onYearClick={(year) =>
+                openDrawer({
+                  tab: 'papers',
+                  filter: { kind: 'year', label: `Year: ${year}`, value: year },
+                })
+              }
+            />
           </ChartCard>
         </div>
 

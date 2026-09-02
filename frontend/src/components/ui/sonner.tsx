@@ -1,6 +1,6 @@
 // Simplified Toaster — always light theme (dark mode removed).
 import { Toaster as Sonner, type ToasterProps } from "sonner"
-import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon, SpinnerIcon } from "@phosphor-icons/react"
+import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon, SpinnerGap } from "@phosphor-icons/react"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
@@ -21,7 +21,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           <XCircleIcon className="size-4" />
         ),
         loading: (
-          <SpinnerIcon className="size-4 animate-spin" />
+          <SpinnerGap className="size-4 animate-spin" />
         ),
       }}
       style={

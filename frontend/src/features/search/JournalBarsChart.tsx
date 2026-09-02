@@ -71,7 +71,7 @@ export function JournalBarsChart({ data, onBarClick }: Props) {
         accessibilityLayer
         data={dataWithFill}
         layout="vertical"
-        margin={{ top: 8, right: 44, bottom: 8, left: 4 }}
+        margin={{ top: 8, right: 44, bottom: 8, left: 8 }}
       >
         <XAxis type="number" hide />
         <YAxis

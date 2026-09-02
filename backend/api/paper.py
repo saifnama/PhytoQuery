@@ -520,6 +520,7 @@ async def list_papers(
     offset: int = Query(0, ge=0), 
     country: str = Query(None),
     query: str = Query(None),
+    year: int = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
     """Fetch a paginated list of papers from the local SQLite database."""
@@ -537,6 +538,9 @@ async def list_papers(
             select_stmt = select_stmt.where(
                 Paper.title.ilike(f"%{query}%") | Paper.journal.ilike(f"%{query}%")
             )
+
+        if year is not None:
+            select_stmt = select_stmt.where(Paper.year == year)
             
         # Distinct/Group by to avoid duplicates
         select_stmt = select_stmt.group_by(Paper.id).order_by(desc(Paper.id))
@@ -546,7 +550,7 @@ async def list_papers(
         papers = result.scalars().all()
         
         # Count query
-        if country or query:
+        if country or query or year is not None:
             subq = select_stmt.limit(None).offset(None).subquery()
             count_stmt = select(func.count()).select_from(subq)
         else:

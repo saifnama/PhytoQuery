@@ -12,6 +12,7 @@ import {
   Fire,
   X,
   ArrowsOutSimple,
+  SpinnerGap,
 } from '@phosphor-icons/react';
 import { buildChatFileContentUrl, paperApi, ragApi } from '../../lib/api';
 import { Thread } from './assistant/Thread';
@@ -493,7 +494,7 @@ const RagPage: React.FC = () => {
                 title="Add sources"
               >
                 {isUploading ? (
-                  <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                  <SpinnerGap size={20} className="animate-spin text-slate-900" />
                 ) : (
                   <Plus size={20} weight="bold" />
                 )}
@@ -587,7 +588,7 @@ const RagPage: React.FC = () => {
                 }}
               >
                 {isUploading ? (
-                  <div className="animate-spin h-4 w-4 border-2 border-[#ff6dba]/30 border-t-[#ff6dba] rounded-full" />
+                  <SpinnerGap size={16} className="animate-spin text-[#d63384]" />
                 ) : (
                   <Plus size={16} weight="bold" />
                 )}

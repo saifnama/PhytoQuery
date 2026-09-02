@@ -218,27 +218,53 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
               onMouseLeave={() => setMarkerHover(null)}
               onClick={() => onCountryClick?.(m.name)}
             >
-              {/* Three concentric ripple rings. Each runs the same 2.1s
-                  cycle but with animation-delays of 0, -0.7s, -1.4s so
-                  a new ring starts every 0.7s and three are always on
-                  screen at different scales — the raindrop-on-water look.
-                  vector-effect keeps the stroke a constant 1.6px as the
-                  ring scales up. */}
-              {[0, -0.7, -1.4].map((delay, k) => (
+              {/* Three concentric ripple rings. Each runs a 2.1s
+                  cycle staggered by 0.7s (0s, 0.7s, 1.4s) so
+                  rings continuously expand from the center dot —
+                  the raindrop-on-water / radar pulse look. */}
+              {[0, 0.7, 1.4].map((beginSec, k) => (
                 <circle
                   key={k}
-                  r={m.baseR}
+                  cx={0}
+                  cy={0}
+                  r={m.baseR * 0.4}
                   fill="none"
                   stroke="#06B6D4"
                   strokeWidth={1.6}
                   vectorEffect="non-scaling-stroke"
-                  className="map-ripple cursor-pointer"
-                  style={{ animationDelay: `${delay}s` }}
-                />
+                  className="cursor-pointer pointer-events-auto"
+                >
+                  <animate
+                    attributeName="r"
+                    values={`${m.baseR * 0.4}; ${m.baseR * 2.8}`}
+                    keyTimes="0; 1"
+                    dur="2.1s"
+                    begin={`${beginSec}s`}
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="opacity"
+                    values="0.7; 0.35; 0"
+                    keyTimes="0; 0.6; 1"
+                    dur="2.1s"
+                    begin={`${beginSec}s`}
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="stroke-width"
+                    values="1.8; 1.2; 0.4"
+                    keyTimes="0; 0.6; 1"
+                    dur="2.1s"
+                    begin={`${beginSec}s`}
+                    repeatCount="indefinite"
+                  />
+                </circle>
               ))}
 
               {/* Solid center dot. */}
               <circle
+                cx={0}
+                cy={0}
                 r={m.baseR * 0.55}
                 fill="#06B6D4"
                 opacity={0.95}

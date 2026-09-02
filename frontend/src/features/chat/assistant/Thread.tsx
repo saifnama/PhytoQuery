@@ -46,6 +46,7 @@ import {
   CaretLeft,
   CaretRight,
   Export,
+  SpinnerGap,
 } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
@@ -204,7 +205,7 @@ const CitationLink: FC<{
     );
   }
   return (
-    <a href={href} {...rest}>
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 hover:underline font-medium" {...rest}>
       {children}
     </a>
   );
@@ -371,8 +372,8 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
     <CitationClickContext.Provider value={handleCitationClick}>
       <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group animate-in fade-in slide-in-from-bottom-1 duration-150">
         {isPending ? (
-          <div className="py-2.5 px-1 flex items-center">
-            <span className="h-3.5 w-3.5 rounded-full bg-foreground animate-chatgpt-dot" />
+          <div className="py-2.5 px-1 flex items-center text-slate-900">
+            <SpinnerGap size={20} className="animate-spin text-slate-900" />
           </div>
         ) : (
           <>

@@ -5,6 +5,7 @@ import {
   ListMagnifyingGlass,
   Chats,
   Circle,
+  SpinnerGap,
 } from '@phosphor-icons/react';
 import { useSearchStore } from '../stores/searchStore';
 
@@ -160,9 +161,9 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
         </Link>
       </div>
 
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center space-x-4 h-[50px]">
         {isLoading && (
-          <div className="animate-spin rounded-full h-4 w-4 border-2 border-teal-200 border-t-primary" />
+          <SpinnerGap size={16} className="animate-spin text-slate-900" />
         )}
 
         {collapsed ? (
@@ -186,7 +187,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
               }
             }}
             onMouseLeave={handlePillLeave}
-            className="relative inline-flex items-center gap-[2px] p-[4px] bg-[var(--surface-lowest)] border border-[var(--outline-variant)] rounded-full shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+            className="relative inline-flex items-center gap-[2px] p-[4px] bg-transparent rounded-full border-0 outline-none"
             aria-label="Primary"
           >
             {/* Sliding indicator behind the active tab */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
@@ -1487,7 +1487,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 href={paperIdentifier.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-on-surface-variant hover:text-primary transition-colors uppercase"
+                className="font-mono text-blue-600 hover:text-blue-800 hover:underline transition-colors uppercase font-medium"
               >
                 {paperIdentifier.type.toUpperCase()}: {paperIdentifier.value}
               </a>
@@ -1639,7 +1639,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         href={activeSpeciesPopup.species.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-w-0 break-words font-medium text-primary hover:underline"
+                        className="min-w-0 break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
                       >
                         {activeSpeciesPopup.species.sourceDb || 'View'}
                       </a>
@@ -1722,7 +1722,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   <div className="relative flex min-h-[17rem] items-center justify-center">
                     {isRenderingChemicalStructure && (
                       <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/75 backdrop-blur-[1px]">
-                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-teal-200 border-t-teal-500" />
+                        <SpinnerGap size={24} className="animate-spin text-slate-900" />
                         <p className="text-xs font-medium text-on-surface-variant">Rendering structure…</p>
                       </div>
                     )}
@@ -1763,7 +1763,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         href={activeChemicalPopup.chemical.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-w-0 break-words font-medium text-primary hover:underline"
+                        className="min-w-0 break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
                       >
                         {activeChemicalPopup.chemical.sourceDb || 'View'}
                       </a>
@@ -1779,7 +1779,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           {isFetchingFallback && (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-6 w-6 border-2 border-border border-t-teal-500 mx-auto mb-3" />
+                <SpinnerGap size={24} className="animate-spin text-slate-900 mx-auto mb-3" />
                 <p className="text-xs text-on-surface-muted">Fetching abstract from alternative sources...</p>
               </div>
             </div>
@@ -1823,7 +1823,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               >
                 {isExtracting ? (
                   <>
-                    <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-current/30 border-t-current mr-2" />
+                    <SpinnerGap size={14} className="animate-spin mr-2" />
                     Extracting Terms...
                   </>
                 ) : (

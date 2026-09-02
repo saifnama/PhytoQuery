@@ -15,6 +15,7 @@ import {
   Funnel,
   MagnifyingGlass,
   CaretCircleDown,
+  X,
 } from '@phosphor-icons/react';
 import {
   DropdownMenu,
@@ -38,7 +39,7 @@ const getMaxW   = () =>
 export type DrawerTab = 'papers' | 'entities' | 'journals';
 
 export interface DrawerFilter {
-  kind: 'country' | 'entity' | 'journal' | 'papers' | 'entities' | 'journals';
+  kind: 'country' | 'entity' | 'journal' | 'year' | 'papers' | 'entities' | 'journals';
   label: string;
   value?: string;
 }
@@ -76,6 +77,10 @@ const DbExplorerDrawer: React.FC<Props> = ({
   // Tab managed internally; syncs when parent changes tabProp
   const [activeTab, setActiveTab] = useState<DrawerTab>(tabProp);
   useEffect(() => { setActiveTab(tabProp); }, [tabProp]);
+
+  // Filter managed internally so user can clear it
+  const [activeFilter, setActiveFilter] = useState<DrawerFilter | null>(filter);
+  useEffect(() => { setActiveFilter(filter); }, [filter]);
 
   const [width, setWidth]             = useState<number>(DEFAULT_W);
   const [dragging, setDragging]       = useState(false);
@@ -135,13 +140,14 @@ const DbExplorerDrawer: React.FC<Props> = ({
   useEffect(() => {
     if (!open || activeTab !== 'papers') return;
 
-    const country  = filter?.kind === 'country' ? filter.value : undefined;
-    const apiQuery = filter?.kind === 'papers'  ? filter.value : (searchQuery || undefined);
+    const country  = activeFilter?.kind === 'country' ? activeFilter.value : undefined;
+    const year     = activeFilter?.kind === 'year'    ? activeFilter.value : undefined;
+    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (searchQuery || undefined);
 
     setPapers(null);
     setPapersError(false);
 
-    dbApi.getPapers(50, 0, country, apiQuery)
+    dbApi.getPapers(50, 0, country, apiQuery, year)
       .then((data: any) => {
         const list: PaperRow[] = Array.isArray(data) ? data : data?.papers ?? data?.items ?? [];
         setPapers(list);
@@ -152,15 +158,20 @@ const DbExplorerDrawer: React.FC<Props> = ({
         setPapersError(true);
         setPapers([]);
       });
-  }, [open, activeTab, filter, searchQuery]);
+  }, [open, activeTab, activeFilter, searchQuery]);
 
   // ── Load more ───────────────────────────────────────────────────────────────
   const loadMore = () => {
     if (!papers) return;
+    const country  = activeFilter?.kind === 'country' ? activeFilter.value : undefined;
+    const year     = activeFilter?.kind === 'year'    ? activeFilter.value : undefined;
+    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (searchQuery || undefined);
+
     dbApi.getPapers(
       papers.length + 50, 0,
-      filter?.kind === 'country' ? filter.value : undefined,
-      filter?.kind === 'papers'  ? filter.value : (searchQuery || undefined),
+      country,
+      apiQuery,
+      year,
     ).then((data: any) => {
       const list: PaperRow[] = Array.isArray(data) ? data : data?.papers ?? data?.items ?? [];
       setPapers(list);
@@ -304,6 +315,39 @@ const DbExplorerDrawer: React.FC<Props> = ({
             onBlur={e   => { e.currentTarget.style.borderColor = 'transparent'; }}
           />
         </div>
+
+        {/* Active Year Filter Badge — tinted with timeline colour, X reveals on hover */}
+        {activeFilter?.kind === 'year' && activeFilter.value && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => setActiveFilter(null)}
+              className="group"
+              title="Clear year filter"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: 'rgba(0,172,193,0.10)',
+                color: '#007A8E',
+                border: '1px solid rgba(0,172,193,0.28)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <span>Year: {activeFilter.value}</span>
+              <X
+                size={12}
+                weight="bold"
+                style={{ opacity: 0, color: '#EF4444', transition: 'opacity .15s ease' }}
+                className="group-hover:!opacity-100"
+              />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Results row: count + funnel dropdown ─────────────────────────────── */}
@@ -444,7 +488,31 @@ const DbExplorerDrawer: React.FC<Props> = ({
   return createPortal(drawer, portalRoot.current);
 };
 
-// ─── PapersList ───────────────────────────────────────────────────────────────
+const PASTEL_PALETTES = [
+  { bg: '#E0F2FE', color: '#0284C7' }, // Pastel Sky
+  { bg: '#FCE7F3', color: '#DB2777' }, // Pastel Pink
+  { bg: '#EDE9FE', color: '#7C3AED' }, // Pastel Lavender / Purple
+  { bg: '#FEF3C7', color: '#D97706' }, // Pastel Amber
+  { bg: '#DCFCE7', color: '#16A34A' }, // Pastel Emerald / Mint
+  { bg: '#FFEDD5', color: '#EA580C' }, // Pastel Peach / Orange
+  { bg: '#CCFBF1', color: '#0D9488' }, // Pastel Teal
+  { bg: '#F1F5F9', color: '#475569' }, // Pastel Slate
+  { bg: '#FAE8FF', color: '#C026D3' }, // Pastel Fuchsia
+  { bg: '#E0E7FF', color: '#4F46E5' }, // Pastel Indigo
+  { bg: '#FFE4E6', color: '#E11D48' }, // Pastel Rose
+  { bg: '#ECFCCB', color: '#65A30D' }, // Pastel Lime
+];
+
+function getPastelColor(seed: string | number) {
+  const str = String(seed);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % PASTEL_PALETTES.length;
+  return PASTEL_PALETTES[index];
+}
 
 interface PapersListProps {
   papers: PaperRow[] | null;
@@ -464,7 +532,7 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
     return (
       <div className="space-y-3 py-2" aria-label="Loading papers">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex gap-3 items-start">
+          <div key={i} className="flex gap-3 items-center">
             <Skeleton className="h-10 w-10 shrink-0 rounded-full" />
             <div className="flex-1 space-y-2 pt-1">
               <Skeleton className="h-3.5 w-full rounded-full" />
@@ -485,76 +553,82 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
 
   return (
     <>
-      {papers.map((p, i) => (
-        <div
-          key={i}
-          onClick={() => p.doi && onOpen(p.doi)}
-          style={{
-            padding: '13px 15px',
-            borderRadius: 'var(--radius-md, 12px)',
-            background: '#FFFFFF',
-            border: '1px solid var(--outline-variant, #E4E4E7)',
-            display: 'grid',
-            gridTemplateColumns: '42px 1fr',
-            gap: 13,
-            cursor: p.doi ? 'pointer' : 'default',
-            transition: 'border-color .18s ease, box-shadow .18s ease',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.borderColor = 'var(--teal-300, #4DB6AC)';
-            e.currentTarget.style.boxShadow   = '0 2px 10px rgba(0,150,136,0.08)';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.borderColor = 'var(--outline-variant, #E4E4E7)';
-            e.currentTarget.style.boxShadow   = 'none';
-          }}
-        >
-          {/* Circle file icon — light pink */}
-          <div style={{
-            width: 42, height: 42,
-            borderRadius: '50%',
-            background: '#FCE4EC',
-            color: '#C2185B',
-            display: 'grid', placeItems: 'center',
-            flexShrink: 0,
-          }}>
-            <FileText size={19} weight="regular" />
-          </div>
-
-          <div style={{ minWidth: 0 }}>
-            {/* Title */}
-            <div
-              style={{
-                fontSize: 14.5, lineHeight: 1.45, fontWeight: 600,
-                color: 'var(--on-surface, #18181B)',
-                marginBottom: 7,
-                textAlign: 'left',
-              }}
-              dangerouslySetInnerHTML={{ __html: sanitizeHtml(p.title ?? '(untitled)') }}
-            />
-            {/* Journal · year — only meta shown */}
+      {papers.map((p, i) => {
+        const pastel = getPastelColor(p.doi || p.title || i);
+        return (
+          <div
+            key={i}
+            onClick={() => p.doi && onOpen(p.doi)}
+            style={{
+              padding: '13px 15px',
+              borderRadius: 'var(--radius-md, 12px)',
+              background: '#FFFFFF',
+              border: '1px solid var(--outline-variant, #E4E4E7)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              cursor: p.doi ? 'pointer' : 'default',
+              transition: 'border-color .18s ease, box-shadow .18s ease',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.borderColor = 'var(--teal-300, #4DB6AC)';
+              e.currentTarget.style.boxShadow   = '0 2px 10px rgba(0,150,136,0.08)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.borderColor = 'var(--outline-variant, #E4E4E7)';
+              e.currentTarget.style.boxShadow   = 'none';
+            }}
+          >
+            {/* Circle file icon — dynamic adaptive pastel color, perfectly centered */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              fontSize: 13, color: 'var(--on-surface-variant, #71717A)',
-              flexWrap: 'wrap',
+              width: 42, height: 42,
+              borderRadius: '50%',
+              background: pastel.bg,
+              color: pastel.color,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              alignSelf: 'center',
             }}>
-              {p.journal && (
-                <span style={{
-                  fontStyle: 'italic',
-                  overflow: 'hidden', textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap', maxWidth: 200,
-                }}>
-                  {p.journal}
-                </span>
-              )}
-              {p.journal && p.year && (
-                <span style={{ color: 'var(--outline, #A1A1AA)', fontSize: 11 }}>•</span>
-              )}
-              {p.year && <span>{p.year}</span>}
+              <FileText size={20} weight="regular" />
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* Title */}
+              <div
+                style={{
+                  fontSize: 14.5, lineHeight: 1.45, fontWeight: 600,
+                  color: 'var(--on-surface, #18181B)',
+                  marginBottom: 6,
+                  textAlign: 'left',
+                }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(p.title ?? '(untitled)') }}
+              />
+              {/* Journal · year — only meta shown */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 13, color: 'var(--on-surface-variant, #71717A)',
+                flexWrap: 'wrap',
+              }}>
+                {p.journal && (
+                  <span style={{
+                    fontStyle: 'italic',
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap', maxWidth: 200,
+                  }}>
+                    {p.journal}
+                  </span>
+                )}
+                {p.journal && p.year && (
+                  <span style={{ color: 'var(--outline, #A1A1AA)', fontSize: 11 }}>•</span>
+                )}
+                {p.year && <span>{p.year}</span>}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }

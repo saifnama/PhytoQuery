@@ -9,11 +9,12 @@
  */
 
 import { Link } from '@tanstack/react-router';
+import { SpinnerGap } from '@phosphor-icons/react';
 
 export function DefaultPending() {
   return (
     <div className="w-full flex justify-center py-12">
-      <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+      <SpinnerGap size={32} className="animate-spin text-slate-900" />
     </div>
   );
 }

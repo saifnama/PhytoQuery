@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp } from '@phosphor-icons/react';
+import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
 import { CompareMatrix } from './CompareMatrix';
 import type { Entity } from '../../types';
@@ -467,7 +467,7 @@ const AnalysePage = () => {
                 title="Add sources"
               >
                 {isUploading ? (
-                  <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                  <SpinnerGap size={20} className="animate-spin text-slate-900" />
                 ) : (
                   <Plus size={20} weight="bold" />
                 )}
@@ -539,7 +539,7 @@ const AnalysePage = () => {
                   />
                   <div className="w-full py-2 px-4 bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 rounded-full flex items-center justify-center gap-2 text-sm font-medium transition-colors cursor-pointer">
                     {isUploading ? (
-                      <div className="animate-spin h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full" />
+                      <SpinnerGap size={16} className="animate-spin text-slate-900" />
                     ) : (
                       <Plus size={16} weight="bold" className="text-slate-900" />
                     )}
@@ -649,16 +649,16 @@ const AnalysePage = () => {
                     </div>
                   ) : (
                     <div className="flex flex-col items-center w-full max-w-md relative z-10">
-                      <div className="w-20 h-20 bg-teal-50 flex items-center justify-center rounded-xl mb-6 shadow-sm border border-teal-100">
-                        <div className="w-10 h-10 border-4 border-teal-200 border-t-teal-600 rounded-full animate-spin" />
+                      <div className="w-20 h-20 bg-slate-100 flex items-center justify-center rounded-xl mb-6 shadow-sm border border-slate-200">
+                        <SpinnerGap size={40} className="text-slate-900 animate-spin" />
                       </div>
-                      <h2 className="text-xl font-semibold text-primary mb-1">Processing Papers...</h2>
+                      <h2 className="text-xl font-semibold text-slate-900 mb-1">Processing Papers...</h2>
                       <p className="text-sm text-on-surface-variant mb-8">
                         {uploadProgress.current} of {uploadProgress.total} documents
                       </p>
                       <div className="w-full h-1.5 bg-surface-variant rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-teal-500 transition-all duration-300 ease-out" 
+                          className="h-full bg-slate-900 transition-all duration-300 ease-out" 
                           style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
                         />
                       </div>
@@ -696,7 +696,7 @@ const AnalysePage = () => {
                   <div className="flex-1 bg-white border border-outline-variant overflow-hidden flex flex-col w-full h-[min(85vh,1200px)] relative">
                     {isViewerLoading ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-c/50 backdrop-blur-sm z-10">
-                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-200 border-t-teal-600 mb-4" />
+                        <SpinnerGap size={32} className="animate-spin text-slate-900 mb-4" />
                         <span className="text-sm text-on-surface-variant font-medium">Loading PDF...</span>
                       </div>
                     ) : viewerError ? (

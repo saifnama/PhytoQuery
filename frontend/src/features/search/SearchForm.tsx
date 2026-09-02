@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
 import {
   MagnifyingGlass,
   XCircle,
@@ -10,6 +10,13 @@ import {
 } from '@phosphor-icons/react';
 import type { SearchFilters } from '../../types';
 import { searchTypesApi } from '../../lib/api';
+
+/**
+ * Context that signals "a filter sidebar is mounted alongside the search bar".
+ * FilterSidebar wraps itself in this provider; SearchForm reads it and
+ * automatically collapses its filter rows — no prop needed, works universally.
+ */
+export const FilterSidebarContext = createContext(false);
 
 /**
  * SearchForm — pill-shaped search bar with expandable filters.
@@ -37,16 +44,12 @@ import { searchTypesApi } from '../../lib/api';
  *   - openalex → Sort + Type (full 21-item OpenAlex vocabulary, fetched).
  */
 
-type SourceKey = 'europepmc' | 'openalex' | 'database';
+type SourceKey = 'europepmc' | 'openalex';
 type SortType = 'Relevance' | 'Citations' | 'Date';
 type SortDir = 'asc' | 'desc';
 
 interface SearchFormProps {
   onSearch: (query: string, filters: SearchFilters) => void;
-  /** Called instead of onSearch when the user submits with source=database.
-   * Parent (NerPage) should open the DbExplorerDrawer with the query
-   * pre-filled. Optional — if not provided, falls back to onSearch. */
-  onOpenDatabasePanel?: (query: string) => void;
   isLoading?: boolean;
   defaultQuery?: string;
   defaultFilters?: SearchFilters;
@@ -110,7 +113,6 @@ const SourcePill: React.FC<SourcePillProps> = ({ role, label, count, active, onC
   const tone = {
     europepmc: 'pill-europepmc',
     openalex:  'pill-openalex',
-    database:  'pill-database',
   }[role];
   return (
     <button
@@ -180,13 +182,16 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
     <div ref={ref} className="relative inline-block">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
         style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           inline-flex items-center justify-between gap-2 h-[34px] px-3 rounded-full
           ${open ? 'bg-surface-c' : 'bg-transparent'}
           border border-border text-on-surface text-[13.5px] font-medium
-          transition-colors
+          transition-colors cursor-pointer
         `}
       >
         <span>{display}</span>
@@ -212,7 +217,7 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
                 className={`
                   w-full text-left px-3 py-2 rounded-md text-[13.5px]
                   ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
-                  text-on-surface transition-colors
+                  text-on-surface transition-colors cursor-pointer
                 `}
               >
                 {opt.display_name}
@@ -248,13 +253,16 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
     <div ref={ref} className="relative inline-flex">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
         style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           inline-flex items-center gap-1.5 h-[34px] px-3 rounded-full
           ${open ? 'bg-surface-c' : 'bg-transparent'}
           border border-border text-on-surface text-[13.5px] font-medium
-          transition-colors
+          transition-colors cursor-pointer
         `}
       >
         <span>{value.type}</span>
@@ -316,11 +324,12 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
 
 const SearchForm: React.FC<SearchFormProps> = ({
   onSearch,
-  onOpenDatabasePanel,
   isLoading = false,
   defaultQuery = '',
   defaultFilters,
 }) => {
+  // Automatically hides filter rows when a FilterSidebar is present in the tree
+  const hideFilters = useContext(FilterSidebarContext);
   const [query, setQuery] = useState(defaultQuery);
   const [filters, setFilters] = useState<SearchFilters>({
     open_access:   defaultFilters?.open_access   ?? false,
@@ -462,29 +471,25 @@ const SearchForm: React.FC<SearchFormProps> = ({
     window.setTimeout(() => {
       setExpanded(false);
       inputRef.current?.blur();
-      if (filters.source === 'database' && onOpenDatabasePanel) {
-        onOpenDatabasePanel(q);
-      } else {
-        onSearch(q, filters);
-      }
+      onSearch(q, filters);
       window.setTimeout(() => setSearching(false), 120);
     }, 650);
   };
 
-  const showAvailability = expanded && filters.source === 'europepmc';
-  const showSort         = expanded && filters.source !== 'database';
+  const showAvailability = !hideFilters && expanded && filters.source === 'europepmc';
+  const showSort         = !hideFilters && expanded;
 
   return (
     <div ref={containerRef} className="relative z-0 mb-8 w-full">
-      {/* Ambient halo glow — static, only active on expand (no continuous GPU hit) */}
+      {/* Ambient halo glow — signature pink, only active on expand */}
       {expanded && (
         <div
           aria-hidden
           className="pointer-events-none absolute -inset-x-8 -top-10 -z-10 h-56 opacity-60 blur-3xl"
           style={{
             background: `
-              radial-gradient(50% 60% at 25% 40%, color-mix(in oklab, var(--primary) 28%, transparent) 0%, transparent 70%),
-              radial-gradient(50% 60% at 75% 30%, color-mix(in oklab, var(--cyan-500) 22%, transparent) 0%, transparent 70%)
+              radial-gradient(50% 60% at 25% 40%, color-mix(in oklab, #ff6dba 26%, transparent) 0%, transparent 70%),
+              radial-gradient(50% 60% at 75% 30%, color-mix(in oklab, #ff85c8 20%, transparent) 0%, transparent 70%)
             `,
           }}
         />
@@ -521,7 +526,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               aria-label="Search"
               className="
                 grid place-items-center shrink-0 w-[40px] h-[40px]
-                text-on-surface-variant hover:text-primary
+                text-on-surface-variant hover:text-[#ff6dba]
                 transition-colors rounded-full
               "
             >
@@ -540,7 +545,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               className="
                 flex-1 min-w-0 h-[44px]
                 bg-transparent border-none outline-none
-                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-teal-500
+                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-[#ff6dba]
                 tracking-[-0.003em]
               "
             />
@@ -550,9 +555,9 @@ const SearchForm: React.FC<SearchFormProps> = ({
                 onClick={(e) => { e.stopPropagation(); clear(); }}
                 aria-label="Clear search"
                 title="Clear"
-                className="grid place-items-center w-[36px] h-[36px] rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
+                className="grid place-items-center w-[40px] h-[40px] rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
               >
-                <XCircle size={18} weight="regular" />
+                <XCircle size={22} weight="regular" />
               </button>
             )}
             {!expanded && !query && (
@@ -567,15 +572,16 @@ const SearchForm: React.FC<SearchFormProps> = ({
             )}
           </div>
 
-          {/* Filter rows — animated expand/collapse via grid-rows */}
+          {/* Filter rows — animated expand/collapse via grid-rows. Hidden when hideFilters=true. */}
+          {!hideFilters && (
           <div
-            className="grid transition-[grid-template-rows,opacity] duration-300 ease-out"
+            className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${expanded ? 'overflow-visible' : 'overflow-hidden'}`}
             style={{
               gridTemplateRows: expanded ? '1fr' : '0fr',
               opacity: expanded ? 1 : 0,
             }}
           >
-            <div className="min-h-0 overflow-hidden">
+            <div className={`min-h-0 ${expanded ? 'overflow-visible' : 'overflow-hidden'}`}>
               {/* Row 2 — SOURCES | AVAILABILITY */}
               <div
                 className="
@@ -596,9 +602,6 @@ const SearchForm: React.FC<SearchFormProps> = ({
                     <SourcePill role="openalex"  label="OpenAlex"
                       active={filters.source === 'openalex'}
                       onClick={() => handleSourceChange('openalex')} />
-                    <SourcePill role="database"  label="Database"
-                      active={filters.source === 'database'}
-                      onClick={() => handleSourceChange('database')} />
                   </div>
                 </div>
 
@@ -606,7 +609,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
                   <>
                     <span aria-hidden className="w-px h-6 bg-surface-c" />
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-muted">
+                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
                         Availability
                       </span>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -636,7 +639,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
                   className="flex items-center gap-3 px-4 pt-1.5 pb-1.5 animate-spring-in"
                   style={{ animationDelay: '0.05s' }}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-muted min-w-[78px]">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
                     Sort by
                   </span>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -654,6 +657,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               )}
             </div>
           </div>
+          )}{/* end !hideFilters */}
 
           {/* Loading shimmer when an outer fetch is in flight */}
           {isLoading && (

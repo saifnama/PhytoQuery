@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
-import { ArrowLeft } from '@phosphor-icons/react';
+import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
 import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api';
 import type { PaperData, Entity } from '../../types';
@@ -178,7 +178,7 @@ const PaperPage: React.FC = () => {
             setFallbackSource({ source: data.source, url: data.url });
             return;
           }
-          setError(`No abstract found. <a href="https://doi.org/${doi}" target="_blank" class="text-primary underline">View on publisher</a>`);
+          setError(`No abstract found. <a href="https://doi.org/${doi}" target="_blank" class="text-blue-600 hover:text-blue-800 underline">View on publisher</a>`);
         } catch {
           setFallbackLoading(false);
           setError('Failed to load paper from any source.');
@@ -338,7 +338,7 @@ const PaperPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-teal-200 border-t-teal-500 mx-auto mb-4" />
+          <SpinnerGap size={32} className="animate-spin text-slate-900 mx-auto mb-4" />
           <p className="text-sm text-on-surface-variant">Loading paper...</p>
         </div>
       </div>
@@ -349,7 +349,7 @@ const PaperPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-teal-200 border-t-teal-600 mx-auto mb-4" />
+          <SpinnerGap size={32} className="animate-spin text-slate-900 mx-auto mb-4" />
           <p className="text-sm text-on-surface-variant">Fetching DOI fallback sources...</p>
         </div>
       </div>

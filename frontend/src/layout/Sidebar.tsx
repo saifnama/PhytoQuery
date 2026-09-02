@@ -1,5 +1,5 @@
 import React, { useRef, useCallback } from 'react';
-import { Plus, SidebarSimple, FileText } from '@phosphor-icons/react';
+import { Plus, SidebarSimple, FileText, SpinnerGap } from '@phosphor-icons/react';
 import { ragApi } from '../lib/api';
 import { useUploadStore } from '../stores/uploadStore';
 
@@ -130,7 +130,11 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
                 disabled={isUploading}
                 className="w-full flex items-center justify-center space-x-2 py-3 px-4 bg-[#f0f4f9] hover:bg-[#e1e9f1] text-on-surface-variant rounded-full transition-all group border border-transparent hover:border-primary/20 disabled:opacity-50"
               >
-                <Plus size={16} />
+                {isUploading ? (
+                  <SpinnerGap size={16} className="animate-spin text-slate-900" />
+                ) : (
+                  <Plus size={16} />
+                )}
                 <span className="text-sm font-medium">
                   {isUploading ? 'Uploading...' : 'Add sources'}
                 </span>

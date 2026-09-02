@@ -311,8 +311,8 @@ export const dashboardApi = {
 
 // Database API
 export const dbApi = {
-  async getPapers(limit: number = 50, offset: number = 0, country?: string, query?: string) {
-    const response = await api.get('/paper/db/list', { params: { limit, offset, country, query } });
+  async getPapers(limit: number = 50, offset: number = 0, country?: string, query?: string, year?: number | string) {
+    const response = await api.get('/paper/db/list', { params: { limit, offset, country, query, year } });
     return response.data;
   },
   async getPaperEntities(doi: string) {

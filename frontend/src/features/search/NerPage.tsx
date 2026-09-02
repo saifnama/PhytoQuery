@@ -8,10 +8,9 @@ import React, {
 } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
-import SearchForm from './SearchForm';
+import SearchForm, { FilterSidebarContext } from './SearchForm';
 import { nerApi } from '../../lib/api';
 import { useSearchStore } from '../../stores/searchStore';
-import { useDrawerStore } from '../../stores/drawerStore';
 import { formatTextWithFormatting } from '../../utils/sanitize';
 import type { SearchFilters, SearchResult } from '../../types';
 import {
@@ -26,6 +25,7 @@ import {
   Circle,
   LockSimpleOpen,
   Article,
+  SpinnerGap,
 } from '@phosphor-icons/react';
 
 const route = getRouteApi('/');
@@ -34,7 +34,7 @@ const Dashboard = lazy(() => import('./Dashboard').then(m => ({ default: m.defau
 
 type SortType = 'Relevance' | 'Citations' | 'Date';
 type SortDir = 'asc' | 'desc';
-type SourceKey = 'europepmc' | 'openalex' | 'database';
+type SourceKey = 'europepmc' | 'openalex';
 
 /** Compare two SearchFilters objects for value equality. Cheap fixed-
  * shape compare — avoids pulling lodash for one call. */
@@ -248,7 +248,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="mono text-[13px] font-medium text-primary no-underline hover:underline"
+            className="mono text-[13px] font-medium text-blue-600 hover:text-blue-800 no-underline hover:underline transition-colors"
           >
             {result.doi}
           </a>
@@ -391,9 +391,6 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
           <SourcePill role="openalex" label="OpenAlex"
             active={source === 'openalex'}
             onClick={() => onChange({ ...filters, source: 'openalex', article_type: '' })} />
-          <SourcePill role="database" label="Database"
-            active={source === 'database'}
-            onClick={() => onChange({ ...filters, source: 'database', article_type: '' })} />
         </div>
       </FilterSection>
 
@@ -416,29 +413,27 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
         </FilterSection>
       )}
 
-      {source !== 'database' && (
-        <FilterSection title="Type">
-          {(source === 'openalex' ? OPENALEX_TYPES : EUROPEPMC_TYPES).map((t) => {
-            // Map UI label back to backend key.
-            const key = source === 'openalex'
-              ? t.toLowerCase().replace(/\s+/g, '-')
-              : t === 'Research Articles' ? 'Research-article'
-              : t === 'Review Articles'   ? 'Review'
-              : '';
-            const checked = filters.article_type === key;
-            return (
-              <CircleCheck
-                key={t}
-                label={t}
-                checked={checked}
-                onToggle={() =>
-                  onChange({ ...filters, article_type: checked ? '' : key })
-                }
-              />
-            );
-          })}
-        </FilterSection>
-      )}
+      <FilterSection title="Type">
+        {(source === 'openalex' ? OPENALEX_TYPES : EUROPEPMC_TYPES).map((t) => {
+          // Map UI label back to backend key.
+          const key = source === 'openalex'
+            ? t.toLowerCase().replace(/\s+/g, '-')
+            : t === 'Research Articles' ? 'Research-article'
+            : t === 'Review Articles'   ? 'Review'
+            : '';
+          const checked = filters.article_type === key;
+          return (
+            <CircleCheck
+              key={t}
+              label={t}
+              checked={checked}
+              onToggle={() =>
+                onChange({ ...filters, article_type: checked ? '' : key })
+              }
+            />
+          );
+        })}
+      </FilterSection>
     </aside>
   );
 };
@@ -649,9 +644,6 @@ const NerPage: React.FC = () => {
           <div className="px-[24px]">
             <SearchForm
               onSearch={handleSearch}
-              onOpenDatabasePanel={(q) => {
-                useDrawerStore.getState().requestOpenWithQuery(q);
-              }}
               isLoading={isLoading}
               defaultQuery={defaultQuery}
               defaultFilters={defaultFilters}
@@ -667,7 +659,7 @@ const NerPage: React.FC = () => {
 
         {isLoading && !hasResults && (
           <div className="mx-auto max-w-4xl p-12 text-center">
-            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-teal-200 border-t-teal-500" />
+            <SpinnerGap size={40} className="mx-auto mb-4 animate-spin text-slate-900" />
             <p className="text-sm font-medium text-on-surface-variant">Searching publications...</p>
           </div>
         )}
@@ -698,15 +690,17 @@ const NerPage: React.FC = () => {
         {!lastQuery && !isLoading && !error && (
           <Suspense fallback={
             <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-200 border-t-teal-500" />
+              <SpinnerGap size={32} className="animate-spin text-slate-900" />
             </div>
           }>
             <Dashboard />
           </Suspense>
         )}
 
-        {/* Results view */}
+        {/* Results view — Provider signals to SearchForm that a sidebar is present,
+            so filters collapse automatically without any prop. */}
         {hasResults && lastFilters && (
+          <FilterSidebarContext.Provider value={true}>
           <div
             className="grid gap-10 mt-1"
             style={{ gridTemplateColumns: '240px 1fr' }}
@@ -717,9 +711,6 @@ const NerPage: React.FC = () => {
               <div className="mb-8">
                 <SearchForm
                   onSearch={handleSearch}
-                  onOpenDatabasePanel={(q) => {
-                    useDrawerStore.getState().requestOpenWithQuery(q);
-                  }}
                   isLoading={isLoading}
                   defaultQuery={defaultQuery}
                   defaultFilters={defaultFilters}
@@ -798,6 +789,7 @@ const NerPage: React.FC = () => {
               )}
             </section>
           </div>
+          </FilterSidebarContext.Provider>
         )}
       </div>
     </div>
