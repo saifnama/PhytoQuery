@@ -522,8 +522,13 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     font-size: 15px;
     color: var(--on-surface);
     min-width: 0;
+    caret-color: #000000;
 }
 .search-shell input::placeholder { color: var(--on-surface-muted); }
+
+input, textarea {
+    caret-color: #000000;
+}
 
 .search-trail { opacity: 0; transition: opacity 200ms ease; }
 

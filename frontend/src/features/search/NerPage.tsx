@@ -8,7 +8,9 @@ import React, {
 } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
-import SearchForm, { FilterSidebarContext } from './SearchForm';
+import SearchForm from './SearchForm';
+import { FilterSidebarContext } from './FilterSidebarContext';
+import { Skeleton } from '@/components/ui/skeleton';
 import { nerApi } from '../../lib/api';
 import { useSearchStore } from '../../stores/searchStore';
 import { formatTextWithFormatting } from '../../utils/sanitize';
@@ -350,6 +352,52 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
   );
 };
 
+const ResultCardSkeleton: React.FC<{ delayMs?: number }> = ({ delayMs = 0 }) => (
+  <article
+    style={{ animationDelay: `${delayMs}ms` }}
+    className="
+      pq-result-card card relative px-6 py-5 rounded-2xl border border-border bg-card
+      flex flex-col gap-3.5 animate-in fade-in duration-300
+    "
+  >
+    {/* Top row — DOI left, year right */}
+    <div className="flex items-center justify-between">
+      <Skeleton className="h-3.5 w-40 rounded" />
+      <Skeleton className="h-3.5 w-12 rounded" />
+    </div>
+
+    {/* Title — serif title lines */}
+    <div className="space-y-2">
+      <Skeleton className="h-5 w-4/5 rounded" />
+      <Skeleton className="h-5 w-3/5 rounded" />
+    </div>
+
+    {/* Meta line — authors • journal • badges */}
+    <div className="flex flex-wrap items-center gap-2.5">
+      <Skeleton className="h-3.5 w-32 rounded" />
+      <span className="text-on-surface-muted text-xs">•</span>
+      <Skeleton className="h-3.5 w-24 rounded" />
+      <Skeleton className="h-5 w-20 rounded-full" />
+      <Skeleton className="h-3.5 w-16 rounded" />
+    </div>
+
+    {/* Abstract snippet */}
+    <div className="space-y-2 pt-0.5">
+      <Skeleton className="h-3.5 w-full rounded" />
+      <Skeleton className="h-3.5 w-11/12 rounded" />
+      <Skeleton className="h-3.5 w-3/4 rounded" />
+    </div>
+
+    {/* Entity tags row */}
+    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border/50">
+      <Skeleton className="h-6 w-20 rounded-full" />
+      <Skeleton className="h-6 w-24 rounded-full" />
+      <Skeleton className="h-6 w-16 rounded-full" />
+      <Skeleton className="h-6 w-28 rounded-full" />
+    </div>
+  </article>
+);
+
 // ─── filter sidebar ─────────────────────────────────────────────────────────
 
 const EUROPEPMC_TYPES = ['Research Articles', 'Review Articles'] as const;
@@ -438,6 +486,56 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
   );
 };
 
+const FilterSidebarSkeleton: React.FC = () => (
+  <aside
+    className="
+      sticky top-[100px] h-fit
+      flex flex-col gap-6 pr-6
+      border-r border-border
+      animate-in fade-in duration-300
+    "
+  >
+    <Skeleton className="h-5 w-20 rounded" />
+
+    {/* Sources */}
+    <div className="space-y-3">
+      <Skeleton className="h-3.5 w-16 rounded" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-8 w-28 rounded-full" />
+        <Skeleton className="h-8 w-24 rounded-full" />
+      </div>
+    </div>
+
+    {/* Availability */}
+    <div className="space-y-3">
+      <Skeleton className="h-3.5 w-20 rounded" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-8 w-32 rounded-full" />
+        <Skeleton className="h-8 w-28 rounded-full" />
+      </div>
+    </div>
+
+    {/* Type */}
+    <div className="space-y-3">
+      <Skeleton className="h-3.5 w-14 rounded" />
+      <div className="space-y-2.5">
+        <div className="flex items-center gap-2.5">
+          <Skeleton className="h-4 w-4 rounded-full" />
+          <Skeleton className="h-3.5 w-32 rounded" />
+        </div>
+        <div className="flex items-center gap-2.5">
+          <Skeleton className="h-4 w-4 rounded-full" />
+          <Skeleton className="h-3.5 w-28 rounded" />
+        </div>
+        <div className="flex items-center gap-2.5">
+          <Skeleton className="h-4 w-4 rounded-full" />
+          <Skeleton className="h-3.5 w-36 rounded" />
+        </div>
+      </div>
+    </div>
+  </aside>
+);
+
 // ─── main page ──────────────────────────────────────────────────────────────
 
 const NerPage: React.FC = () => {
@@ -455,6 +553,8 @@ const NerPage: React.FC = () => {
   // Transient (intentionally NOT persisted)
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchingQuery, setSearchingQuery] = useState('');
+  const [searchingFilters, setSearchingFilters] = useState<SearchFilters | null>(null);
   const navigate = useNavigate();
   // Universal fix: pick primitives via select so getSnapshot is cached (whole search object is new each parse)
   const q = route.useSearch({ select: (s) => s.q });
@@ -474,6 +574,52 @@ const NerPage: React.FC = () => {
     source:        (src ?? 'europepmc') as SearchFilters['source'],
   }), [oa, ft, type, sort, src]);
   const defaultQuery = q ?? '';
+
+  const doSearch = async (
+    query: string,
+    filters: SearchFilters,
+    page: number = 1,
+  ) => {
+    setSearchingQuery(query);
+    setSearchingFilters(filters);
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await nerApi.search(query, filters, page, filters.source || 'europepmc');
+      if ('error' in data && data.error) {
+        throw new Error(data.error);
+      }
+      setSearchResult({
+        results:      data.results || [],
+        pagination:   data.pagination || null,
+        currentPage:  page,
+        lastQuery:    query,
+        lastFilters:  filters,
+      });
+      navigate({
+        to: '/',
+        search: {
+          q:    query,
+          oa:   filters.open_access ? '1' : undefined,
+          ft:   filters.has_full_text ? '1' : undefined,
+          type: filters.article_type || undefined,
+          sort: filters.sort || undefined,
+          src:  filters.source && filters.source !== 'europepmc' ? filters.source : undefined,
+        },
+        replace: true,
+      });
+    } catch (err: unknown) {
+      console.error('Search failed:', err);
+      const e = err as { response?: { data?: { error?: string; detail?: string } }; message?: string };
+      setError(e?.response?.data?.error || e?.response?.data?.detail || e?.message || 'Search failed. Please try again.');
+      setSearchResult({
+        results: [], pagination: null, currentPage: 1,
+        lastQuery: query, lastFilters: filters,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Restore on mount: if URL query matches cache, paint cached results.
   useEffect(() => {
@@ -514,49 +660,6 @@ const NerPage: React.FC = () => {
       if (frame !== null) cancelAnimationFrame(frame);
     };
   }, [setScrollY]);
-
-  const doSearch = async (
-    query: string,
-    filters: SearchFilters,
-    page: number = 1,
-  ) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await nerApi.search(query, filters, page, filters.source || 'europepmc');
-      if ('error' in data && data.error) {
-        throw new Error(data.error);
-      }
-      setSearchResult({
-        results:      data.results || [],
-        pagination:   data.pagination || null,
-        currentPage:  page,
-        lastQuery:    query,
-        lastFilters:  filters,
-      });
-      navigate({
-        to: '/',
-        search: {
-          q:    query,
-          oa:   filters.open_access ? '1' : undefined,
-          ft:   filters.has_full_text ? '1' : undefined,
-          type: filters.article_type || undefined,
-          sort: filters.sort || undefined,
-          src:  filters.source && filters.source !== 'europepmc' ? filters.source : undefined,
-        },
-        replace: true,
-      });
-    } catch (err: any) {
-      console.error('Search failed:', err);
-      setError(err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Search failed. Please try again.');
-      setSearchResult({
-        results: [], pagination: null, currentPage: 1,
-        lastQuery: query, lastFilters: filters,
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleSearch = async (query: string, filters: SearchFilters) => {
     // Detect identifier patterns and short-circuit to the paper viewer.
@@ -633,162 +736,195 @@ const NerPage: React.FC = () => {
 
   // ── render ────────────────────────────────────────────────────────────
   const hasResults = results.length > 0;
-  const noResults  = !isLoading && !error && lastQuery && results.length === 0;
+  const currentQuery = lastQuery || searchingQuery;
+  const noResults  = !isLoading && !error && currentQuery && results.length === 0;
   const totalCount = pagination?.total ?? (hasResults ? results.length : 0);
+  const isSearching = isLoading;
+  const showResultsLayout = hasResults || isSearching || !!lastQuery;
 
   return (
     <div className="w-full px-8 pt-7 pb-10 results-page">
       <div className="mx-auto max-w-[1440px]">
-        {/* SearchForm on dashboard/loading/error screens */}
-        {(!hasResults || (!lastFilters && isLoading)) && (
-          <div className="px-[24px]">
-            <SearchForm
-              onSearch={handleSearch}
-              isLoading={isLoading}
-              defaultQuery={defaultQuery}
-              defaultFilters={defaultFilters}
-            />
-          </div>
-        )}
-
-        {error && (
-          <div className="mx-auto mb-6 max-w-4xl rounded-lg bg-red-50 p-4 text-red-700">
-            {error}
-          </div>
-        )}
-
-        {isLoading && !hasResults && (
-          <div className="mx-auto max-w-4xl p-12 text-center">
-            <SpinnerGap size={40} className="mx-auto mb-4 animate-spin text-slate-900" />
-            <p className="text-sm font-medium text-on-surface-variant">Searching publications...</p>
-          </div>
-        )}
-
-        {/* No-results screen — cat-in-a-bag illustration + plain text.
-            Asset lives at frontend/public/404.png (copied from the design
-            bundle). Layout matches the design's results.jsx 404 branch:
-            stacked center, ~70px top padding, image capped at 460px. */}
-        {noResults && (
-          <div className="flex flex-col items-center gap-6 px-5 pt-[70px] pb-10">
-            <img
-              src="/404.png"
-              alt="No results found"
-              className="w-full max-w-[460px] rounded-2xl"
-            />
-            <div className="text-center">
-              <div className="mb-1.5 text-[20px] font-bold text-on-surface">
-                No publications found
-              </div>
-              <div className="text-[14.5px] text-on-surface-variant">
-                We couldn't find anything for &ldquo;{lastQuery}&rdquo;. Try different keywords.
-              </div>
+        {/* Homepage — search bar with expandable filters + Dashboard */}
+        {!showResultsLayout && !error && (
+          <>
+            <div className="px-[24px]">
+              <SearchForm
+                onSearch={handleSearch}
+                isLoading={isLoading}
+                defaultQuery={defaultQuery}
+                defaultFilters={defaultFilters}
+              />
             </div>
-          </div>
+            <Suspense fallback={
+              <div className="flex items-center justify-center py-12">
+                <SpinnerGap size={32} className="animate-spin text-slate-900" />
+              </div>
+            }>
+              <Dashboard />
+            </Suspense>
+          </>
         )}
 
-        {/* Dashboard (when nothing has been searched yet) */}
-        {!lastQuery && !isLoading && !error && (
-          <Suspense fallback={
-            <div className="flex items-center justify-center py-12">
-              <SpinnerGap size={32} className="animate-spin text-slate-900" />
+        {/* Global error on homepage before any search view */}
+        {error && !showResultsLayout && (
+          <>
+            <div className="px-[24px] mb-6">
+              <SearchForm
+                onSearch={handleSearch}
+                isLoading={isLoading}
+                defaultQuery={defaultQuery}
+                defaultFilters={defaultFilters}
+              />
             </div>
-          }>
-            <Dashboard />
-          </Suspense>
+            <div className="mx-auto mb-6 max-w-4xl rounded-lg bg-red-50 p-4 text-red-700">
+              {error}
+            </div>
+          </>
         )}
 
-        {/* Results view — Provider signals to SearchForm that a sidebar is present,
-            so filters collapse automatically without any prop. */}
-        {hasResults && lastFilters && (
+        {/* Results layout: Used for both active results and Skeleton loading */}
+        {showResultsLayout && (
           <FilterSidebarContext.Provider value={true}>
-          <div
-            className="grid gap-10 mt-1"
-            style={{ gridTemplateColumns: '240px 1fr' }}
-          >
-            <FilterSidebar filters={lastFilters} onChange={handleFilterChange} />
-
-            <section>
-              <div className="mb-8">
-                <SearchForm
-                  onSearch={handleSearch}
-                  isLoading={isLoading}
-                  defaultQuery={defaultQuery}
-                  defaultFilters={defaultFilters}
+            <div
+              className="grid gap-10 mt-1"
+              style={{ gridTemplateColumns: '240px 1fr' }}
+            >
+              {/* Sidebar: Real sidebar when filters exist, Skeleton when starting fresh from homepage */}
+              {isSearching && !lastFilters && !searchingFilters ? (
+                <FilterSidebarSkeleton />
+              ) : (
+                <FilterSidebar
+                  filters={lastFilters || searchingFilters || defaultFilters}
+                  onChange={handleFilterChange}
                 />
-              </div>
-
-              {/* Header row — "1,247 publications found" + SortSegmented */}
-              <div className="flex items-center justify-between mb-5">
-                <div className="text-[15px] text-on-surface whitespace-nowrap">
-                  <strong className="font-bold">{totalCount.toLocaleString()}</strong>{' '}
-                  <span className="text-on-surface-variant">publications found</span>
-                </div>
-                <SortSegmented value={sortValue} onChange={handleSortChange} />
-              </div>
-
-              {/* Result cards */}
-              <div className="flex flex-col gap-4">
-                {results.map((r, i) => (
-                  <ResultCard
-                    key={r.id || i}
-                    result={r}
-                    delayMs={40 + Math.min(i, 7) * 60}
-                    onOpen={() => {
-                      const paperId = r.doi || r.pmcid || r.pmid;
-                      if (paperId) {
-                        const src = (r.source || 'Europe PMC').toLowerCase();
-                        navigate({
-                          to: '/paper/$doi',
-                          params: { doi: paperId },
-                          search: { src },
-                        });
-                      }
-                    }}
-                  />
-                ))}
-              </div>
-
-              {/* Pagination — borderless arrows. Left arrow hidden on page 1. */}
-              {pagination && (
-                <div className="mt-8 mb-4 flex items-center justify-center gap-3">
-                  {currentPage > 1 && (
-                    <button
-                      type="button"
-                      onClick={handlePrevPage}
-                      disabled={isLoading}
-                      aria-label="Previous page"
-                      title="Previous page"
-                      className="
-                        grid h-10 w-10 place-items-center rounded-full
-                        bg-transparent text-on-surface border-0 cursor-pointer
-                        hover:bg-surface-c transition-colors duration-150
-                        disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
-                      "
-                    >
-                      <ArrowLeft size={18} weight="bold" />
-                    </button>
-                  )}
-                  {pagination.hasMore && (
-                    <button
-                      type="button"
-                      onClick={handleNextPage}
-                      disabled={isLoading}
-                      aria-label="Next page"
-                      title="Next page"
-                      className="
-                        grid h-10 w-10 place-items-center rounded-full
-                        bg-transparent text-on-surface border-0 cursor-pointer
-                        hover:bg-surface-c transition-colors duration-150
-                        disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
-                      "
-                    >
-                      <ArrowRight size={18} weight="bold" />
-                    </button>
-                  )}
-                </div>
               )}
-            </section>
-          </div>
+
+              <section>
+                {/* SearchForm: Compact and aligned in the right section (same width as results) */}
+                <div className="mb-8">
+                  <SearchForm
+                    onSearch={handleSearch}
+                    isLoading={isLoading}
+                    defaultQuery={searchingQuery || lastQuery || defaultQuery}
+                    defaultFilters={lastFilters || searchingFilters || defaultFilters}
+                  />
+                </div>
+
+                {error && (
+                  <div className="mb-6 rounded-lg bg-red-50 p-4 text-red-700">
+                    {error}
+                  </div>
+                )}
+
+                {noResults ? (
+                  /* No-results screen — cat-in-a-bag illustration */
+                  <div className="flex flex-col items-center gap-6 px-5 pt-[50px] pb-10">
+                    <img
+                      src="/404.png"
+                      alt="No results found"
+                      className="w-full max-w-[460px] rounded-2xl"
+                    />
+                    <div className="text-center">
+                      <div className="mb-1.5 text-[20px] font-bold text-on-surface">
+                        No publications found
+                      </div>
+                      <div className="text-[14.5px] text-on-surface-variant">
+                        We couldn&apos;t find anything for &ldquo;{currentQuery}&rdquo;. Try different keywords.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Header row — "1,247 publications found" + SortSegmented */}
+                    {isSearching ? (
+                      <div className="flex items-center justify-between mb-5">
+                        <Skeleton className="h-5 w-44 rounded-md" />
+                        <Skeleton className="h-8 w-56 rounded-full" />
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between mb-5">
+                        <div className="text-[15px] text-on-surface whitespace-nowrap">
+                          <strong className="font-bold">{totalCount.toLocaleString()}</strong>{' '}
+                          <span className="text-on-surface-variant">publications found</span>
+                        </div>
+                        <SortSegmented value={sortValue} onChange={handleSortChange} />
+                      </div>
+                    )}
+
+                    {/* Result cards or Skeletons */}
+                    {isSearching ? (
+                      <div className="flex flex-col gap-4">
+                        {Array.from({ length: 4 }).map((_, i) => (
+                          <ResultCardSkeleton key={i} delayMs={i * 60} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-4">
+                        {results.map((r, i) => (
+                          <ResultCard
+                            key={r.id || i}
+                            result={r}
+                            delayMs={40 + Math.min(i, 7) * 60}
+                            onOpen={() => {
+                              const paperId = r.doi || r.pmcid || r.pmid;
+                              if (paperId) {
+                                const src = (r.source || 'Europe PMC').toLowerCase();
+                                navigate({
+                                  to: '/paper/$doi',
+                                  params: { doi: paperId },
+                                  search: { src },
+                                });
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Pagination */}
+                    {pagination && !isSearching && (
+                      <div className="mt-8 mb-4 flex items-center justify-center gap-3">
+                        {currentPage > 1 && (
+                          <button
+                            type="button"
+                            onClick={handlePrevPage}
+                            disabled={isLoading}
+                            aria-label="Previous page"
+                            title="Previous page"
+                            className="
+                              grid h-10 w-10 place-items-center rounded-full
+                              bg-transparent text-on-surface border-0 cursor-pointer
+                              hover:bg-surface-c transition-colors duration-150
+                              disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
+                            "
+                          >
+                            <ArrowLeft size={18} weight="bold" />
+                          </button>
+                        )}
+                        {pagination.hasMore && (
+                          <button
+                            type="button"
+                            onClick={handleNextPage}
+                            disabled={isLoading}
+                            aria-label="Next page"
+                            title="Next page"
+                            className="
+                              grid h-10 w-10 place-items-center rounded-full
+                              bg-transparent text-on-surface border-0 cursor-pointer
+                              hover:bg-surface-c transition-colors duration-150
+                              disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent
+                            "
+                          >
+                            <ArrowRight size={18} weight="bold" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
+            </div>
           </FilterSidebarContext.Provider>
         )}
       </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useContext } from 'react';
 import {
   MagnifyingGlass,
   XCircle,
@@ -11,12 +11,7 @@ import {
 import type { SearchFilters } from '../../types';
 import { searchTypesApi } from '../../lib/api';
 
-/**
- * Context that signals "a filter sidebar is mounted alongside the search bar".
- * FilterSidebar wraps itself in this provider; SearchForm reads it and
- * automatically collapses its filter rows — no prop needed, works universally.
- */
-export const FilterSidebarContext = createContext(false);
+import { FilterSidebarContext } from './FilterSidebarContext';
 
 /**
  * SearchForm — pill-shaped search bar with expandable filters.
@@ -359,6 +354,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
   const [typesLoading, setTypesLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [searchKey, setSearchKey] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -467,13 +463,12 @@ const SearchForm: React.FC<SearchFormProps> = ({
     e?.preventDefault();
     const q = query.trim();
     if (!q) return;
+    setSearchKey((k) => k + 1);
     setSearching(true);
-    window.setTimeout(() => {
-      setExpanded(false);
-      inputRef.current?.blur();
-      onSearch(q, filters);
-      window.setTimeout(() => setSearching(false), 120);
-    }, 650);
+    setExpanded(false);
+    inputRef.current?.blur();
+    onSearch(q, filters);
+    window.setTimeout(() => setSearching(false), 400);
   };
 
   const showAvailability = !hideFilters && expanded && filters.source === 'europepmc';
@@ -502,8 +497,8 @@ const SearchForm: React.FC<SearchFormProps> = ({
         `}
         style={{ padding: '10px 12px 10px 16px' }}
       >
-        {/* Pink trail-light on submit — keyed by submission time so animation restarts */}
-        {searching && <span className="pq-search-trail" key={Date.now()} />}
+        {/* Pink trail-light on submit — keyed by submission index so animation restarts */}
+        {searching && <span className="pq-search-trail" key={searchKey} />}
 
         <form onSubmit={submit}>
           {/* Row 1 — icon (left corner) | input | clear / ⌘K (right corner) */}
@@ -545,7 +540,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               className="
                 flex-1 min-w-0 h-[44px]
                 bg-transparent border-none outline-none
-                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-[#ff6dba]
+                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-black
                 tracking-[-0.003em]
               "
             />
@@ -659,14 +654,15 @@ const SearchForm: React.FC<SearchFormProps> = ({
           </div>
           )}{/* end !hideFilters */}
 
-          {/* Loading shimmer when an outer fetch is in flight */}
+          {/* Loading shimmer when an outer fetch is in flight — signature pink */}
           {isLoading && (
             <span
               aria-hidden
               className="
-                absolute left-4 right-4 bottom-0 h-px rounded-full
-                bg-gradient-to-r from-transparent via-primary/50 to-transparent
-                animate-pulse
+                absolute left-4 right-4 bottom-0 h-[2px] rounded-full
+                bg-gradient-to-r from-transparent via-[#ff6dba] to-transparent
+                shadow-[0_0_8px_rgba(255,109,186,0.6)]
+                animate-pulse pointer-events-none
               "
             />
           )}

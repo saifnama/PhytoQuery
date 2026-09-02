@@ -75,15 +75,15 @@ const JournalDistributionWidget: React.FC<Props> = ({
       style={{ height }}
     >
       {/* Left pane — shadcn Card with full Header/Content/Footer composition.
-          justify-between spreads the three sections across the pane. */}
+          Restored to previous Coastal palette colors (#2AACBF, #5BBCC8, #A0E4F1, #1A5F6B). */}
       <Card
         className="flex-1 rounded-none ring-0 gap-0 justify-between py-6 border-0"
-        style={{ background: "#F8FAFC" }}
+        style={{ background: "#F2FBFC" }}
       >
         <CardHeader>
           <CardTitle
             className="text-sm font-medium line-clamp-2 leading-tight"
-            style={{ color: "#0F172A" }}
+            style={{ color: "#1A5F6B" }}
           >
             {dominant.name}
           </CardTitle>
@@ -92,11 +92,12 @@ const JournalDistributionWidget: React.FC<Props> = ({
         <CardContent>
           <div className="flex items-baseline gap-2">
             <span
-              className="text-6xl font-semibold tabular-nums leading-none text-slate-900"
+              className="text-6xl font-semibold tabular-nums leading-none"
+              style={{ color: "#2AACBF" }}
             >
               {dominant.value.toLocaleString()}
             </span>
-            <span className="text-sm text-slate-500">
+            <span className="text-sm" style={{ color: "#5BBCC8" }}>
               papers
             </span>
           </div>
@@ -105,21 +106,24 @@ const JournalDistributionWidget: React.FC<Props> = ({
         <CardFooter className="flex-col items-stretch gap-2">
           <div className="flex w-full items-baseline justify-between">
             <span
-              className="text-2xl font-medium tabular-nums text-slate-900"
+              className="text-2xl font-medium tabular-nums"
+              style={{ color: "#2AACBF" }}
             >
               {pct}%
             </span>
-            <span className="text-xs text-slate-500">
+            <span className="text-xs" style={{ color: "#5BBCC8" }}>
               of corpus
             </span>
           </div>
           <div
-            className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200"
+            className="h-1.5 w-full overflow-hidden rounded-full"
+            style={{ backgroundColor: "rgba(160,228,241,0.3)" }}
           >
             <div
-              className="h-full rounded-full transition-all duration-500 bg-slate-900"
+              className="h-full rounded-full transition-all duration-500"
               style={{
                 width: `${pct}%`,
+                backgroundColor: "#A0E4F1",
               }}
             />
           </div>

@@ -323,7 +323,6 @@ const DbExplorerDrawer: React.FC<Props> = ({
               type="button"
               onClick={() => setActiveFilter(null)}
               className="group"
-              title="Clear year filter"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -342,7 +341,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
               <X
                 size={12}
                 weight="bold"
-                style={{ opacity: 0, color: '#EF4444', transition: 'opacity .15s ease' }}
+                style={{ opacity: 0, color: 'currentColor', transition: 'opacity .15s ease' }}
                 className="group-hover:!opacity-100"
               />
             </button>

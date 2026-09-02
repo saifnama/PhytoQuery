@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useRef } from "react"
 import {
   ComposableMap,
   Geographies,
@@ -41,17 +41,9 @@ interface Props {
   height?: number
 }
 
-interface MarkerHover {
+interface HoverData {
   name: string
-  value: number
-  x: number
-  y: number
-}
-
-interface CountryHover {
-  name: string
-  x: number
-  y: number
+  value?: number
 }
 
 // react-simple-maps' generic geographies don't carry a property
@@ -62,17 +54,15 @@ interface GeoFeature {
 }
 
 export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const tooltipRef = useRef<HTMLDivElement | null>(null)
+  const currentHoverRef = useRef<string | null>(null)
+  const leaveTimerRef = useRef<number | null>(null)
   const [world, setWorld] = useState<WorldGeo | null>(null)
   const [centroids, setCentroids] = useState<Map<string, Centroid>>(
     () => new Map(),
   )
-  const [markerHover, setMarkerHover] = useState<MarkerHover | null>(null)
-  const [countryHover, setCountryHover] = useState<CountryHover | null>(null)
-
-  // Marker takes precedence over country if both are active (marker
-  // sits on top of the country shape in z-order anyway).
-  const tip: MarkerHover | CountryHover | null = markerHover ?? countryHover
-  const tipHasValue = tip != null && "value" in tip
+  const [hoverData, setHoverData] = useState<HoverData | null>(null)
 
   // Fetch the world-atlas TopoJSON, decode it to a GeoJSON
   // FeatureCollection, then hand the SAME object to <Geographies>
@@ -101,13 +91,6 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
   const markers = useMemo(() => {
     if (!data.length || centroids.size === 0) return []
 
-    // Aggregate by canonical world-atlas country. Multi-country mentions
-    // like "Italy And France" or "Guinea, Uganda And Sudan" are split
-    // and each component country gets the paper's contribution credited
-    // (full attribution to each — the paper IS about both/all). Direct
-    // lookup is tried first so single-country names containing " And " /
-    // commas (Antigua and Barbuda, Trinidad and Tobago, etc.) keep their
-    // own aliased centroid instead of getting split.
     const byCountry = new Map<
       string,
       { name: string; value: number; coords: Lnglat }
@@ -139,10 +122,54 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
     }))
   }, [data, centroids])
 
+  // Map of lowercase country name -> total papers for instant O(1) lookup on hover
+  const countryValueMap = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const m of markers) {
+      map.set(m.name.toLowerCase(), m.value)
+    }
+    for (const d of data) {
+      const existing = map.get(d.name.toLowerCase()) || 0
+      map.set(d.name.toLowerCase(), Math.max(existing, d.value))
+    }
+    return map
+  }, [markers, data])
+
+  const getCountryPapers = (name: string): number | undefined => {
+    const lower = name.toLowerCase()
+    const direct = countryValueMap.get(lower)
+    if (direct !== undefined) return direct
+    const c = lookupCentroid(name, centroids)
+    if (c) {
+      return countryValueMap.get(c.name.toLowerCase())
+    }
+    return undefined
+  }
+
+  // Direct DOM hardware-accelerated tooltip positioning (0ms latency, no React SVG diffing)
+  const updateTooltipPos = (clientX: number, clientY: number) => {
+    if (!containerRef.current || !tooltipRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    const x = clientX - rect.left + 14
+    const y = clientY - rect.top + 14
+    const maxX = rect.width - (tooltipRef.current.offsetWidth || 160) - 8
+    const maxY = rect.height - (tooltipRef.current.offsetHeight || 60) - 8
+    const clampedX = Math.max(8, Math.min(x, maxX))
+    const clampedY = Math.max(8, Math.min(y, maxY))
+    tooltipRef.current.style.transform = `translate3d(${clampedX}px, ${clampedY}px, 0)`
+  }
+
   return (
     <div
+      ref={containerRef}
       className="relative w-full overflow-hidden rounded-2xl"
       style={{ height, background: "#EDF5F8" }}
+      onMouseMove={(e) => updateTooltipPos(e.clientX, e.clientY)}
+      onMouseLeave={() => {
+        if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+        currentHoverRef.current = null
+        setHoverData(null)
+      }}
     >
       <ComposableMap
         projection="geoNaturalEarth1"
@@ -178,16 +205,27 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
                     }}
                     onMouseEnter={(e) => {
                       const name = g.properties?.name
-                      if (name) {
-                        setCountryHover({ name, x: e.clientX, y: e.clientY })
+                      if (!name) return
+                      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+                      updateTooltipPos(e.clientX, e.clientY)
+                      if (currentHoverRef.current !== name) {
+                        currentHoverRef.current = name
+                        setHoverData({
+                          name,
+                          value: getCountryPapers(name),
+                        })
                       }
                     }}
-                    onMouseMove={(e) =>
-                      setCountryHover((prev) =>
-                        prev ? { ...prev, x: e.clientX, y: e.clientY } : prev,
-                      )
-                    }
-                    onMouseLeave={() => setCountryHover(null)}
+                    onMouseLeave={() => {
+                      const name = g.properties?.name
+                      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+                      leaveTimerRef.current = window.setTimeout(() => {
+                        if (currentHoverRef.current === name) {
+                          currentHoverRef.current = null
+                          setHoverData(null)
+                        }
+                      }, 25)
+                    }}
                     onClick={() => {
                       const name = g.properties?.name
                       if (name && onCountryClick) onCountryClick(name)
@@ -202,26 +240,30 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
             <Marker
               key={`${m.name}-${i}`}
               coordinates={m.coords}
-              onMouseEnter={(e) =>
-                setMarkerHover({
-                  name: m.name,
-                  value: m.value,
-                  x: e.clientX,
-                  y: e.clientY,
-                })
-              }
-              onMouseMove={(e) =>
-                setMarkerHover((prev) =>
-                  prev ? { ...prev, x: e.clientX, y: e.clientY } : prev,
-                )
-              }
-              onMouseLeave={() => setMarkerHover(null)}
+              onMouseEnter={(e) => {
+                if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+                updateTooltipPos(e.clientX, e.clientY)
+                if (currentHoverRef.current !== m.name) {
+                  currentHoverRef.current = m.name
+                  setHoverData({
+                    name: m.name,
+                    value: m.value,
+                  })
+                }
+              }}
+              onMouseLeave={() => {
+                const name = m.name
+                if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+                leaveTimerRef.current = window.setTimeout(() => {
+                  if (currentHoverRef.current === name) {
+                    currentHoverRef.current = null
+                    setHoverData(null)
+                  }
+                }, 25)
+              }}
               onClick={() => onCountryClick?.(m.name)}
             >
-              {/* Three concentric ripple rings. Each runs a 2.1s
-                  cycle staggered by 0.7s (0s, 0.7s, 1.4s) so
-                  rings continuously expand from the center dot —
-                  the raindrop-on-water / radar pulse look. */}
+              {/* Three concentric ripple rings. pointer-events-none prevents hover jitter. */}
               {[0, 0.7, 1.4].map((beginSec, k) => (
                 <circle
                   key={k}
@@ -232,7 +274,7 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
                   stroke="#06B6D4"
                   strokeWidth={1.6}
                   vectorEffect="non-scaling-stroke"
-                  className="cursor-pointer pointer-events-auto"
+                  className="pointer-events-none"
                 >
                   <animate
                     attributeName="r"
@@ -261,6 +303,15 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
                 </circle>
               ))}
 
+              {/* Larger hit area for easy hover targeting */}
+              <circle
+                cx={0}
+                cy={0}
+                r={Math.max(12, m.baseR * 1.5)}
+                fill="transparent"
+                className="cursor-pointer"
+              />
+
               {/* Solid center dot. */}
               <circle
                 cx={0}
@@ -268,38 +319,50 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
                 r={m.baseR * 0.55}
                 fill="#06B6D4"
                 opacity={0.95}
-                className="cursor-pointer"
+                className="cursor-pointer pointer-events-none"
               />
             </Marker>
           ))}
         </ZoomableGroup>
       </ComposableMap>
 
-      {/* Tooltip — same fixed-position floating chip used for both
-          country hovers (name only) and marker hovers (name + count).
-          Marker hover wins if both happen at the same coords. */}
-      {tip && (
-        <div
-          className="fixed z-50 pointer-events-none rounded-lg border border-border/60 bg-popover/95 backdrop-blur-sm px-3 py-2 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5"
-          style={{ left: tip.x + 14, top: tip.y + 14 }}
-        >
-          <div className="flex items-center gap-1.5 font-semibold tracking-tight">
-            {tipHasValue && (
-              <span
-                aria-hidden
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ background: "#06B6D4" }}
-              />
-            )}
-            <span style={{ color: "#0E7490" }}>{tip.name}</span>
-          </div>
-          {tipHasValue && (
-            <div className="mt-0.5 text-muted-foreground tabular-nums">
-              {(tip as MarkerHover).value.toLocaleString()} papers
+      {/* Tooltip — direct GPU translate3d hardware accelerated with zero React SVG re-renders */}
+      <div
+        ref={tooltipRef}
+        className={`
+          absolute top-0 left-0 z-50 pointer-events-none rounded-lg
+          border border-border/60 bg-popover/95 backdrop-blur-sm
+          px-3 py-2 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5
+          will-change-transform
+          ${hoverData ? "opacity-100" : "opacity-0 pointer-events-none"}
+        `}
+        style={{
+          transform: "translate3d(-9999px, -9999px, 0)",
+          transition: "opacity 60ms ease-out",
+        }}
+      >
+        {hoverData && (
+          <>
+            <div className="flex items-center gap-1.5 font-semibold tracking-tight">
+              {hoverData.value != null && hoverData.value > 0 && (
+                <span
+                  aria-hidden
+                  className="inline-block h-2 w-2 rounded-full shrink-0"
+                  style={{ background: "#06B6D4" }}
+                />
+              )}
+              <span style={{ color: "#0E7490" }} className="truncate max-w-[200px]">
+                {hoverData.name}
+              </span>
             </div>
-          )}
-        </div>
-      )}
+            {hoverData.value != null && hoverData.value > 0 && (
+              <div className="mt-0.5 text-muted-foreground tabular-nums font-medium">
+                {hoverData.value.toLocaleString()} papers
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
