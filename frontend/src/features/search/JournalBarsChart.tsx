@@ -30,25 +30,48 @@ interface Props {
   onBarClick?: (name: string) => void
 }
 
-const PALETTE = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
+const DIVERSE_PALETTE = [
+  "#0EA5E9", // Sky blue
+  "#10B981", // Emerald green
+  "#F59E0B", // Amber gold
+  "#8B5CF6", // Purple / Violet
+  "#EC4899", // Pink
+  "#06B6D4", // Cyan
+  "#F97316", // Orange
+  "#6366F1", // Indigo
+  "#14B8A6", // Teal
+  "#EF4444", // Coral Red
+  "#84CC16", // Lime
+  "#D946EF", // Fuchsia
+  "#3B82F6", // Cobalt Blue
+  "#E11D48", // Rose
+  "#22C55E", // Bright Green
+  "#A855F7", // Medium Purple
+  "#38BDF8", // Light Sky
+  "#FB923C", // Light Orange
+  "#A78BFA", // Lavender
+  "#4ADE80", // Mint
 ] as const
 
-const ROW_HEIGHT = 28
-
-function truncate(label: string, max = 14): string {
+function truncate(label: string, max = 26): string {
   return label.length > max ? label.slice(0, max - 1) + "…" : label
 }
 
 export function JournalBarsChart({ data, onBarClick }: Props) {
-  const dataWithFill = useMemo(
-    () => data.map((d, i) => ({ ...d, fill: PALETTE[i % PALETTE.length] })),
-    [data],
-  )
+  // Truly random palette shuffled on each load/search; memoized so it consumes 0 CPU during hover/interaction
+  const dataWithFill = useMemo(() => {
+    const pool = [...DIVERSE_PALETTE]
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const temp = pool[i]
+      pool[i] = pool[j]
+      pool[j] = temp
+    }
+    return data.map((d, i) => ({
+      ...d,
+      fill: pool[i % pool.length],
+    }))
+  }, [data])
 
   // Single config entry — Recharts only needs the dataKey for tooltip
   // labelling. Per-bar colours are set on ``<Cell>`` below.
@@ -59,19 +82,16 @@ export function JournalBarsChart({ data, onBarClick }: Props) {
     },
   } satisfies ChartConfig
 
-  const height = Math.max(180, data.length * ROW_HEIGHT + 32)
-
   return (
     <ChartContainer
       config={chartConfig}
-      style={{ height }}
-      className="w-full"
+      className="w-full h-full"
     >
       <BarChart
         accessibilityLayer
         data={dataWithFill}
         layout="vertical"
-        margin={{ top: 8, right: 44, bottom: 8, left: 8 }}
+        margin={{ top: 4, right: 32, bottom: 4, left: 0 }}
       >
         <XAxis type="number" hide />
         <YAxis
@@ -79,9 +99,9 @@ export function JournalBarsChart({ data, onBarClick }: Props) {
           dataKey="name"
           tickLine={false}
           axisLine={false}
-          width={120}
+          width={195}
           tick={{ fontSize: 11 }}
-          tickFormatter={(v: string) => truncate(v)}
+          tickFormatter={(v: string) => truncate(v, 26)}
         />
 
         <ChartTooltip

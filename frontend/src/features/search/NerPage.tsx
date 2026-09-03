@@ -176,14 +176,16 @@ const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
               }}
               className={`
                 inline-flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer
-                text-sm transition-colors duration-150
+                text-[15px] transition-colors duration-150
                 ${active
-                  ? 'font-bold text-on-surface'
-                  : 'font-medium text-on-surface-variant hover:text-on-surface'}
+                  ? 'font-semibold text-on-surface'
+                  : 'font-normal text-on-surface-variant hover:text-on-surface'}
               `}
             >
               <span>{opt}</span>
-              {isDate && active && <Arrow size={13} weight="bold" />}
+              {isDate && active && (
+                <Arrow size={14} weight="bold" className="shrink-0 -translate-y-[1px]" />
+              )}
             </button>
           </React.Fragment>
         );
@@ -845,7 +847,7 @@ const NerPage: React.FC = () => {
                     ) : (
                       <div className="flex items-center justify-between mb-5">
                         <div className="text-[15px] text-on-surface whitespace-nowrap">
-                          <strong className="font-bold">{totalCount.toLocaleString()}</strong>{' '}
+                          <strong className="font-semibold text-on-surface">{totalCount.toLocaleString()}</strong>{' '}
                           <span className="text-on-surface-variant">publications found</span>
                         </div>
                         <SortSegmented value={sortValue} onChange={handleSortChange} />

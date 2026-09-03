@@ -61,7 +61,7 @@ interface DashboardMetrics {
 // "-under" companions for the divider). This pulls the screenshot's
 // vivid Material teal / purple / green hues into the cards instead of
 // the previous pastels.
-const statCardVariants = cva('gap-0 py-5 transition-all duration-200', {
+const statCardVariants = cva('p-6 transition-all duration-200 justify-center gap-0', {
   variants: {
     accent: {
       papers:   '[--stat-accent:var(--role-papers)]   [--stat-divider:var(--role-papers-under)]',
@@ -85,8 +85,6 @@ function StatCard({ accent, label, value, onClick, isActive }: StatCardProps) {
     <Card
       className={cn(
         statCardVariants({ accent }),
-        // Hover lift mirrors main.jsx's StatCard: -2px translate, accent
-        // border, elevation-1 shadow.
         clickable && 'cursor-pointer hover:-translate-y-0.5 hover:[border-color:var(--stat-accent)] hover:shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]',
         isActive && 'border-[var(--stat-accent)] shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]'
       )}
@@ -104,23 +102,17 @@ function StatCard({ accent, label, value, onClick, isActive }: StatCardProps) {
           : undefined
       }
     >
-      <CardHeader className="px-6">
+      <div className="flex flex-col gap-3.5">
         <span
           className="text-[12px] font-semibold uppercase tracking-[0.12em]"
           style={{ color: 'var(--stat-accent)' }}
         >
           {label}
         </span>
-      </CardHeader>
-      <CardContent className="px-6 pb-6">
-        {/* 64px / weight 700 / -0.02em — matches main.jsx's .stat-num.
-            font-mono dropped so the numerals render in the inherited
-            sans (Roboto when present, system sans otherwise) per the
-            design's Roboto type system. */}
-        <div className="text-[64px] font-bold leading-none tracking-[-0.02em] text-on-surface">
+        <div className="text-[54px] lg:text-[60px] font-bold leading-none tracking-[-0.02em] text-on-surface">
           {value.toLocaleString()}
         </div>
-      </CardContent>
+      </div>
     </Card>
   );
 }
@@ -240,9 +232,9 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 'var(--content-max)', fontFamily: 'var(--font-google-sans)' }}>
-      <div className="px-12 pt-7 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="px-12 pt-2 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
         {/* KPI Cards — shadcn Card with cva accent variants */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8 mt-10">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8 mt-8">
         <StatCard
           accent="papers"
           label="Papers indexed"

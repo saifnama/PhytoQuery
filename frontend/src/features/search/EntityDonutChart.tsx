@@ -83,7 +83,7 @@ export function EntityDonutChart({ data, onSliceClick }: Props) {
   return (
     <ChartContainer
       config={chartConfig}
-      className="mx-auto aspect-square h-[280px] w-full"
+      className="mx-auto aspect-square h-[300px] w-full"
     >
       <PieChart>
         <ChartTooltip
@@ -110,8 +110,8 @@ export function EntityDonutChart({ data, onSliceClick }: Props) {
           data={dataWithFill}
           dataKey="value"
           nameKey="name"
-          innerRadius={70}
-          outerRadius={110}
+          innerRadius={96}
+          outerRadius={138}
           strokeWidth={2}
           paddingAngle={2}
           onMouseEnter={(_, i) => setActiveIndex(i)}
@@ -143,15 +143,15 @@ export function EntityDonutChart({ data, onSliceClick }: Props) {
                 >
                   <tspan
                     x={cx}
-                    y={cy - 6}
-                    className="fill-foreground text-3xl font-bold tabular-nums"
+                    y={cy - 8}
+                    className="fill-foreground text-4xl font-bold tabular-nums tracking-tight"
                   >
                     {centerLine1}
                   </tspan>
                   <tspan
                     x={cx}
-                    y={cy + 18}
-                    className="fill-muted-foreground text-xs"
+                    y={cy + 22}
+                    className="fill-muted-foreground text-sm font-medium"
                   >
                     {centerLine2}
                   </tspan>

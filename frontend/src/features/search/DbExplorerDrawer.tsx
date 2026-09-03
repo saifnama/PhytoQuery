@@ -16,6 +16,7 @@ import {
   MagnifyingGlass,
   CaretCircleDown,
   X,
+  XCircle,
 } from '@phosphor-icons/react';
 import {
   DropdownMenu,
@@ -88,6 +89,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
   const [papersError, setPapersError] = useState(false);
   const [totalPapers, setTotalPapers] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   // Portal target — dedicated #portal-root sibling to #root in index.html
@@ -298,26 +300,61 @@ const DbExplorerDrawer: React.FC<Props> = ({
             <MagnifyingGlass size={16} />
           </span>
           <input
+            ref={searchInputRef}
             placeholder="Search title, journal or entities…"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             style={{
               width: '100%', height: 40,
-              paddingLeft: 42, paddingRight: 14,
+              paddingLeft: 42, paddingRight: searchQuery ? 38 : 14,
               background: 'var(--surface-c, #F4F4F5)',
               border: '1.5px solid transparent',
               borderRadius: 'var(--radius-full, 9999px)',
-              fontSize: 14, color: 'var(--on-surface, #18181B)',
+              fontSize: 15, color: 'var(--on-surface, #18181B)',
+              caretColor: '#000000',
               outline: 'none',
-              transition: 'border-color .15s',
+              transition: 'border-color .2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .2s cubic-bezier(0.4, 0, 0.2, 1)',
             }}
-            onFocus={e  => { e.currentTarget.style.borderColor = 'var(--teal-400, #26A69A)'; }}
-            onBlur={e   => { e.currentTarget.style.borderColor = 'transparent'; }}
+            onFocus={e => {
+              e.currentTarget.style.borderColor = '#ff6dba';
+              e.currentTarget.style.boxShadow = '0 0 0 3px color-mix(in oklab, #ff6dba 16%, transparent)';
+            }}
+            onBlur={e => {
+              e.currentTarget.style.borderColor = 'transparent';
+              e.currentTarget.style.boxShadow = 'none';
+            }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+              aria-label="Clear search"
+              title="Clear"
+              style={{
+                position: 'absolute', right: 10, top: '50%',
+                transform: 'translateY(-50%)',
+                width: 26, height: 26,
+                borderRadius: '50%',
+                display: 'grid', placeItems: 'center',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--on-surface-variant, #71717A)',
+                cursor: 'pointer',
+                transition: 'color .15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--on-surface, #18181B)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--on-surface-variant, #71717A)'; }}
+            >
+              <XCircle size={16} weight="regular" />
+            </button>
+          )}
         </div>
 
-        {/* Active Year Filter Badge — tinted with timeline colour, X reveals on hover */}
-        {activeFilter?.kind === 'year' && activeFilter.value && (
+        {/* Active Year or Country Filter Badge — tinted with timeline / map ripple colour, X reveals on hover */}
+        {activeFilter && (activeFilter.kind === 'year' || activeFilter.kind === 'country') && activeFilter.value && (
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center' }}>
             <button
               type="button"
@@ -329,15 +366,15 @@ const DbExplorerDrawer: React.FC<Props> = ({
                 gap: 5,
                 padding: '4px 10px',
                 borderRadius: 999,
-                background: 'rgba(0,172,193,0.10)',
-                color: '#007A8E',
-                border: '1px solid rgba(0,172,193,0.28)',
+                background: activeFilter.kind === 'country' ? 'rgba(6,182,212,0.10)' : 'rgba(0,172,193,0.10)',
+                color: activeFilter.kind === 'country' ? '#0891B2' : '#007A8E',
+                border: activeFilter.kind === 'country' ? '1px solid rgba(6,182,212,0.35)' : '1px solid rgba(0,172,193,0.28)',
                 fontSize: 12,
                 fontWeight: 600,
                 cursor: 'pointer',
               }}
             >
-              <span>Year: {activeFilter.value}</span>
+              <span>{activeFilter.kind === 'country' ? `Country: ${activeFilter.value}` : `Year: ${activeFilter.value}`}</span>
               <X
                 size={12}
                 weight="bold"

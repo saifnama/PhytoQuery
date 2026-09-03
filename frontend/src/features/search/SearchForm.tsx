@@ -536,11 +536,11 @@ const SearchForm: React.FC<SearchFormProps> = ({
               placeholder="Search scholarly publications (DOI, PMID, PMCID, or keywords)…"
               autoComplete="off"
               spellCheck={false}
-              style={{ fontFamily: 'var(--font-google-sans)' }}
+              style={{ fontFamily: 'var(--font-google-sans)', fontSize: '17.5px' }}
               className="
                 flex-1 min-w-0 h-[44px]
                 bg-transparent border-none outline-none
-                text-[15px] text-on-surface placeholder:text-on-surface-muted caret-black
+                text-[17.5px] text-on-surface placeholder:text-on-surface-muted caret-black
                 tracking-[-0.003em]
               "
             />
@@ -556,7 +556,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
               </button>
             )}
             {!expanded && !query && (
-              <span className="inline-flex items-center gap-1.5 shrink-0">
+              <span className="inline-flex items-center gap-1.5 shrink-0 mr-2.5">
                 <span className="inline-flex items-center justify-center w-[28px] h-[28px] rounded-full bg-[var(--surface-c)] border border-[var(--outline-variant)] text-[12px] font-mono text-[var(--on-surface-variant)]">
                   ⌘
                 </span>

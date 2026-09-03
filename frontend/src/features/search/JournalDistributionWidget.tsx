@@ -25,14 +25,6 @@
  */
 
 import React from "react"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { JournalBarsChart } from "./JournalBarsChart"
 
 interface JournalEntry {
@@ -65,31 +57,35 @@ const JournalDistributionWidget: React.FC<Props> = ({
   }
 
   const dominant = journals[0]
-  const ranked = journals.slice(1, 10)
+  const ranked = journals.slice(1, 9)
   const pct =
     totalPapers > 0 ? Math.round((dominant.value / totalPapers) * 100) : 0
 
   return (
     <div
-      className="flex overflow-hidden rounded-2xl border border-slate-200 shadow-sm"
+      className="flex items-stretch gap-4 w-full"
       style={{ height }}
     >
-      {/* Left pane — shadcn Card with full Header/Content/Footer composition.
-          Restored to previous Coastal palette colors (#2AACBF, #5BBCC8, #A0E4F1, #1A5F6B). */}
-      <Card
-        className="flex-1 rounded-none ring-0 gap-0 justify-between py-6 border-0"
-        style={{ background: "#F2FBFC" }}
+      {/* Left pane — blue card (equal 50% split, completely borderless) */}
+      <div
+        className="flex-1 min-w-0 rounded-2xl flex flex-col justify-between py-6 px-6"
+        style={{
+          background: "#F2FBFC",
+          border: "none",
+          outline: "none",
+          boxShadow: "none",
+        }}
       >
-        <CardHeader>
-          <CardTitle
+        <div>
+          <div
             className="text-sm font-medium line-clamp-2 leading-tight"
             style={{ color: "#1A5F6B" }}
           >
             {dominant.name}
-          </CardTitle>
-        </CardHeader>
+          </div>
+        </div>
 
-        <CardContent>
+        <div>
           <div className="flex items-baseline gap-2">
             <span
               className="text-6xl font-semibold tabular-nums leading-none"
@@ -101,9 +97,9 @@ const JournalDistributionWidget: React.FC<Props> = ({
               papers
             </span>
           </div>
-        </CardContent>
+        </div>
 
-        <CardFooter className="flex-col items-stretch gap-2">
+        <div className="flex flex-col items-stretch gap-2">
           <div className="flex w-full items-baseline justify-between">
             <span
               className="text-2xl font-medium tabular-nums"
@@ -127,23 +123,13 @@ const JournalDistributionWidget: React.FC<Props> = ({
               }}
             />
           </div>
-        </CardFooter>
-      </Card>
+        </div>
+      </div>
 
-      {/* Inter-pane divider */}
-      <Separator
-        orientation="vertical"
-        className="h-auto bg-slate-200"
-      />
-
-      {/* Right pane */}
-      <Card
-        className="flex-1 rounded-none ring-0 gap-0 py-3 border-0 bg-white"
-      >
-        <CardContent className="h-full px-3">
-          <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
-        </CardContent>
-      </Card>
+      {/* Right pane — borderless chart */}
+      <div className="flex-1 min-w-0 h-full">
+        <JournalBarsChart data={ranked} onBarClick={onJournalClick} />
+      </div>
     </div>
   )
 }
