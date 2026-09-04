@@ -386,12 +386,14 @@ body {
 }
 
 /* Type scale */
-h1, h2, h3, h4, h5, h6 { color: var(--on-surface); margin: 0; }
-h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
-h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.005em; }
-h4 { font-size: 16px; font-weight: 600; }
-h5 { font-size: 14px; font-weight: 600; }
+@layer base {
+  h1, h2, h3, h4, h5, h6 { color: var(--on-surface); margin: 0; }
+  h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  h3 { font-size: 18px; font-weight: 600; letter-spacing: -0.005em; }
+  h4 { font-size: 16px; font-weight: 600; }
+  h5 { font-size: 14px; font-weight: 600; }
+}
 
 button { font-family: inherit; }
 input, textarea, select { font-family: inherit; font-size: inherit; }
@@ -634,6 +636,7 @@ input, textarea {
     color: var(--on-surface-variant);
     font-size: 13.5px;
     font-weight: 500;
+    font-family: var(--font-google-sans);
     cursor: pointer;
     transition: color .12s;
     border: none;
@@ -735,12 +738,10 @@ input, textarea {
 /* â”€â”€ Status icon (OA / full-text badge on result cards) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .status-ic {
     display: inline-grid; place-items: center;
-    width: 30px; height: 30px;
-    border-radius: 8px;
+    width: 28px; height: 28px;
     cursor: default;
-    transition: background .15s;
+    background: transparent;
 }
-.status-ic:hover { background: var(--surface-c); }
 
 /* â”€â”€ Dual range slider track â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .dual-range {
@@ -1252,13 +1253,13 @@ mark.ner-default {
     color: var(--foreground);
     line-height: 1.7;
     font-size: 16px;
-    font-family: var(--font-serif);
+    font-family: var(--font-google-sans);
 }
 .article-prose h1,
 .article-prose h2,
 .article-prose h3,
 .article-prose h4 {
-    font-family: var(--font-roboto);
+    font-family: var(--font-google-sans);
     color: var(--foreground);
     margin-top: 1.6em;
     margin-bottom: 0.6em;

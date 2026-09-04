@@ -313,7 +313,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const [activeChemicalPopup, setActiveChemicalPopup] = useState<ChemicalPopupState | null>(null);
   const titleContainerRef = useRef<HTMLHeadingElement>(null);
   const htmlContainerRef = useRef<HTMLDivElement>(null);
-  const observerRef = useRef<IntersectionObserver | null>(null);
+  const isClickScrollingRef = useRef(false);
+  const clickScrollTimeoutRef = useRef<number | null>(null);
   const speciesPopupRef = useRef<HTMLDivElement>(null);
   const chemicalPopupRef = useRef<HTMLDivElement>(null);
   const chemicalStructureSvgRef = useRef<SVGSVGElement | null>(null);
@@ -1347,45 +1348,148 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     activeChemicalPopup
   ]);
 
-  // Setup scroll spy for section headings
+  // Helper to reliably find any section heading element by ID or text content
+  const findHeading = useCallback((targetId: string, targetText?: string): HTMLElement | null => {
+    let el = document.getElementById(targetId);
+    if (!el && (targetId === 'section-0' || targetId === 'abstract' || targetText?.toLowerCase() === 'abstract')) {
+      el = document.getElementById('abstract') || document.getElementById('section-0');
+    }
+    if (!el && targetText && htmlContainerRef.current) {
+      const cleanTarget = targetText.trim().toLowerCase();
+      const headings = Array.from(htmlContainerRef.current.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+      
+      // 1. Exact text match
+      el = (headings.find(h => {
+        const t = h.textContent?.trim().toLowerCase();
+        return t === cleanTarget;
+      }) as HTMLElement) || null;
+
+      // 2. Starts with / includes match
+      if (!el) {
+        el = (headings.find(h => {
+          const t = h.textContent?.trim().toLowerCase();
+          return t && (t.startsWith(cleanTarget) || cleanTarget.startsWith(t) || t.includes(cleanTarget));
+        }) as HTMLElement) || null;
+      }
+
+      // 3. Section by id
+      if (!el) {
+        const sections = Array.from(htmlContainerRef.current.querySelectorAll('section[id]'));
+        el = (sections.find(s => s.id.toLowerCase() === targetId.toLowerCase()) as HTMLElement) || null;
+      }
+    }
+    return el;
+  }, []);
+
+  // Ensure headings have matching IDs after HTML mounts
   useEffect(() => {
-    if (!htmlContainerRef.current) return;
+    if (!htmlContainerRef.current || !toc || toc.length === 0) return;
     const container = htmlContainerRef.current;
-    const headingNodes = container.querySelectorAll('h3.article-h3');
-    if (headingNodes.length === 0) return;
+    const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6, section'));
 
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.intersectionRatio > 0) {
-            const id = entry.target.id;
-            // Find matching TOC item by ID
-            const tocItem = toc.find(item => item.id === id);
-            if (tocItem) {
-              const idx = toc.indexOf(tocItem);
-              if (idx >= 0) setCurrentSectionIdx(idx);
-            }
-            setActiveHeading(id);
-          }
-        });
-      },
-      { rootMargin: '-20% 0px -70% 0px', threshold: 0 }
-    );
-
-    headingNodes.forEach((el: Element) => observerRef.current?.observe(el as Element));
-
-    return () => {
-      observerRef.current?.disconnect();
-    };
+    toc.forEach((item, idx) => {
+      const cleanTarget = item.text.trim().toLowerCase();
+      const match = headings.find(h => {
+        const t = h.textContent?.trim().toLowerCase();
+        if (!t) return false;
+        return t === cleanTarget || t.startsWith(cleanTarget) || cleanTarget.startsWith(t) || t.includes(cleanTarget) || cleanTarget.includes(t);
+      });
+      if (match && !match.id) {
+        match.id = item.id || `section-${idx}`;
+      }
+    });
   }, [html, toc]);
 
-  // Scroll to element by ID
-  const scrollToId = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Scroll to element by ID or text with container-aware scrolling
+  const scrollToId = (id: string, text?: string) => {
+    const el = findHeading(id, text);
+    if (!el) return;
+
+    isClickScrollingRef.current = true;
+    if (clickScrollTimeoutRef.current) window.clearTimeout(clickScrollTimeoutRef.current);
+    clickScrollTimeoutRef.current = window.setTimeout(() => {
+      isClickScrollingRef.current = false;
+    }, 800);
+
+    const scrollContainer = document.getElementById('main-content-display');
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const relativeTop = elRect.top - containerRect.top;
+      const targetScrollTop = scrollContainer.scrollTop + relativeTop - 24;
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth',
+      });
+    } else {
+      const yOffset = -90;
+      const y = el.getBoundingClientRect().top + window.pageYOffset + yOffset;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
     }
   };
+
+  // Setup real-time scroll listener for active section indicator
+  useEffect(() => {
+    const scrollContainer = document.getElementById('main-content-display');
+    const scrollTarget: EventTarget = scrollContainer || window;
+
+    const handleScroll = () => {
+      if (isClickScrollingRef.current) return;
+      if (!toc || toc.length === 0 || !htmlContainerRef.current) return;
+
+      const elements: { idx: number; el: HTMLElement }[] = [];
+      toc.forEach((item, idx) => {
+        const el = findHeading(item.id, item.text);
+        if (el) {
+          elements.push({ idx, el });
+        }
+      });
+
+      if (elements.length === 0) return;
+
+      // Sort by vertical position in DOM to guarantee top-to-bottom order
+      elements.sort((a, b) => a.el.getBoundingClientRect().top - b.el.getBoundingClientRect().top);
+
+      const containerTop = scrollContainer ? scrollContainer.getBoundingClientRect().top : 0;
+      const currentScrollTop = scrollContainer ? scrollContainer.scrollTop : window.scrollY;
+
+      // At the very top: activate section 0
+      if (currentScrollTop < 50) {
+        setCurrentSectionIdx(0);
+        return;
+      }
+
+      // At the very bottom: activate last section
+      if (scrollContainer) {
+        const isAtBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50;
+        if (isAtBottom) {
+          setCurrentSectionIdx(elements[elements.length - 1].idx);
+          return;
+        }
+      }
+
+      let activeIdx = elements[0].idx;
+      for (const item of elements) {
+        const rect = item.el.getBoundingClientRect();
+        const relativeTop = rect.top - containerTop;
+        if (relativeTop <= 90) {
+          activeIdx = item.idx;
+        } else {
+          break;
+        }
+      }
+
+      setCurrentSectionIdx(activeIdx);
+    };
+
+    scrollTarget.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+
+    return () => {
+      scrollTarget.removeEventListener('scroll', handleScroll);
+      if (clickScrollTimeoutRef.current) window.clearTimeout(clickScrollTimeoutRef.current);
+    };
+  }, [html, toc, findHeading]);
 
   // Citation click handler - REMOVED (references section no longer displayed)
 
@@ -1413,13 +1517,14 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           style={{
             width: 220, flexShrink: 0,
             position: "sticky", top: 232, height: "fit-content",
-            paddingRight: 8, marginTop: 39, marginLeft: -12
+            paddingRight: 8, marginTop: 39, marginLeft: -40
           }} 
           className="hidden lg:block shrink-0"
         >
           <div style={{
-            fontSize: 15, fontWeight: 500, color: "var(--on-surface)",
-            marginBottom: 18, paddingLeft: 19
+            fontSize: 15, fontWeight: 700, color: "var(--on-surface)",
+            marginBottom: 18, paddingLeft: 19,
+            fontFamily: "var(--font-google-sans)"
           }}>Sections</div>
 
           <nav style={{ display: "flex", flexDirection: "column" }}>
@@ -1431,7 +1536,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   onClick={() => {
                     setCurrentSectionIdx(idx);
                     setActiveHeading(null);
-                    scrollToId(item.id);
+                    scrollToId(item.id, item.text);
                   }}
                   style={{
                     display: "flex", alignItems: "center", gap: 16,
@@ -1458,9 +1563,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     flexShrink: 0
                   }} />
                   <span style={{
-                    fontSize: 15.5,
-                    fontWeight: active ? 700 : 400,
+                    fontSize: 15,
+                    fontWeight: active ? 600 : 400,
                     color: active ? "var(--on-surface)" : "var(--on-surface-variant)",
+                    fontFamily: "var(--font-google-sans)",
                     transition: "color .15s"
                   }}>{item.text}</span>
                 </button>
@@ -1474,26 +1580,47 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           
           {/* Metadata Row */}
           <div className="flex items-center gap-2.5 mb-[18px] text-[12.5px] text-on-surface-variant">
-            <span style={{
-              height: 22, padding: "0 11px", borderRadius: 999,
-              background: "#ECFDF3", color: "#16794C",
-              fontSize: 10.5, fontWeight: 600, letterSpacing: ".04em",
-              display: "inline-flex", alignItems: "center"
-            }} className="uppercase">
-              {fallbackSource ? fallbackSource.source : mode}
-            </span>
+            {(() => {
+              const srcText = fallbackSource ? fallbackSource.source : mode;
+              const lower = (srcText || '').toLowerCase();
+              let badgeBg = '#ecfdf5';
+              let badgeColor = '#059669';
+
+              if (lower.includes('openalex')) {
+                badgeBg = '#f1f5f9';
+                badgeColor = '#334155';
+              } else if (lower.includes('semantic')) {
+                badgeBg = '#fefce8';
+                badgeColor = '#a16207';
+              } else if (lower.includes('europe')) {
+                badgeBg = '#ecfdf5';
+                badgeColor = '#059669';
+              }
+
+              return (
+                <span style={{
+                  height: 22, padding: "0 11px", borderRadius: 999,
+                  background: badgeBg, color: badgeColor,
+                  fontSize: 10.5, fontWeight: 600, letterSpacing: ".04em",
+                  display: "inline-flex", alignItems: "center",
+                  fontFamily: "var(--font-google-sans)",
+                }} className="uppercase">
+                  {srcText}
+                </span>
+              );
+            })()}
             {paperIdentifier && (
               <a
                 href={paperIdentifier.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-blue-600 hover:text-blue-800 hover:underline transition-colors uppercase font-medium"
+                className="font-mono text-blue-600 hover:text-blue-800 hover:underline transition-colors font-medium"
               >
-                {paperIdentifier.type.toUpperCase()}: {paperIdentifier.value}
+                {paperIdentifier.value}
               </a>
             )}
             {paperDate && (
-              <span className="ml-auto">
+              <span className="ml-auto" style={{ fontFamily: "var(--font-google-sans)" }}>
                 {paperDate}
               </span>
             )}
@@ -1504,17 +1631,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             ref={titleContainerRef}
             data-disabled-entity-groups={disabledHighlightGroupData}
             id="abstract"
-            className="text-3xl lg:text-[38px] font-bold text-on-surface tracking-tight leading-[1.18] mb-5"
-            style={{ fontFamily: 'Georgia, "Times New Roman", serif', letterSpacing: "-0.01em" }}
+            className="text-[26px] lg:text-[30px] font-bold text-on-surface tracking-tight leading-[1.22]"
+            style={{ fontFamily: 'Georgia, "Times New Roman", serif', letterSpacing: "-0.01em", marginBottom: 24 }}
           >
             <span dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(title) || 'Untitled Paper' }} />
           </h1>
 
           {/* Authors & Journal Byline */}
-          <div className="flex items-center gap-2.5 mb-[18px] flex-wrap text-[14.5px] text-on-surface-variant">
+          <div className="flex items-center gap-2.5 mb-[18px] flex-wrap text-[14.5px] text-on-surface-variant" style={{ fontFamily: 'var(--font-google-sans)' }}>
             {paperAuthors.length > 0 && (
-              <span className="text-on-surface">
-                <strong>{paperAuthors.slice(0, 3).join(', ')}</strong>
+              <span className="text-on-surface font-normal">
+                {paperAuthors.slice(0, 3).join(', ')}
                 {paperAuthors.length > 3 ? ' et al.' : ''}
               </span>
             )}
@@ -1526,7 +1653,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
                 <LockSimpleOpen size={17} weight="regular" />
               </span>
-              <span className="status-ic" title="Full text available" style={{ color: "#15803D" }}>
+              <span className="status-ic" title="Full Text" style={{ color: "#15803D" }}>
                 <Article size={18} weight="regular" color="#1565C0" />
               </span>
             </span>
@@ -1537,7 +1664,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             <button 
               onClick={onDownloadPdf} 
               disabled={isDownloadingPdf} 
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              style={{ fontFamily: 'var(--font-google-sans)' }}
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
               title="Download"
             >
               <DownloadSimple size={17} weight="regular" />
@@ -1547,7 +1675,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             <button 
               onClick={onAddToAnalyse} 
               disabled={isAddingToAnalyse} 
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              style={{ fontFamily: 'var(--font-google-sans)' }}
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
               title="Analyse"
             >
               <ListMagnifyingGlass size={17} weight="regular" />
@@ -1557,24 +1686,27 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             <button 
               onClick={onSendPdfToRag} 
               disabled={isUploadingToRag} 
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors"
+              style={{ fontFamily: 'var(--font-google-sans)' }}
+              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
               title="Chat"
             >
               <Chats size={17} weight="regular" />
               Chat
             </button>
 
-            <button 
-              onClick={() => setShowHL(v => !v)} 
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors ml-auto p-1"
-              title={showHL ? "Hide highlights" : "Show highlights"}
-            >
-              {showHL ? (
-                <Eye size={18} weight="regular" />
-              ) : (
-                <EyeSlash size={18} weight="regular" />
-              )}
-            </button>
+            {isExtracted && entities && entities.length > 0 && (
+              <button 
+                onClick={() => setShowHL(v => !v)} 
+                className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors ml-auto p-1 cursor-pointer"
+                title={showHL ? "Hide highlights" : "Show highlights"}
+              >
+                {showHL ? (
+                  <Eye size={18} weight="regular" />
+                ) : (
+                  <EyeSlash size={18} weight="regular" />
+                )}
+              </button>
+            )}
           </div>
 
           <div style={{ height: 1, background: "var(--border)", margin: "0 0 32px" }} />
@@ -1792,13 +1924,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
               gap: 16, padding: "32px 24px",
-              border: "1px solid var(--border)", borderRadius: 16,
+              borderRadius: 16,
               background: "#FFFFFF"
             }}>
               <span style={{
                 width: 44, height: 44, borderRadius: 12,
                 display: "grid", placeItems: "center",
-                background: "#c8f3fa",
+                background: "#e0f7fa",
                 color: "var(--on-surface)"
               }} className={isExtracting ? "animate-pulse" : ""}>
                 <Sparkle size={22} weight="fill" />
@@ -1812,9 +1944,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 9,
                   height: 44, padding: "0 24px", width: "100%",
                   borderRadius: 999,
-                  background: "#c8f3fa", color: "var(--on-surface)",
+                  background: "#e0f7fa", color: "var(--on-surface)",
                   border: "none", cursor: isExtracting ? "wait" : "pointer",
-                  fontSize: 14, fontWeight: 600, letterSpacing: ".01em",
+                  fontSize: 15, fontWeight: 600, letterSpacing: ".01em",
+                  fontFamily: "var(--font-google-sans)",
                   transition: "opacity .15s",
                   opacity: isExtracting ? 0.7 : 1
                 }}

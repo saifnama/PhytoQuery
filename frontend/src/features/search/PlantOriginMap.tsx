@@ -330,33 +330,27 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
       <div
         ref={tooltipRef}
         className={`
-          absolute top-0 left-0 z-50 pointer-events-none rounded-lg
-          border border-border/60 bg-popover/95 backdrop-blur-sm
-          px-3 py-2 text-xs text-popover-foreground shadow-lg ring-1 ring-black/5
+          absolute top-0 left-0 z-50 pointer-events-none rounded-[10px]
+          border border-border/80 bg-popover/95 backdrop-blur-md
+          px-3.5 py-2.5 text-popover-foreground shadow-xl ring-1 ring-black/5
           will-change-transform
           ${hoverData ? "opacity-100" : "opacity-0 pointer-events-none"}
         `}
         style={{
+          fontFamily: 'var(--font-google-sans)',
           transform: "translate3d(-9999px, -9999px, 0)",
           transition: "opacity 60ms ease-out",
         }}
       >
         {hoverData && (
           <>
-            <div className="flex items-center gap-1.5 font-semibold tracking-tight">
-              {hoverData.value != null && hoverData.value > 0 && (
-                <span
-                  aria-hidden
-                  className="inline-block h-2 w-2 rounded-full shrink-0"
-                  style={{ background: "#06B6D4" }}
-                />
-              )}
-              <span style={{ color: "#0E7490" }} className="truncate max-w-[200px]">
+            <div className="font-semibold tracking-tight text-[14.5px] leading-tight">
+              <span style={{ color: "#0E7490" }} className="truncate max-w-[220px] block">
                 {hoverData.name}
               </span>
             </div>
             {hoverData.value != null && hoverData.value > 0 && (
-              <div className="mt-0.5 text-muted-foreground tabular-nums font-medium">
+              <div className="mt-1 text-[13px] leading-none text-muted-foreground tabular-nums font-medium">
                 {hoverData.value.toLocaleString()} papers
               </div>
             )}

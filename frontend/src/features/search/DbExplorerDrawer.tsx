@@ -203,6 +203,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
     <aside
       className="flex flex-col overflow-hidden"
       style={{
+        fontFamily: 'var(--font-google-sans)',
         position:   'fixed',
         top:        0,
         right:      0,
@@ -248,22 +249,22 @@ const DbExplorerDrawer: React.FC<Props> = ({
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div style={{ padding: '20px 22px 14px', position: 'relative', flexShrink: 0 }}>
-        {/* X-Circle close button */}
+        {/* Close panel button */}
         <button
           onClick={onClose}
           aria-label="Close panel"
           style={{
-            position: 'absolute', top: 18, right: 14,
+            position: 'absolute', top: 16, right: 14,
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'var(--on-surface-variant, #71717A)',
             display: 'grid', placeItems: 'center',
-            padding: 4, borderRadius: '50%',
+            width: 34, height: 34, borderRadius: '50%',
             transition: 'color .15s, background .15s',
           }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--on-surface)'; (e.currentTarget as HTMLElement).style.background = 'var(--surface-c)'; }}
           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--on-surface-variant)'; (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         >
-          <CaretCircleRight size={22} weight="regular" />
+          <CaretCircleRight size={26} weight="regular" />
         </button>
 
         {/* Icon + Title row */}
@@ -283,6 +284,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
             fontSize: 21, fontWeight: 700,
             color: 'var(--on-surface, #18181B)',
             letterSpacing: '-0.01em',
+            fontFamily: 'var(--font-google-sans)',
           }}>
             Database
           </div>
@@ -311,6 +313,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
               border: '1.5px solid transparent',
               borderRadius: 'var(--radius-full, 9999px)',
               fontSize: 15, color: 'var(--on-surface, #18181B)',
+              fontFamily: 'var(--font-google-sans)',
               caretColor: '#000000',
               outline: 'none',
               transition: 'border-color .2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow .2s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -353,33 +356,40 @@ const DbExplorerDrawer: React.FC<Props> = ({
           )}
         </div>
 
-        {/* Active Year or Country Filter Badge — tinted with timeline / map ripple colour, X reveals on hover */}
+        {/* Active Year or Country Filter Badge — tinted with timeline / map ripple colour, X always visible */}
         {activeFilter && (activeFilter.kind === 'year' || activeFilter.kind === 'country') && activeFilter.value && (
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center' }}>
             <button
               type="button"
               onClick={() => setActiveFilter(null)}
-              className="group"
+              aria-label="Remove filter"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
-                padding: '4px 10px',
+                gap: 6,
+                padding: '4px 8px 4px 10px',
                 borderRadius: 999,
                 background: activeFilter.kind === 'country' ? 'rgba(6,182,212,0.10)' : 'rgba(0,172,193,0.10)',
                 color: activeFilter.kind === 'country' ? '#0891B2' : '#007A8E',
                 border: activeFilter.kind === 'country' ? '1px solid rgba(6,182,212,0.35)' : '1px solid rgba(0,172,193,0.28)',
                 fontSize: 12,
                 fontWeight: 600,
+                fontFamily: 'var(--font-google-sans)',
                 cursor: 'pointer',
+                transition: 'background .15s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = activeFilter.kind === 'country' ? 'rgba(6,182,212,0.18)' : 'rgba(0,172,193,0.18)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = activeFilter.kind === 'country' ? 'rgba(6,182,212,0.10)' : 'rgba(0,172,193,0.10)';
               }}
             >
               <span>{activeFilter.kind === 'country' ? `Country: ${activeFilter.value}` : `Year: ${activeFilter.value}`}</span>
               <X
                 size={12}
                 weight="bold"
-                style={{ opacity: 0, color: 'currentColor', transition: 'opacity .15s ease' }}
-                className="group-hover:!opacity-100"
+                style={{ color: 'currentColor', display: 'inline-block' }}
               />
             </button>
           </div>
@@ -398,6 +408,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
           fontSize: 11.5, fontWeight: 700,
           color: 'var(--on-surface-variant, #71717A)',
           textTransform: 'uppercase', letterSpacing: '.07em',
+          fontFamily: 'var(--font-google-sans)',
         }}>
           {resultCount} Results
         </span>
@@ -468,6 +479,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
                   cursor: 'pointer',
                   padding: '8px 12px',
                   borderRadius: 10,
+                  fontFamily: 'var(--font-google-sans)',
                 }}
               >
                 {TAB_META[t].label}
@@ -559,7 +571,7 @@ interface PapersListProps {
 function PapersList({ papers, error, onOpen }: PapersListProps) {
   if (error) {
     return (
-      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)' }}>
+      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)', fontFamily: 'var(--font-google-sans)' }}>
         Failed to load papers
       </div>
     );
@@ -581,7 +593,7 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
   }
   if (papers.length === 0) {
     return (
-      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)' }}>
+      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)', fontFamily: 'var(--font-google-sans)' }}>
         No papers found
       </div>
     );
@@ -607,8 +619,8 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
               transition: 'border-color .18s ease, box-shadow .18s ease',
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.borderColor = 'var(--teal-300, #4DB6AC)';
-              e.currentTarget.style.boxShadow   = '0 2px 10px rgba(0,150,136,0.08)';
+              e.currentTarget.style.borderColor = '#ff6dba';
+              e.currentTarget.style.boxShadow   = '0 2px 12px rgba(255, 109, 186, 0.18)';
             }}
             onMouseLeave={e => {
               e.currentTarget.style.borderColor = 'var(--outline-variant, #E4E4E7)';
@@ -638,6 +650,7 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
                   color: 'var(--on-surface, #18181B)',
                   marginBottom: 6,
                   textAlign: 'left',
+                  fontFamily: 'var(--font-google-sans)',
                 }}
                 dangerouslySetInnerHTML={{ __html: sanitizeHtml(p.title ?? '(untitled)') }}
               />
@@ -646,6 +659,7 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
                 display: 'flex', alignItems: 'center', gap: 6,
                 fontSize: 13, color: 'var(--on-surface-variant, #71717A)',
                 flexWrap: 'wrap',
+                fontFamily: 'var(--font-google-sans)',
               }}>
                 {p.journal && (
                   <span style={{
@@ -681,7 +695,7 @@ function EntitiesList({
   const filterValue = filter?.kind === 'entity' ? filter.value?.toLowerCase() : null;
   if (entities.length === 0) {
     return (
-      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)' }}>
+      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)', fontFamily: 'var(--font-google-sans)' }}>
         No entities match this filter
       </div>
     );
@@ -706,11 +720,13 @@ function EntitiesList({
               color: 'var(--on-surface, #18181B)',
               flex: 1, textAlign: 'left',
               textTransform: 'capitalize',
+              fontFamily: 'var(--font-google-sans)',
             }}>
               {e.name.replace(/_/g, ' ')}
             </span>
             <span style={{
-              fontSize: 12, fontFamily: 'var(--font-mono)',
+              fontSize: 12, fontFamily: 'var(--font-google-sans)',
+              fontVariantNumeric: 'tabular-nums',
               color: '#7C3AED', fontWeight: 700,
               background: '#F3E8FF', padding: '2px 8px',
               borderRadius: 99,
@@ -736,7 +752,7 @@ function JournalsList({
   const filterValue = filter?.kind === 'journal' ? filter.value : null;
   if (journals.length === 0) {
     return (
-      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)' }}>
+      <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 14, color: 'var(--on-surface-muted)', fontFamily: 'var(--font-google-sans)' }}>
         No journals match this filter
       </div>
     );
@@ -762,6 +778,7 @@ function JournalsList({
               color: 'var(--on-surface, #18181B)',
               marginBottom: 7, textAlign: 'left',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              fontFamily: 'var(--font-google-sans)',
             }}>
               {j.name}
             </div>
@@ -778,7 +795,8 @@ function JournalsList({
                 }} />
               </div>
               <span style={{
-                fontSize: 12, fontFamily: 'var(--font-mono)',
+                fontSize: 12, fontFamily: 'var(--font-google-sans)',
+                fontVariantNumeric: 'tabular-nums',
                 color: 'var(--teal-700, #00796B)', fontWeight: 700,
                 minWidth: 32, textAlign: 'right',
               }}>

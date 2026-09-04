@@ -77,6 +77,7 @@ const FilterSection: React.FC<FilterSectionProps> = ({ title, defaultOpen = fals
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           flex w-full items-center justify-between bg-transparent border-0 cursor-pointer
           py-1 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface
@@ -157,7 +158,10 @@ interface SortSegmentedProps {
 const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
   const options: SortType[] = ['Relevance', 'Citations', 'Date'];
   return (
-    <div className="inline-flex items-center">
+    <div
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+      className="inline-flex items-center"
+    >
       {options.map((opt, i) => {
         const active = opt === value.type;
         const isDate = opt === 'Date';
@@ -174,6 +178,7 @@ const SortSegmented: React.FC<SortSegmentedProps> = ({ value, onChange }) => {
                   onChange({ type: opt, dir: isDate ? (value.dir || 'desc') : 'desc' });
                 }
               }}
+              style={{ fontFamily: 'var(--font-google-sans)' }}
               className={`
                 inline-flex items-center gap-1.5 bg-transparent border-0 p-0 cursor-pointer
                 text-[15px] transition-colors duration-150
@@ -204,14 +209,16 @@ interface CircleCheckProps {
 const CircleCheck: React.FC<CircleCheckProps> = ({ checked, onToggle, label, count }) => (
   <label
     onClick={onToggle}
-    className="flex items-center gap-2.5 cursor-pointer text-sm text-on-surface"
+    style={{ fontFamily: 'var(--font-google-sans)' }}
+    className="flex items-center gap-2.5 cursor-pointer text-[15px] text-on-surface"
   >
     <Circle
       size={18}
       weight={checked ? 'fill' : 'regular'}
-      className={checked ? 'text-primary' : 'text-on-surface-muted'}
+      className={checked ? 'text-[#ff6dba]' : 'text-on-surface-muted'}
+      style={checked ? { color: '#ff6dba' } : undefined}
     />
-    <span className="flex-1">{label}</span>
+    <span className="flex-1 leading-snug">{label}</span>
     {count != null && (
       <span className="mono text-xs text-on-surface-muted tabular-nums">{count}</span>
     )}
@@ -238,7 +245,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
   return (
     <article
       onClick={onOpen}
-      style={{ animationDelay: `${delayMs}ms` }}
+      style={{ animationDelay: `${delayMs}ms`, fontFamily: 'var(--font-google-sans)' }}
       className="
         pq-result-card card is-hoverable relative px-6 py-5
         cursor-pointer
@@ -257,13 +264,13 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             {result.doi}
           </a>
         ) : <span />}
-        <span className="text-[13px] font-medium text-on-surface-variant">{year}</span>
+        <span className="text-[13px] font-medium text-on-surface-variant" style={{ fontFamily: 'var(--font-google-sans)' }}>{year}</span>
       </div>
 
       {/* Title — serif, bold */}
       <h3
         className="
-          mb-2.5
+          mb-5
           font-bold text-[19px] leading-snug text-on-surface
         "
         style={{ fontFamily: 'var(--font-serif)' }}
@@ -271,7 +278,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
       />
 
       {/* Meta — authors • journal (italic) • Open Access (orange) • citations */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-on-surface-variant mb-3.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-on-surface-variant mb-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
         {authors && (
           <span
             dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(authors) }}
@@ -295,6 +302,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
       {result.abstract && (
         <div
           className="text-sm text-on-surface-variant leading-relaxed mb-4 line-clamp-3"
+          style={{ fontFamily: 'var(--font-google-sans)' }}
           dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
         />
       )}
@@ -307,6 +315,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             onClick={(e) => e.stopPropagation()}
             title="Download"
             className="result-action"
+            style={{ fontFamily: 'var(--font-google-sans)' }}
           >
             <DownloadSimple size={17} weight="regular" />
             <span>Download</span>
@@ -316,6 +325,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             onClick={(e) => e.stopPropagation()}
             title="Analyse"
             className="result-action"
+            style={{ fontFamily: 'var(--font-google-sans)' }}
           >
             <ListMagnifyingGlass size={17} weight="regular" />
             <span>Analyse</span>
@@ -325,6 +335,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             onClick={(e) => e.stopPropagation()}
             title="Chat"
             className="result-action"
+            style={{ fontFamily: 'var(--font-google-sans)' }}
           >
             <Chats size={17} weight="regular" />
             <span>Chat</span>
@@ -342,7 +353,7 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
           )}
           {hasFT && (
             <span
-              title="Full Text Available"
+              title="Full Text"
               className="grid place-items-center w-7 h-7 rounded-lg text-emerald-600"
             >
               <Article size={16} weight="regular" color="#1565C0" />
@@ -429,7 +440,10 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
         border-r border-border
       "
     >
-      <div className="text-[15px] font-bold tracking-[-0.005em] text-on-surface">
+      <div
+        style={{ fontFamily: 'var(--font-google-sans)' }}
+        className="text-[19px] font-bold tracking-[-0.01em] text-on-surface"
+      >
         Filter by
       </div>
 
@@ -759,8 +773,11 @@ const NerPage: React.FC = () => {
               />
             </div>
             <Suspense fallback={
-              <div className="flex items-center justify-center py-12">
-                <SpinnerGap size={32} className="animate-spin text-slate-900" />
+              <div className="flex flex-col items-center justify-center py-28 gap-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
+                <SpinnerGap size={46} className="animate-spin text-slate-900" />
+                <span className="text-[17px] font-medium text-on-surface-variant">
+                  Loading...
+                </span>
               </div>
             }>
               <Dashboard />
@@ -846,7 +863,10 @@ const NerPage: React.FC = () => {
                       </div>
                     ) : (
                       <div className="flex items-center justify-between mb-5">
-                        <div className="text-[15px] text-on-surface whitespace-nowrap">
+                        <div
+                          style={{ fontFamily: 'var(--font-google-sans)' }}
+                          className="text-[15px] text-on-surface whitespace-nowrap"
+                        >
                           <strong className="font-semibold text-on-surface">{totalCount.toLocaleString()}</strong>{' '}
                           <span className="text-on-surface-variant">publications found</span>
                         </div>

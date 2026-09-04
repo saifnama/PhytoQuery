@@ -13,8 +13,11 @@ import { SpinnerGap } from '@phosphor-icons/react';
 
 export function DefaultPending() {
   return (
-    <div className="w-full flex justify-center py-12">
-      <SpinnerGap size={32} className="animate-spin text-slate-900" />
+    <div className="w-full flex flex-col items-center justify-center py-28 gap-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
+      <SpinnerGap size={46} className="animate-spin text-slate-900" />
+      <span className="text-[17px] font-medium text-on-surface-variant">
+        Loading...
+      </span>
     </div>
   );
 }

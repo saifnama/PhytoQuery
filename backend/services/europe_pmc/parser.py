@@ -298,6 +298,7 @@ class XMLParser:
                 item: Dict[str, Any] = {
                     "id": h2_id,
                     "title": h2_text,
+                    "text": h2_text,
                     "level": 2,
                     "children": [],
                 }
@@ -310,7 +311,7 @@ class XMLParser:
                         stx = sibling.get_text(strip=True)
                         if sid or stx:
                             item["children"].append(
-                                {"id": sid, "title": stx, "level": 3}
+                                {"id": sid, "title": stx, "text": stx, "level": 3}
                             )
                     sibling = sibling.find_next_sibling()
 
@@ -323,7 +324,7 @@ class XMLParser:
                     stx = h3.get_text(strip=True)
                     if sid or stx:
                         toc.append(
-                            {"id": sid, "title": stx, "level": 3, "children": []}
+                            {"id": sid, "title": stx, "text": stx, "level": 3, "children": []}
                         )
 
             return toc

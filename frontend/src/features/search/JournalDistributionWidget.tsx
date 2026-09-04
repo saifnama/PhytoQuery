@@ -70,6 +70,7 @@ const JournalDistributionWidget: React.FC<Props> = ({
       <div
         className="flex-1 min-w-0 rounded-2xl flex flex-col justify-between py-6 px-6"
         style={{
+          fontFamily: "var(--font-google-sans)",
           background: "#F2FBFC",
           border: "none",
           outline: "none",
@@ -78,8 +79,8 @@ const JournalDistributionWidget: React.FC<Props> = ({
       >
         <div>
           <div
-            className="text-sm font-medium line-clamp-2 leading-tight"
-            style={{ color: "#1A5F6B" }}
+            className="text-[17.5px] font-semibold line-clamp-2 leading-snug tracking-tight"
+            style={{ color: "#2AACBF", fontFamily: "var(--font-google-sans)" }}
           >
             {dominant.name}
           </div>
@@ -89,11 +90,11 @@ const JournalDistributionWidget: React.FC<Props> = ({
           <div className="flex items-baseline gap-2">
             <span
               className="text-6xl font-semibold tabular-nums leading-none"
-              style={{ color: "#2AACBF" }}
+              style={{ color: "#2AACBF", fontFamily: "var(--font-google-sans)" }}
             >
               {dominant.value.toLocaleString()}
             </span>
-            <span className="text-sm" style={{ color: "#5BBCC8" }}>
+            <span className="text-sm font-medium" style={{ color: "#5BBCC8" }}>
               papers
             </span>
           </div>
@@ -103,11 +104,11 @@ const JournalDistributionWidget: React.FC<Props> = ({
           <div className="flex w-full items-baseline justify-between">
             <span
               className="text-2xl font-medium tabular-nums"
-              style={{ color: "#2AACBF" }}
+              style={{ color: "#2AACBF", fontFamily: "var(--font-google-sans)" }}
             >
               {pct}%
             </span>
-            <span className="text-xs" style={{ color: "#5BBCC8" }}>
+            <span className="text-xs font-medium" style={{ color: "#5BBCC8" }}>
               of corpus
             </span>
           </div>

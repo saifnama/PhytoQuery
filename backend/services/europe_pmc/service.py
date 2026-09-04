@@ -125,21 +125,24 @@ class EuropePMCService:
         render_key = _render_cache_key_for(id_value)
         cached_render = pmc_cache.get(render_key)
         if cached_render:
-            return {
-                "sections": cached_render.get("sections", []),
-                "html": cached_render.get("html", ""),
-                "mode": cached_render.get("mode", ""),
-                "title": cached_render.get("title", ""),
-                "references": cached_render.get("references", {}),
-                "pmcid": cached_render.get("pmcid", ""),
-                "toc": cached_render.get("toc", []),
-                "journal": cached_render.get("journal", ""),
-                "authors": cached_render.get("authors", []),
-                "doi": cached_render.get("doi", ""),
-                "date": cached_render.get("date", ""),
-                "fallback_source": "Europe PMC",  # Always set when cached
-                "fallback_url": f"https://europepmc.org/article/{id_value}",
-            }
+            cached_html = cached_render.get("html", "")
+            # If cached HTML doesn't contain h2 section headings, invalidate and re-render
+            if cached_html and ("<h2" in cached_html or "<H2" in cached_html):
+                return {
+                    "sections": cached_render.get("sections", []),
+                    "html": cached_render.get("html", ""),
+                    "mode": cached_render.get("mode", ""),
+                    "title": cached_render.get("title", ""),
+                    "references": cached_render.get("references", {}),
+                    "pmcid": cached_render.get("pmcid", ""),
+                    "toc": cached_render.get("toc", []),
+                    "journal": cached_render.get("journal", ""),
+                    "authors": cached_render.get("authors", []),
+                    "doi": cached_render.get("doi", ""),
+                    "date": cached_render.get("date", ""),
+                    "fallback_source": "Europe PMC",  # Always set when cached
+                    "fallback_url": f"https://europepmc.org/article/{id_value}",
+                }
 
         # Proceed with normal processing if no cached rendered HTML is available
         id_type, id_value = cls.parse_identifier(doi)
@@ -259,8 +262,16 @@ class EuropePMCService:
         for s in sections:
             if isinstance(s, dict) and "content" in s:
                 s["content"] = sanitize(s["content"])
-        # Build full HTML blob by concatenating all section contents in order
-        full_html = "".join(s.get("content", "") for s in sections)
+
+        # Build full HTML blob by wrapping each section in semantic <section> with <h2> heading
+        rendered_sections = []
+        for i, s in enumerate(sections):
+            sec_title = s.get("title", "").strip()
+            sec_content = s.get("content", "")
+            sec_id = f"section-{i}"
+            heading_html = f'<h2 id="{sec_id}" class="article-h2">{sec_title}</h2>' if sec_title else ""
+            rendered_sections.append(f'<section id="{sec_id}">{heading_html}{sec_content}</section>')
+        full_html = "".join(rendered_sections)
         toc = cls.extract_toc_from_html(full_html)
         # Cache the rendered HTML + TOC for future fast access.
         try:

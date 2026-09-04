@@ -695,9 +695,9 @@ const AnalysePage = () => {
                 ) : (
                   <div className="flex-1 bg-white border border-outline-variant overflow-hidden flex flex-col w-full h-[min(85vh,1200px)] relative">
                     {isViewerLoading ? (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-c/50 backdrop-blur-sm z-10">
-                        <SpinnerGap size={32} className="animate-spin text-slate-900 mb-4" />
-                        <span className="text-sm text-on-surface-variant font-medium">Loading PDF...</span>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-c/50 backdrop-blur-sm z-10 gap-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
+                        <SpinnerGap size={46} className="animate-spin text-slate-900" />
+                        <span className="text-[17px] text-on-surface-variant font-medium">Loading...</span>
                       </div>
                     ) : viewerError ? (
                       <div className="absolute inset-0 flex items-center justify-center bg-red-50 text-red-600 text-sm font-medium">

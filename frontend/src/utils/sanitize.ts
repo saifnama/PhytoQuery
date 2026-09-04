@@ -23,6 +23,9 @@ export function sanitizeHtml(html: string): string {
   const PURIFY_CONFIG: any = {
     ALLOWED_TAGS,
     ADD_ATTR: [
+      'id',
+      'class',
+      'style',
       'data-rid',
       'data-entity',
       // Species metadata attributes from highlighter

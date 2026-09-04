@@ -94,6 +94,30 @@ const titleCase = (s: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(' ');
 
+let cachedOpenAlexTypes: ArticleTypeOption[] = OPENALEX_FALLBACK;
+let openAlexTypesPromise: Promise<void> | null = null;
+
+const ensureOpenAlexTypes = () => {
+  if (!openAlexTypesPromise) {
+    openAlexTypesPromise = searchTypesApi
+      .getTypes('openalex')
+      .then((data) => {
+        if (data.types && data.types.length > 0) {
+          const mapped: ArticleTypeOption[] = data.types.map((t) => ({
+            key: t.key,
+            display_name: titleCase(t.display_name || t.key),
+            count: t.count ?? null,
+          }));
+          cachedOpenAlexTypes = [{ key: '', display_name: 'Type', count: null }, ...mapped];
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch OpenAlex types:', err);
+      });
+  }
+  return openAlexTypesPromise;
+};
+
 // ─── small UI atoms ─────────────────────────────────────────────────────────
 
 interface SourcePillProps {
@@ -196,8 +220,11 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
         <div
           className="
             absolute top-[calc(100%+6px)] left-0 z-[100]
-            min-w-[220px] max-h-[320px] overflow-y-auto
-            bg-background border border-border rounded-xl shadow-lg p-1.5
+            min-w-[170px] max-h-[300px] overflow-y-auto
+            bg-background border border-border/80 rounded-[12px]
+            shadow-[0_4px_20px_-2px_rgba(0,0,0,0.12),0_2px_6px_-1px_rgba(0,0,0,0.06)]
+            ring-1 ring-black/[0.05] dark:ring-white/[0.08]
+            p-1 flex flex-col gap-0.5
             animate-in fade-in slide-in-from-top-1 duration-150
           "
         >
@@ -210,12 +237,12 @@ const Dropdown: React.FC<DropdownProps> = ({ label, value, options, onChange }) 
                 onClick={() => { onChange(opt.key); setOpen(false); }}
                 style={{ fontFamily: 'var(--font-google-sans)' }}
                 className={`
-                  w-full text-left px-3 py-2 rounded-md text-[13.5px]
-                  ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
-                  text-on-surface transition-colors cursor-pointer
+                  flex w-full items-center justify-between px-2.5 py-1.5 rounded-[8px] text-[13px] leading-5
+                  ${active ? 'bg-surface-c font-medium text-on-surface' : 'text-on-surface hover:bg-surface-c/70 font-normal'}
+                  transition-colors cursor-pointer text-left
                 `}
               >
-                {opt.display_name}
+                <span className="truncate">{opt.display_name}</span>
               </button>
             );
           })}
@@ -267,9 +294,12 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
       {open && (
         <div
           className="
-            absolute top-[calc(100%+6px)] right-0 z-[100]
-            min-w-[200px] max-h-[280px] overflow-y-auto
-            bg-background border border-border rounded-xl shadow-lg p-1.5
+            absolute top-[calc(100%+6px)] left-0 z-[100]
+            min-w-[150px] max-h-[280px] overflow-y-auto
+            bg-background border border-border/80 rounded-[12px]
+            shadow-[0_4px_20px_-2px_rgba(0,0,0,0.12),0_2px_6px_-1px_rgba(0,0,0,0.06)]
+            ring-1 ring-black/[0.05] dark:ring-white/[0.08]
+            p-1 flex flex-col gap-0.5
             animate-in fade-in slide-in-from-top-1 duration-150
           "
         >
@@ -286,25 +316,27 @@ const SortControl: React.FC<SortControlProps> = ({ value, onChange }) => {
                 }}
                 style={{ fontFamily: 'var(--font-google-sans)' }}
                 className={`
-                  flex w-full items-center justify-between
-                  px-3 py-2 rounded-md text-[13.5px]
-                  ${active ? 'bg-surface-c font-semibold' : 'hover:bg-surface-c font-normal'}
-                  text-on-surface transition-colors
+                  flex w-full items-center justify-between px-2.5 py-1.5 rounded-[8px] text-[13px] leading-5
+                  ${active ? 'bg-surface-c font-medium text-on-surface' : 'text-on-surface hover:bg-surface-c/70 font-normal'}
+                  transition-colors cursor-pointer text-left
                 `}
               >
-                <span>{opt}</span>
+                <span className="truncate">{opt}</span>
                 {opt === 'Date' && (
-                  <span
-                    role="button"
-                    aria-label={value.dir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onChange({ ...value, dir: value.dir === 'asc' ? 'desc' : 'asc' });
-                    }}
-                    className="grid place-items-center p-1 rounded text-on-surface cursor-pointer hover:bg-surface-high"
-                  >
-                    <Arrow size={13} weight="bold" />
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <span
+                      role="button"
+                      title={value.dir === 'asc' ? 'Ascending (oldest first)' : 'Descending (newest first)'}
+                      aria-label={value.dir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onChange({ ...value, dir: value.dir === 'asc' ? 'desc' : 'asc' });
+                      }}
+                      className="grid place-items-center p-0.5 rounded hover:bg-surface-high/80 text-on-surface-variant hover:text-on-surface cursor-pointer transition-colors"
+                    >
+                      <Arrow size={12} weight="bold" />
+                    </span>
+                  </div>
                 )}
               </button>
             );
@@ -350,8 +382,9 @@ const SearchForm: React.FC<SearchFormProps> = ({
     setFilters((prev) => ({ ...prev, sort: raw }));
   };
 
-  const [typeOptions, setTypeOptions] = useState<ArticleTypeOption[]>(EUROPEPMC_TYPES);
-  const [typesLoading, setTypesLoading] = useState(false);
+  const [typeOptions, setTypeOptions] = useState<ArticleTypeOption[]>(() =>
+    defaultFilters?.source === 'openalex' ? cachedOpenAlexTypes : EUROPEPMC_TYPES
+  );
   const [expanded, setExpanded] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchKey, setSearchKey] = useState(0);
@@ -420,28 +453,19 @@ const SearchForm: React.FC<SearchFormProps> = ({
     });
   }, [defaultFilters]);
 
-  // Fetch types when source changes (Europe PMC = static; OpenAlex = live)
-  const fetchTypeOptions = useCallback(async (source: string) => {
+  // Fetch types when source changes (Europe PMC = static; OpenAlex = instant cached + background sync)
+  const fetchTypeOptions = useCallback((source: string) => {
     if (source === 'europepmc') {
       setTypeOptions(EUROPEPMC_TYPES);
       return;
     }
     if (source === 'openalex') {
-      setTypesLoading(true);
-      try {
-        const data = await searchTypesApi.getTypes('openalex');
-        const mapped: ArticleTypeOption[] = (data.types || []).map((t) => ({
-          key: t.key,
-          display_name: titleCase(t.display_name || t.key),
-          count: t.count ?? null,
-        }));
-        setTypeOptions([{ key: '', display_name: 'Type', count: null }, ...mapped]);
-      } catch (err) {
-        console.error('Failed to fetch OpenAlex types:', err);
-        setTypeOptions(OPENALEX_FALLBACK);
-      } finally {
-        setTypesLoading(false);
-      }
+      // Immediately display cached / fallback OpenAlex types with 0ms delay
+      setTypeOptions(cachedOpenAlexTypes);
+      // Silently sync latest types in the background without blocking UI
+      ensureOpenAlexTypes().then(() => {
+        setTypeOptions(cachedOpenAlexTypes);
+      });
     }
   }, []);
 
@@ -475,7 +499,10 @@ const SearchForm: React.FC<SearchFormProps> = ({
   const showSort         = !hideFilters && expanded;
 
   return (
-    <div ref={containerRef} className="relative z-0 mb-8 w-full">
+    <div
+      ref={containerRef}
+      className="relative z-20 mb-8 w-full"
+    >
       {/* Ambient halo glow — signature pink, only active on expand */}
       {expanded && (
         <div
@@ -587,7 +614,10 @@ const SearchForm: React.FC<SearchFormProps> = ({
                 "
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
+                  <span
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                    className="text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface min-w-[78px]"
+                  >
                     Sources
                   </span>
                   <div className="flex items-center gap-2 flex-wrap">
@@ -604,7 +634,10 @@ const SearchForm: React.FC<SearchFormProps> = ({
                   <>
                     <span aria-hidden className="w-px h-6 bg-surface-c" />
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
+                      <span
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                        className="text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface"
+                      >
                         Availability
                       </span>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -634,16 +667,17 @@ const SearchForm: React.FC<SearchFormProps> = ({
                   className="flex items-center gap-3 px-4 pt-1.5 pb-1.5 animate-spring-in"
                   style={{ animationDelay: '0.05s' }}
                 >
-                  <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-on-surface-variant min-w-[78px]">
+                  <span
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                    className="text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface min-w-[78px]"
+                  >
                     Sort by
                   </span>
                   <div className="flex items-center gap-2 flex-wrap">
                     <Dropdown
                       label="Type"
                       value={filters.article_type}
-                      options={typesLoading
-                        ? [{ key: '', display_name: 'Loading…', count: null }]
-                        : typeOptions}
+                      options={typeOptions}
                       onChange={(k) => setFilters((p) => ({ ...p, article_type: k }))}
                     />
                     <SortControl value={sortValue} onChange={setSortValue} />

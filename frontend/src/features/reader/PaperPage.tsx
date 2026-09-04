@@ -3,7 +3,7 @@ import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
 import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api';
-import type { PaperData, Entity } from '../../types';
+import type { PaperData, Entity, TocItem } from '../../types';
 
 const route = getRouteApi('/paper/$doi');
 
@@ -334,23 +334,14 @@ const PaperPage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || fallbackLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <SpinnerGap size={32} className="animate-spin text-slate-900 mx-auto mb-4" />
-          <p className="text-sm text-on-surface-variant">Loading paper...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (fallbackLoading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <SpinnerGap size={32} className="animate-spin text-slate-900 mx-auto mb-4" />
-          <p className="text-sm text-on-surface-variant">Fetching DOI fallback sources...</p>
+      <div className="flex items-center justify-center min-h-[calc(100vh-140px)] w-full py-20">
+        <div className="flex flex-col items-center justify-center gap-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
+          <SpinnerGap size={46} className="animate-spin text-slate-900" />
+          <span className="text-[17px] font-medium text-on-surface-variant">
+            Loading...
+          </span>
         </div>
       </div>
     );
@@ -372,11 +363,41 @@ const PaperPage: React.FC = () => {
     );
   }
 
-  const htmlBlob: string = paperData.html ??
-    (paperData.sections?.length
-      ? paperData.sections.map((s, i) => `<section id="section-${i}"><h2>${s.title}</h2>${s.content}</section>`).join('')
-      : '');
-  const tocList = paperData.toc ?? (paperData.sections?.map((s, i) => ({ id: `section-${i}`, text: s.title, level: 1 })) ?? []);
+  // Ensure full HTML contains <h2> section headings
+  const hasH2 = paperData.html && /<h2[\s>]/i.test(paperData.html);
+  const htmlBlob: string = (!hasH2 && paperData.sections?.length)
+    ? paperData.sections.map((s, i) => {
+        const secId = `section-${i}`;
+        const h2 = s.title ? `<h2 id="${secId}" class="article-h2">${s.title}</h2>` : '';
+        return `<section id="${secId}">${h2}${s.content}</section>`;
+      }).join('')
+    : (paperData.html ?? (paperData.sections?.length
+      ? paperData.sections.map((s, i) => `<section id="section-${i}"><h2 class="article-h2">${s.title}</h2>${s.content}</section>`).join('')
+      : ''));
+
+  let tocList: TocItem[] = (paperData.toc && paperData.toc.length > 0)
+    ? paperData.toc.map((t, i) => ({
+        id: t.id || `section-${i}`,
+        text: t.text || (t as any).title || `Section ${i + 1}`,
+        level: t.level || 1,
+      }))
+    : (paperData.sections?.map((s, i) => ({ id: `section-${i}`, text: s.title, level: 1 })) ?? []);
+
+  // Universal fallback: if tocList is empty but html contains headings, extract TOC from HTML
+  if (tocList.length === 0 && htmlBlob) {
+    const h2Matches = Array.from(htmlBlob.matchAll(/<h2([^>]*)>(.*?)<\/h2>/gi));
+    if (h2Matches.length > 0) {
+      tocList = h2Matches.map((m, i) => {
+        const rawText = m[2].replace(/<[^>]+>/g, '').trim();
+        const idMatch = m[1].match(/id=["']([^"']+)["']/i);
+        return {
+          id: idMatch ? idMatch[1] : `section-${i}`,
+          text: rawText || `Section ${i + 1}`,
+          level: 1,
+        };
+      });
+    }
+  }
 
   // Format title with preserved formatting (italic/bold) for display
   const displayTitle = paperData.title || 'Untitled Paper';
