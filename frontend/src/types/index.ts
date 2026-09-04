@@ -145,6 +145,8 @@ export interface PaperData {
   // PDF links (from OpenAlex or Semantic Scholar)
   pdfUrl?: string;
   openAccessPdf?: { url: string } | null;
+  // Access status from the source API (Europe PMC / OpenAlex / Semantic Scholar)
+  isOpenAccess?: boolean;
 }
 
 export interface SearchResult {

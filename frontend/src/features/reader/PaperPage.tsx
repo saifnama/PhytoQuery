@@ -174,6 +174,7 @@ const PaperPage: React.FC = () => {
               pmcid: '',
               authors: data.authors,
               year: data.year,
+              isOpenAccess: (data as { isOpenAccess?: boolean }).isOpenAccess,
             } as PaperData);
             setFallbackSource({ source: data.source, url: data.url });
             return;
@@ -418,6 +419,7 @@ const PaperPage: React.FC = () => {
       paperAuthors={paperData.authors || []}
       paperJournal={paperData.journal}
       paperDate={paperData.date}
+      isOpenAccess={paperData.isOpenAccess}
       canUsePdfActions={canUsePdfActions}
       isDownloadingPdf={isDownloadingPdf}
       isUploadingToRag={isUploadingToRag}

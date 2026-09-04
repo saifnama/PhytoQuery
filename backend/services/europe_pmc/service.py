@@ -69,6 +69,13 @@ class EuropePMCService:
             query, filters, max_results, sort, cursor_mark
         )
 
+    @classmethod
+    async def fetch_by_identifier(
+        cls, id_type: str, id_value: str
+    ) -> Optional[Dict[str, Any]]:
+        """Exact-match single-paper lookup by DOI/PMCID/PMID (fielded query)."""
+        return await EuropePMCClient.fetch_by_identifier(id_type, id_value)
+
     # --- Delegate to parser ---
 
     @staticmethod
@@ -140,6 +147,7 @@ class EuropePMCService:
                     "authors": cached_render.get("authors", []),
                     "doi": cached_render.get("doi", ""),
                     "date": cached_render.get("date", ""),
+                    "isOpenAccess": bool(cached_render.get("isOpenAccess")),
                     "fallback_source": "Europe PMC",  # Always set when cached
                     "fallback_url": f"https://europepmc.org/article/{id_value}",
                 }
@@ -155,6 +163,7 @@ class EuropePMCService:
         paper_authors_from_cache = cached_paper.get("authors", [])
         paper_doi_from_cache = cached_paper.get("doi", "")
         paper_date_from_cache = cached_paper.get("date", "")
+        paper_is_oa = bool(cached_paper.get("is_oa"))
 
         if mode == "error" or not text:
             return {
@@ -169,6 +178,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "isOpenAccess": paper_is_oa,
                 "fallback_source": "",  # No source available
             }
 
@@ -206,6 +216,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "isOpenAccess": paper_is_oa,
                 "fallback_source": "Europe PMC",  # Has abstract
             }
 
@@ -255,6 +266,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "isOpenAccess": paper_is_oa,
                 "fallback_source": "Europe PMC",  # Has full text
             }
 
@@ -287,6 +299,7 @@ class EuropePMCService:
                 "authors": paper_authors_from_cache,
                 "doi": paper_doi_from_cache,
                 "date": paper_date_from_cache,
+                "isOpenAccess": paper_is_oa,
             }
             pmc_cache.set(render_key, cache_payload)
         except Exception:
@@ -306,5 +319,6 @@ class EuropePMCService:
             "authors": paper_authors_from_cache,
             "doi": paper_doi_from_cache,
             "date": paper_date_from_cache,
+            "isOpenAccess": paper_is_oa,
             "fallback_source": "Europe PMC",  # Has full text
         }

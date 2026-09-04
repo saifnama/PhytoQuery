@@ -339,6 +339,74 @@ class SearchService:
         return " ".join(words).strip()
 
     @classmethod
+    def _format_openalex_work(cls, work: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize an OpenAlex work into the app's search-result shape.
+
+        Badge semantics:
+        - ``isOpenAccess`` -> OpenAlex's own ``open_access.is_oa`` flag.
+        - ``hasFullText`` -> a usable PDF URL was actually found, or OpenAlex
+          reports indexed full text. (``has_pdf_url`` is only a filter name,
+          never a returned field.)
+        - ``hasPdfUrl`` -> a concrete PDF URL exists.
+        """
+        ids = work.get("ids", {}) or {}
+        doi = cls._normalize_doi(ids.get("doi") or work.get("doi"))
+        pmid = cls._normalize_pmid(ids.get("pmid") or work.get("pmid"))
+        pmcid = cls._normalize_pmcid(ids.get("pmcid") or work.get("pmcid"))
+        primary_location = work.get("primary_location", {}) or {}
+        source = primary_location.get("source", {}) or {}
+
+        # PDF URL: prefer the best OA location, then any location that has one.
+        best_oa = work.get("best_oa_location") or {}
+        pdf_url = best_oa.get("pdf_url") or next(
+            (loc.get("pdf_url") for loc in work.get("locations", []) or [] if loc.get("pdf_url")),
+            None,
+        )
+
+        return {
+            "id": work.get("id") or f"openalex:{doi or pmid or pmcid or work.get('display_name') or work.get('title', '')}",
+            "pmcid": pmcid or None,
+            "doi": doi or None,
+            "pmid": pmid or None,
+            "title": work.get("display_name") or work.get("title") or "No title available",
+            "authors": cls._join_authors(work.get("authorships", [])),
+            "journal": source.get("display_name") or "Unknown journal",
+            "year": cls._coerce_year(work.get("publication_year")),
+            "citationCount": work.get("cited_by_count", 0),
+            "isOpenAccess": bool((work.get("open_access") or {}).get("is_oa")),
+            "hasTextMinedTerms": False,
+            "hasFullText": bool(pdf_url) or bool(work.get("has_fulltext")),
+            "hasPdfUrl": bool(pdf_url),
+            "pdfUrl": pdf_url,
+            "abstract": cls._reconstruct_abstract(work.get("abstract_inverted_index")),
+            "source": "OpenAlex",
+        }
+
+    @classmethod
+    async def fetch_openalex_by_doi(cls, doi: str) -> Optional[Dict[str, Any]]:
+        """Exact DOI lookup against OpenAlex (GET /works/doi:{doi}).
+
+        Returns a result in the same shape as ``search_openalex`` results, or
+        None when OpenAlex does not know the DOI. Unlike keyword search, no
+        quality filters are applied — an identifier lookup must return the
+        paper itself, filtered or not.
+        """
+        doi = (doi or "").strip().lower()
+        if not doi:
+            return None
+        try:
+            client = await HttpClientManager.get_client()
+            response = await client.get(
+                f"{cls.OPENALEX_BASE_URL}/works/doi:{doi}", timeout=30.0
+            )
+            if response.status_code != 200:
+                return None
+            return cls._format_openalex_work(response.json())
+        except Exception as e:
+            logger.warning(f"OpenAlex DOI lookup failed for {doi}: {e}")
+            return None
+
+    @classmethod
     async def search_openalex(
         cls,
         query: str,
@@ -357,16 +425,16 @@ class SearchService:
         }
 
         filter_parts: List[str] = []
-        
+
         # Always apply these filters for quality papers
         filter_parts.append("has_doi:true")  # Must have DOI
         filter_parts.append("has_content.pdf:true")  # Must have PDF
         filter_parts.append("is_oa:true")  # Must be Open Access
         filter_parts.append("primary_topic.domain.id:1")  # Biology/Life Sciences
-        
+
         if filters.get("article_type"):
             filter_parts.append(f"type:{cls._map_openalex_type(filters['article_type'])}")
-        
+
         if filter_parts:
             params["filter"] = ",".join(filter_parts)
 
@@ -380,48 +448,7 @@ class SearchService:
         response.raise_for_status()
         data = response.json()
 
-        results = []
-        for work in data.get("results", []):
-            ids = work.get("ids", {}) or {}
-            doi = cls._normalize_doi(ids.get("doi") or work.get("doi"))
-            pmid = cls._normalize_pmid(ids.get("pmid") or work.get("pmid"))
-            pmcid = cls._normalize_pmcid(ids.get("pmcid") or work.get("pmcid"))
-            primary_location = work.get("primary_location", {}) or {}
-            source = primary_location.get("source", {}) or {}
-            
-            # Find PDF URL from locations
-            pdf_url = None
-            locations = work.get("locations", []) or []
-            for loc in locations:
-                if loc.get("pdf_url"):
-                    pdf_url = loc.get("pdf_url")
-                    break
-                # Also check best_oa_location
-                best_oa = work.get("best_oa_location") or {}
-                if best_oa.get("pdf_url"):
-                    pdf_url = best_oa.get("pdf_url")
-                    break
-            
-            results.append(
-                {
-                    "id": work.get("id") or f"openalex:{doi or pmid or pmcid or work.get('display_name') or work.get('title', '')}",
-                    "pmcid": pmcid or None,
-                    "doi": doi or None,
-                    "pmid": pmid or None,
-                    "title": work.get("display_name") or work.get("title") or "No title available",
-                    "authors": cls._join_authors(work.get("authorships", [])),
-                    "journal": source.get("display_name") or "Unknown journal",
-                    "year": cls._coerce_year(work.get("publication_year")),
-                    "citationCount": work.get("cited_by_count", 0),
-                    "isOpenAccess": bool((work.get("open_access") or {}).get("is_oa")),
-                    "hasTextMinedTerms": False,
-                    "hasFullText": work.get("has_fulltext", False),
-                    "hasPdfUrl": bool(work.get("has_pdf_url")) or bool(pdf_url),
-                    "pdfUrl": pdf_url,
-                    "abstract": cls._reconstruct_abstract(work.get("abstract_inverted_index")),
-                    "source": "OpenAlex",
-                }
-            )
+        results = [cls._format_openalex_work(work) for work in data.get("results", [])]
 
         meta = data.get("meta", {}) or {}
         total = int(meta.get("count", 0) or 0)
@@ -678,16 +705,10 @@ class SearchService:
         best_candidate = None
         best_score = -1
         
-        # Try Europe PMC first
-        europe_data = await EuropePMCService.search_literature(
-            query=id_value,
-            filters={},
-            max_results=10,
-            sort="",
-            cursor_mark="*",
-        )
-        if europe_data and europe_data.get("results"):
-            first = europe_data["results"][0]
+        # Try Europe PMC first — exact identifier lookup (fielded DOI:/PMCID:/EXT_ID:
+        # query), never a keyword search: a fuzzy match would return the wrong paper.
+        first = await EuropePMCService.fetch_by_identifier(id_type, id_value)
+        if first:
             first["source"] = "Europe PMC"
             score = _content_score(first)
             if score > best_score:
@@ -704,30 +725,23 @@ class SearchService:
                     "results": [first],
                     "pagination": {"total": 1, "page": 1, "pageSize": 1, "hasMore": False},
                 }
-        
+
         # If not found in Europe PMC (or only metadata) and it's a DOI, try OpenAlex
+        # via exact DOI lookup (GET /works/doi:{doi}) — again never a keyword search.
         if id_type == "doi":
-            openalex_data = await cls.search_openalex(
-                query=id_value,
-                filters={},
-                max_results=10,
-                page=1,
-                sort="",
-            )
-            if openalex_data and openalex_data.get("results"):
-                first = openalex_data["results"][0]
-                first["source"] = "OpenAlex"
+            first = await cls.fetch_openalex_by_doi(id_value)
+            if first:
                 score = _content_score(first)
                 if score > best_score:
                     best_candidate = first
                     best_score = score
-                if score == 2:  # Shouldn't happen (OpenAlex has no full text), but safe
+                if score == 2:  # PDF available — return immediately
                     return {
                         "results": [first],
                         "pagination": {"total": 1, "page": 1, "pageSize": 1, "hasMore": False},
                     }
                 # Continue to Semantic Scholar even if we have abstract candidate
-            
+
             # Try Semantic Scholar fallback (direct DOI fetch)
             ss_data = await fetch_from_semantic_scholar(id_value)
             if ss_data:
@@ -743,6 +757,7 @@ class SearchService:
                     "abstract": ss_data.get("abstract", ""),
                     "source": ss_data.get("source", "Semantic Scholar"),
                     "openAccessPdf": ss_data.get("openAccessPdf"),
+                    "isOpenAccess": bool(ss_data.get("isOpenAccess")),
                 }
                 score = _content_score(ss_result)
                 if score > best_score:

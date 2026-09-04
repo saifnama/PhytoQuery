@@ -176,6 +176,7 @@ async def analyze_paper_json(
                     "fallback_url": paper.get("url", ""),
                     "entities": [],
                     "pdfUrl": pdf_url,
+                    "isOpenAccess": paper.get("isOpenAccess", False),
                 }
                 if abstract:
                     paper_data["html"] = f"<section id='section-0'><h2>Abstract</h2><p>{abstract}</p></section>"
@@ -261,6 +262,7 @@ async def analyze_paper_json(
                         "date": fallback_date,
                         "pdfUrl": fallback.get("pdfUrl"),
                         "openAccessPdf": fallback.get("openAccessPdf"),
+                        "isOpenAccess": fallback.get("isOpenAccess", False),
                     }
                 if not paper_data.get("sections") and fallback and fallback.get("title"):
                     fallback_year = fallback.get("year")
@@ -281,6 +283,7 @@ async def analyze_paper_json(
                         "date": fallback_date,
                         "pdfUrl": fallback.get("pdfUrl"),
                         "openAccessPdf": fallback.get("openAccessPdf"),
+                        "isOpenAccess": fallback.get("isOpenAccess", False),
                     }
                 if not paper_data.get("title") and not paper_data.get("sections"):
                     identifier_label = id_type.upper()
@@ -392,6 +395,7 @@ async def analyze_paper_json(
             ),
             "pdfUrl": paper_data.get("pdfUrl"),
             "openAccessPdf": paper_data.get("openAccessPdf"),
+            "isOpenAccess": paper_data.get("isOpenAccess"),
         }
     except Exception as e:
         logger.error(f"Paper JSON Error: {e}")

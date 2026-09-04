@@ -35,6 +35,85 @@ class EuropePMCClient:
             return f"EXT_ID:{id_value}"
         return f"DOI:{id_value}"
 
+    @classmethod
+    def _format_search_result(cls, r: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a Europe PMC search record into the app's result shape.
+
+        Badge semantics (verified against live API responses):
+        - ``isOpenAccess``  -> the record's own OA flag (journal/deposit license).
+        - ``hasFullText``   -> full text is actually retrievable, i.e. the article
+          is available in full text in Europe PMC (``inEPMC``). The legacy
+          ``hasFullText`` response field is kept as an alternative signal but is
+          never populated by the current API (always absent/None).
+        - ``hasPdfUrl``     -> Europe PMC reports an actual PDF (``hasPDF``).
+        """
+        journal = r.get("journalTitle", "")
+        if not journal:
+            journal_info = r.get("journalInfo", {})
+            if journal_info:
+                journal = journal_info.get("journal", {}).get("title", "")
+        if not journal:
+            journal = "Unknown journal"
+
+        in_epmc = r.get("inEPMC") == "Y"
+        has_pdf = r.get("hasPDF") == "Y"
+        has_full_text = in_epmc or r.get("hasFullText") == "Y"
+
+        return {
+            "id": r.get("id"),
+            "pmcid": r.get("pmcid"),
+            "doi": r.get("doi"),
+            "pmid": r.get("pmid"),
+            "title": r.get("title", "No title available"),
+            "authors": r.get("authorString", "Unknown authors"),
+            "journal": journal,
+            "year": r.get("pubYear", "Unknown year"),
+            "citationCount": r.get("citedByCount", 0),
+            "isOpenAccess": r.get("isOpenAccess") == "Y",
+            "hasTextMinedTerms": r.get("hasTextMinedTerms") == "Y",
+            "hasFullText": has_full_text,
+            "hasPdfUrl": has_pdf or has_full_text,
+            "pdfUrl": None,  # PDF URL resolved on paper fetch
+            "abstract": r.get("abstractText", ""),
+            "source": "Europe PMC",
+        }
+
+    @classmethod
+    async def fetch_by_identifier(
+        cls, id_type: str, id_value: str
+    ) -> Optional[Dict[str, Any]]:
+        """Exact-match lookup of a single paper by DOI/PMCID/PMID.
+
+        Uses Europe PMC's fielded identifier queries (DOI:/PMCID:/EXT_ID:), so
+        the returned record — if any — is always the paper the identifier points
+        at, never a fuzzy keyword match. Returns None when the identifier is
+        unknown to Europe PMC.
+        """
+        if id_type not in ("doi", "pmcid", "pmid") or not id_value:
+            return None
+
+        params = {
+            "query": cls._build_search_query(id_type, id_value),
+            "format": "json",
+            "resultType": "core",
+            "pageSize": 1,
+        }
+        try:
+            client = await HttpClientManager.get_client()
+            response = await client.get(
+                f"{cls.BASE_URL}/search", params=params, timeout=30.0
+            )
+            response.raise_for_status()
+            results = response.json().get("resultList", {}).get("result", [])
+            if not results:
+                return None
+            return cls._format_search_result(results[0])
+        except Exception as e:
+            logger.warning(
+                f"Europe PMC identifier lookup failed for {id_type}:{id_value}: {e}"
+            )
+            return None
+
     @staticmethod
     def _normalize_remote_url(url: str) -> str:
         if url.startswith("ftp://"):
@@ -280,6 +359,7 @@ class EuropePMCClient:
 
             result = results[0]
             pmcid = result.get("pmcid")
+            is_oa = result.get("isOpenAccess") == "Y"
             abstract = result.get("abstractText", "")
             title = result.get("title", "")
             doi = result.get("doi", "")
@@ -347,6 +427,7 @@ class EuropePMCClient:
                             "doi": doi,
                             "authors": authors,
                             "date": pub_date,
+                            "is_oa": is_oa,
                         },
                     )
                     return full_text, "full_text"
@@ -366,6 +447,7 @@ class EuropePMCClient:
                         "doi": doi,
                         "authors": authors,
                         "date": pub_date,
+                        "is_oa": is_oa,
                     },
                 )
                 return abstract, "abstract"
@@ -384,6 +466,7 @@ class EuropePMCClient:
                         "authors": authors,
                         "doi": doi,
                         "date": pub_date,
+                        "is_oa": is_oa,
                     },
                 )
             except Exception:
@@ -507,40 +590,7 @@ class EuropePMCClient:
             has_more = next_cursor != cursor_mark and next_cursor != ""
 
             results = data.get("resultList", {}).get("result", [])
-            formatted_results = []
-            for r in results:
-                # Journal can be in journalTitle or journalInfo.journal.title
-                journal = r.get("journalTitle", "")
-                if not journal:
-                    journal_info = r.get("journalInfo", {})
-                    if journal_info:
-                        journal = journal_info.get("journal", {}).get("title", "")
-                if not journal:
-                    journal = "Unknown journal"
-                
-                # Check for full text availability
-                has_full_text = r.get("hasFullText") == "Y" or r.get("isOpenAccess") == "Y"
-                
-                formatted_results.append(
-                    {
-                        "id": r.get("id"),
-                        "pmcid": r.get("pmcid"),
-                        "doi": r.get("doi"),
-                        "pmid": r.get("pmid"),
-                        "title": r.get("title", "No title available"),
-                        "authors": r.get("authorString", "Unknown authors"),
-                        "journal": journal,
-                        "year": r.get("pubYear", "Unknown year"),
-                        "citationCount": r.get("citedByCount", 0),
-                        "isOpenAccess": r.get("isOpenAccess") == "Y",
-                        "hasTextMinedTerms": r.get("hasTextMinedTerms") == "Y",
-                        "hasFullText": has_full_text,
-                        "hasPdfUrl": has_full_text,  # Europe PMC OA means likely PDF
-                        "pdfUrl": None,  # PDF URL resolved on paper fetch
-                        "abstract": r.get("abstractText", ""),
-                        "source": "Europe PMC",
-                    }
-                )
+            formatted_results = [cls._format_search_result(r) for r in results]
             return {
                 "results": formatted_results,
                 "pagination": {

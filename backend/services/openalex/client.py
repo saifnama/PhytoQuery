@@ -63,11 +63,14 @@ class OpenAlexClient:
             # Reconstruct abstract from inverted index
             abstract_index = data.get("abstract_inverted_index")
             abstract = _reconstruct_abstract(abstract_index)
-            
-            # Get PDF URL from best_oa_location
+
+            # PDF URL: prefer the best OA location, then any location that has one.
             best_oa = data.get("best_oa_location") or {}
-            pdf_url = best_oa.get("pdf_url") or ""
-            
+            pdf_url = best_oa.get("pdf_url") or next(
+                (loc.get("pdf_url") for loc in data.get("locations", []) or [] if loc.get("pdf_url")),
+                "",
+            )
+
             return {
                 "doi": doi,
                 "title": title,
@@ -86,6 +89,7 @@ class OpenAlexClient:
                 "source": "OpenAlex",
                 "url": data.get("doi"),
                 "pdfUrl": pdf_url,
+                "isOpenAccess": bool((data.get("open_access") or {}).get("is_oa")),
             }
         except Exception as e:
             logger.error(f"OpenAlex fetch failed for {doi}: {e}")

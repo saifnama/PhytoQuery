@@ -8,7 +8,7 @@ from typing import Optional, Any
 
 DEFAULT_TTL_SECONDS = 3600  # 1 hour
 MAX_CACHE_FILES = 500
-CACHE_VERSION = "v2"  # Increment when cache format changes
+CACHE_VERSION = "v3"  # Increment when cache format changes
 
 
 class SimpleCache:

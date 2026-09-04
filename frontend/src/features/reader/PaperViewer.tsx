@@ -247,6 +247,8 @@ interface PaperViewerProps {
   paperAuthors?: string[];
   paperJournal?: string;
   paperDate?: string;
+  /** True when the source API flags the paper as Open Access. */
+  isOpenAccess?: boolean;
   canUsePdfActions?: boolean;
   isDownloadingPdf?: boolean;
   isUploadingToRag?: boolean;
@@ -293,6 +295,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   paperAuthors = [],
   paperJournal,
   paperDate,
+  isOpenAccess = false,
   isDownloadingPdf = false,
   isUploadingToRag = false,
   isAddingToAnalyse = false,
@@ -1648,15 +1651,23 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             {paperAuthors.length > 0 && paperJournal && <span className="text-outline">•</span>}
             {paperJournal && <span className="italic">{paperJournal}</span>}
             
-            {/* Quiet Status Icons on the right */}
-            <span className="ml-auto flex items-center gap-1">
-              <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
-                <LockSimpleOpen size={17} weight="regular" />
+            {/* Status icons — only when the source API actually reports it:
+                Open Access comes from Europe PMC/OpenAlex OA flags; Full Text
+                only when the reader is really serving the full paper. */}
+            {(isOpenAccess || mode === 'full_text') && (
+              <span className="ml-auto flex items-center gap-1">
+                {isOpenAccess && (
+                  <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
+                    <LockSimpleOpen size={17} weight="regular" />
+                  </span>
+                )}
+                {mode === 'full_text' && (
+                  <span className="status-ic" title="Full Text" style={{ color: "#15803D" }}>
+                    <Article size={18} weight="regular" color="#1565C0" />
+                  </span>
+                )}
               </span>
-              <span className="status-ic" title="Full Text" style={{ color: "#15803D" }}>
-                <Article size={18} weight="regular" color="#1565C0" />
-              </span>
-            </span>
+            )}
           </div>
 
           {/* Action Row */}

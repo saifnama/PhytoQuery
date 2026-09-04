@@ -64,6 +64,8 @@ async def fetch_from_openalex(doi: str) -> Optional[Dict[str, Any]]:
             .get("display_name", ""),
             "source": "OpenAlex",
             "url": data.get("doi"),
+            "isOpenAccess": bool((data.get("open_access") or {}).get("is_oa")),
+            "pdfUrl": (data.get("best_oa_location") or {}).get("pdf_url"),
         }
     except Exception as e:
         logger.error(f"OpenAlex fetch failed for {doi}: {e}")
@@ -91,7 +93,7 @@ def _reconstruct_abstract(inverted_index: Optional[Dict[str, list]]) -> str:
 async def fetch_from_semantic_scholar(doi: str) -> Optional[Dict[str, Any]]:
     """Fetch metadata from Semantic Scholar API. Returns title/authors/journal even without abstract."""
     url = f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
-    params = {"fields": "title,abstract,authors,year,venue,externalIds,openAccessPdf"}
+    params = {"fields": "title,abstract,authors,year,venue,externalIds,openAccessPdf,isOpenAccess"}
     try:
         client = await HttpClientManager.get_client()
         response = await client.get(url, params=params, timeout=15.0)
@@ -113,6 +115,7 @@ async def fetch_from_semantic_scholar(doi: str) -> Optional[Dict[str, Any]]:
             "source": "Semantic Scholar",
             "url": f"https://www.semanticscholar.org/paper/{doi}",
             "openAccessPdf": data.get("openAccessPdf"),  # dict with 'url' if available
+            "isOpenAccess": bool(data.get("isOpenAccess")),
         }
     except Exception as e:
         logger.error(f"Semantic Scholar fetch failed for {doi}: {e}")
