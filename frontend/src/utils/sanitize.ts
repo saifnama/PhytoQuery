@@ -16,7 +16,7 @@ export function sanitizeHtml(html: string): string {
   // Define allowlist matching backend's sanitizer.py
   const ALLOWED_TAGS = [
     'p','h2','h3','table','tr','td','th','thead','tbody','caption',
-    'figure','figcaption','img','a','span','cite','em','strong','i','b','sub','sup',
+    'figure','figcaption','img','a','span','mark','cite','em','strong','i','b','sub','sup',
     'br','div','code','blockquote','ul','ol','li','section'
   ];
   // Allow server-side attributes; allow data-rid and data-entity across all tags

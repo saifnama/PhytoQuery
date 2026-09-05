@@ -6,7 +6,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Graph, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
+import { ArrowDownLeft, ArrowUpRight, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import type { Entity } from '../../types';
 
 // vis-network's TS surface is overly strict for our loose option objects.
@@ -117,7 +117,10 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     activeTypesRef.current = activeTypes;
   }, [activeTypes]);
 
-  const papers = paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []);
+  const papers = useMemo(
+    () => paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []),
+    [paperIdentifiers, paperIdentifier]
+  );
 
   // ── Build node/edge data + per-type metadata ─────────────────────────────
   const { nodesData, edgesData, typeColors, nodeInfo } = useMemo(() => {
@@ -172,7 +175,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
         borderWidth: isSingle ? 4 : 3,
         font: {
           color: '#1e293b',
-          face: 'Inter',
+          face: 'Google Sans, Inter, sans-serif',
           size: isSingle ? 16 : 13,
           bold: true,
           vadjust: -5,
@@ -261,7 +264,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
           hover: { background: bgColor, border: solidColor },
         },
         borderWidth: ent.count && ent.count > 5 ? 2 : 1.5,
-        font: { color: '#334155', face: 'Inter', size: freqFontSize, vadjust: 2 },
+        font: { color: '#334155', face: 'Google Sans, Inter, sans-serif', size: freqFontSize, vadjust: 2 },
       });
       nodeInfo.set(key, {
         type: prettyType(labelKey),
@@ -291,9 +294,11 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   }, [entities, paperIdentifier, paperIdentifiers, entityConfig, entityPaperMap]);
 
   // Initialize / reset activeTypes whenever the type set changes (new paper)
-  useEffect(() => {
+  const [prevTypeColors, setPrevTypeColors] = useState<Map<string, unknown> | null>(null);
+  if (prevTypeColors !== typeColors) {
+    setPrevTypeColors(typeColors);
     setActiveTypes(new Set(typeColors.keys()));
-  }, [typeColors]);
+  }
 
   // ── Lazy-load vis-network bundle on mount ─────────────────────────────
   useEffect(() => {
@@ -490,7 +495,6 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
       nodesDS.current = null;
       edgesDS.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vis, nodesData, edgesData]);
 
   // ── Sync labels toggle ────────────────────────────────────────────────
@@ -564,7 +568,6 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
         animation: { duration: 600, easingFunction: 'easeInOutQuad' },
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, nodesData]);
 
   // ── Resize on fullscreen toggle ───────────────────────────────────────
@@ -622,18 +625,18 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
 
     const htmlContent = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Knowledge Graph - ${paperLabel}</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
 <style>
-  body{margin:0;padding:0;overflow:hidden;font-family:'Inter',sans-serif;background:#f8fafc}
+  body{margin:0;padding:0;overflow:hidden;font-family:'Google Sans',sans-serif;background:#f8fafc}
   #mynetwork{width:100vw;height:100vh}
-  .header{position:absolute;top:16px;left:16px;background:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);border:1px solid #e2e8f0;pointer-events:none}
+  .header{position:absolute;top:16px;left:16px;background:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);border:1px solid #e2e8f0;pointer-events:none;font-family:'Google Sans',sans-serif}
   .title{font-size:14px;font-weight:bold;color:#1e293b;margin:0}
   .subtitle{font-size:11px;color:#64748b;margin-top:4px}
-  .legend{position:absolute;top:80px;left:16px;background:rgba(255,255,255,0.9);padding:10px;border-radius:8px;border:1px solid #e2e8f0;pointer-events:none;max-width:200px}
+  .legend{position:absolute;top:80px;left:16px;background:rgba(255,255,255,0.9);padding:10px;border-radius:8px;border:1px solid #e2e8f0;pointer-events:none;max-width:200px;font-family:'Google Sans',sans-serif}
   .legend-item{display:flex;align-items:center;gap:8px;margin-bottom:4px}
   .legend-color{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-  .legend-label{font-size:10px;font-weight:500;color:#334155}
+  .legend-label{font-size:11px;font-weight:500;color:#334155}
 </style></head><body>
 <div class="header"><h1 class="title">Graph View</h1><div class="subtitle">Entities linked to ${paperLabel}</div></div>
 ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
@@ -692,6 +695,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
           }
         >
           {/* Top control bar */}
+          {/* Top control bar */}
           <div className="absolute top-3 right-3 z-20 flex gap-2 items-center">
             {isFullscreen && (
               <>
@@ -699,67 +703,87 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search node…"
-                  className="text-[11px] px-2.5 py-1.5 rounded-md border border-border bg-background/90 text-on-surface-variant outline-none focus:border-on-surface-muted w-36"
+                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-background/90 text-on-surface-variant outline-none focus:border-on-surface-muted w-36"
+                  style={{ fontFamily: 'var(--font-google-sans)' }}
                 />
                 <button
+                  type="button"
                   onClick={resetLayout}
-                  className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
-                  title="Reset layout"
+                  className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+                  aria-label="Reset layout"
                 >
-                  <ArrowCounterClockwise weight="bold" size={16} />
+                  <ArrowCounterClockwise weight="bold" size={18} />
                 </button>
                 <button
+                  type="button"
                   onClick={() => setShowLabels((v) => !v)}
-                  className={`text-[11px] px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
+                  className={`text-[12px] font-medium px-3 py-1.5 rounded-lg border transition-colors cursor-pointer ${
                     showLabels
                       ? 'bg-on-surface text-background border-on-surface'
                       : 'bg-background text-on-surface-variant border-border hover:bg-surface-c'
                   }`}
-                  title="Toggle labels"
+                  style={{ fontFamily: 'var(--font-google-sans)' }}
+                  aria-label="Toggle labels"
                 >
                   Labels
                 </button>
               </>
             )}
             <button
+              type="button"
               onClick={downloadHTML}
-              className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
-              title="Download Graph as HTML"
+              className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+              aria-label="Download"
             >
-              <DownloadSimple weight="bold" size={18} />
+              <DownloadSimple weight="bold" size={20} />
             </button>
             <button
+              type="button"
               onClick={() => setIsFullscreen(!isFullscreen)}
-              className="p-1.5 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none"
-              title={isFullscreen ? 'Close fullscreen' : 'Expand to fullscreen'}
+              className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+              aria-label={isFullscreen ? 'Minimize' : 'Expand'}
             >
-              <Graph weight="regular" size={20} />
+              {isFullscreen ? (
+                <ArrowDownLeft weight="bold" size={20} />
+              ) : (
+                <ArrowUpRight weight="bold" size={20} />
+              )}
             </button>
           </div>
 
           {/* Legend with counts — top-left, fullscreen only */}
           {isFullscreen && presentTypes.length > 0 && (
-            <div className="absolute top-3 left-3 z-10 bg-background border border-border rounded-xl px-3.5 py-3 shadow-md min-w-[185px]">
-              {presentTypes.map(([type, info]) => {
-                const on = activeTypes.has(type);
-                return (
-                  <div
-                    key={type}
-                    onClick={() => toggleType(type)}
-                    className="flex items-center gap-2 mb-1.5 last:mb-0 cursor-pointer transition-opacity"
-                    style={{ opacity: on ? 1 : 0.28 }}
-                  >
+            <div
+              className="absolute top-4 left-4 z-10 bg-background/95 backdrop-blur-md border border-border rounded-xl p-4 shadow-lg min-w-[210px]"
+              style={{ fontFamily: 'var(--font-google-sans)' }}
+            >
+              <div className="text-[11.5px] font-bold uppercase tracking-[0.12em] text-on-surface-variant mb-2.5 px-1">
+                Entities
+              </div>
+              <div className="space-y-1">
+                {presentTypes.map(([type, info]) => {
+                  const on = activeTypes.has(type);
+                  return (
                     <div
-                      className="w-3 h-3 rounded-sm flex-shrink-0"
-                      style={{ background: info.color }}
-                    />
-                    <span className="text-[11px] text-on-surface-variant flex-1 truncate" title={info.name}>
-                      {info.name}
-                    </span>
-                    <span className="font-mono text-[9px] text-on-surface-muted">{info.count}</span>
-                  </div>
-                );
-              })}
+                      key={type}
+                      onClick={() => toggleType(type)}
+                      className="flex items-center gap-2.5 px-1.5 py-1 rounded-md cursor-pointer transition-all hover:bg-surface-c/70"
+                      style={{ opacity: on ? 1 : 0.3 }}
+                    >
+                      <div
+                        className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                        style={{ background: info.color }}
+                      />
+                      <span className="text-[13px] font-medium text-on-surface flex-1 truncate">
+                        {info.name}
+                      </span>
+                      <span className="text-[12px] font-semibold text-on-surface-variant">
+                        {info.count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -776,18 +800,19 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
                 padding: '9px 12px',
                 boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
                 minWidth: 155,
-                fontFamily: 'Inter, sans-serif',
+                fontFamily: 'var(--font-google-sans), Inter, sans-serif',
               }}
             >
               {!tooltipInfo.isPaper && (
                 <div
                   style={{
-                    fontSize: 9,
-                    fontWeight: 600,
+                    fontSize: 10,
+                    fontWeight: 700,
                     textTransform: 'uppercase',
                     letterSpacing: '0.08em',
                     color: tooltipInfo.color,
                     marginBottom: 3,
+                    fontFamily: 'var(--font-google-sans)',
                   }}
                 >
                   {tooltipInfo.type}
@@ -795,17 +820,18 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
               )}
               <div
                 style={{
-                  fontSize: 13,
-                  fontWeight: 500,
+                  fontSize: 13.5,
+                  fontWeight: 600,
                   color: '#111',
                   marginBottom: 3,
                   lineHeight: 1.3,
+                  fontFamily: 'var(--font-google-sans)',
                 }}
               >
                 {tooltipInfo.name}
               </div>
               {!tooltipInfo.isPaper && (
-                <div style={{ fontFamily: 'monospace', fontSize: 10, color: '#aaa' }}>
+                <div style={{ fontFamily: 'var(--font-google-sans)', fontSize: 11, color: '#64748b' }}>
                   frequency · {tooltipInfo.freq}
                 </div>
               )}

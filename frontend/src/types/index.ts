@@ -9,7 +9,8 @@ export interface TocItem {
 export interface Entity {
   text: string;
   label: string;
-  score: number;
+  score?: number;
+  count?: number;
   canonical?: string;  // Normalized form for display (e.g., "seed" for "seeds")
   aliases?: string[];  // All variations for counting
   name_type?: 'scientific' | 'common' | null;

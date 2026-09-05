@@ -160,6 +160,19 @@ NER_CONFIDENCE_THRESHOLD = env_float("NER_CONFIDENCE_THRESHOLD", 0.7)
 NER_CHUNK_SIZE_WORDS = env_int("NER_CHUNK_SIZE_WORDS", 250)
 NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
 
+# Validation-retry repetition per section before falling back to
+# dictionary-only entities for that section.
+NER_LLM_ATTEMPTS = env_int("NER_LLM_ATTEMPTS", 2)
+# Wall-clock budget for the whole LLM phase of a paper extraction.
+# When exceeded, remaining sections skip the LLM and keep dictionary
+# entities, so /paper/json always returns well inside the frontend's
+# 10-minute request timeout. 0 disables the budget (not recommended).
+NER_LLM_BUDGET_SECONDS = env_float("NER_LLM_BUDGET_SECONDS", 240.0)
+# Upper bound on honoring a provider's 429 ``Retry-After`` — some free
+# tiers send very large values that would otherwise stall a request
+# past any usable timeout.
+NER_LLM_RETRY_AFTER_CAP = env_float("NER_LLM_RETRY_AFTER_CAP", 30.0)
+
 
 # ---------------------------------------------------------------------------
 # Provider Selection Logic

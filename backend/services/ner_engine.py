@@ -28,6 +28,9 @@ from backend.config import (
     NER_LLAMACPP_MODEL,
     NER_CONFIDENCE_THRESHOLD,
     NER_CHUNK_SIZE_WORDS,
+    NER_LLM_ATTEMPTS,
+    NER_LLM_BUDGET_SECONDS,
+    NER_LLM_RETRY_AFTER_CAP,
     OPENROUTER_URL,
     _normalize_openai_compat_url,
     get_ner_provider,
@@ -285,10 +288,28 @@ class NERService:
         _llm_concurrency = int(os.environ.get("NER_LLM_CONCURRENCY", "1"))
         sem = asyncio.Semaphore(_llm_concurrency)
 
+        # Wall-clock budget for the LLM phase. Unreliable/slow providers
+        # (e.g. rate-limited free tiers) used to stall the whole
+        # /paper/json request past the frontend timeout; once the budget
+        # is spent the remaining sections simply keep their dictionary
+        # entities instead of waiting on the LLM.
+        budget_seconds = NER_LLM_BUDGET_SECONDS
+        deadline = (
+            time.perf_counter() + budget_seconds if budget_seconds > 0 else None
+        )
+        skipped_sections = 0
+
         async def _llm_for_section(section: Dict[str, str]) -> List[Dict[str, Any]]:
+            nonlocal skipped_sections
             section_title = section.get("title", "Unknown")
             section_text = section.get("content", "")
             async with sem:
+                # Re-check inside the semaphore: with concurrency 1 the
+                # queued sections only resume after earlier calls finish,
+                # long past the budget deadline they saw at gather time.
+                if deadline is not None and time.perf_counter() > deadline:
+                    skipped_sections += 1
+                    return []
                 try:
                     parsed = await self._extract_entities_with_retry(section_text)
                 except Exception as exc:
@@ -313,6 +334,13 @@ class NERService:
                 logger.warning(f"LLM section task raised: {result}")
                 continue
             all_llm_entities.extend(result)
+
+        if skipped_sections:
+            logger.warning(
+                f"NER LLM budget ({NER_LLM_BUDGET_SECONDS:.0f}s) exhausted: "
+                f"{skipped_sections}/{len(valid_sections)} sections fell back "
+                f"to dictionary-only entities"
+            )
 
         # Normalize entities
         normalized = self._normalize_entities(all_dict_entities + all_llm_entities)
@@ -625,7 +653,7 @@ class NERService:
     async def _extract_entities_with_retry(
         self,
         text_chunk: str,
-        max_attempts: int = 1,
+        max_attempts: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """LLM entity extraction with validation-retry.
 
@@ -638,13 +666,19 @@ class NERService:
         re-prompts the LLM with a specific error so it can correct
         itself rather than silently returning ``[]``.
 
+        After ``max_attempts`` failed attempts (default
+        ``NER_LLM_ATTEMPTS``), returns ``[]`` — callers keep their
+        dictionary-extracted entities, which are always merged in
+        ``process_sections`` regardless of the LLM outcome.
+
         Returns a list of entity dicts in the internal format
         ``{"text", "label", "score", "name_type", "linked_to"}``.
-        Empty list on terminal failure; callers retain the same
-        fallback semantics (dictionary entities still apply).
         """
         if not text_chunk or not text_chunk.strip():
             return []
+
+        if max_attempts is None:
+            max_attempts = max(1, NER_LLM_ATTEMPTS)
 
         try:
             from json_repair import repair_json
@@ -840,16 +874,22 @@ class NERService:
                 )
                 elapsed_ms = (time.perf_counter() - t0) * 1000
 
-                # Handle rate limiting (429) with retry
+                # Handle rate limiting (429) with retry. Honor the
+                # provider's Retry-After but cap it — some free tiers
+                # send very large values that would stall the whole
+                # extraction past any usable request timeout.
                 if response.status_code == 429:
-                    retry_after = int(
-                        response.headers.get(
-                            "retry-after", base_delay * (2**attempt)
-                        )
+                    raw_retry_after = response.headers.get(
+                        "retry-after", base_delay * (2**attempt)
                     )
+                    try:
+                        retry_after = float(raw_retry_after)
+                    except (TypeError, ValueError):
+                        retry_after = base_delay * (2**attempt)
+                    retry_after = min(retry_after, NER_LLM_RETRY_AFTER_CAP)
                     logger.warning(
                         f"{provider_name} rate limited (429). Retrying after "
-                        f"{retry_after}s (attempt {attempt + 1}/{max_retries})"
+                        f"{retry_after:.0f}s (attempt {attempt + 1}/{max_retries})"
                     )
                     await asyncio.sleep(retry_after)
                     continue

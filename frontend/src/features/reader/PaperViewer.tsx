@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
-import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap, X } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
-import 'smiles-drawer';
+import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph } from './KnowledgeGraph';
 
 const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
 const CHEMICAL_SELECTOR = '.ent-chemical, mark.ner-chemical';
 const SPECIES_POPUP_WIDTH = 320;
-const SPECIES_POPUP_ESTIMATED_HEIGHT = 280;
+const SPECIES_POPUP_ESTIMATED_HEIGHT = 160;
 
 const ENTITY_GROUP_ORDER = [
   'CHEMICAL',
@@ -215,13 +216,41 @@ const buildSpeciesPopupData = (entity: Entity): SpeciesPopupData => {
 const getSpeciesPopupPosition = (anchor: HTMLElement) => {
   const rect = anchor.getBoundingClientRect();
   const margin = 12;
-  const top = rect.bottom + SPECIES_POPUP_ESTIMATED_HEIGHT + margin <= window.innerHeight
-    ? rect.bottom + 10
-    : Math.max(margin, rect.top - SPECIES_POPUP_ESTIMATED_HEIGHT - 10);
+  const fitsBelow = rect.bottom + SPECIES_POPUP_ESTIMATED_HEIGHT + margin <= window.innerHeight;
+  const top = fitsBelow
+    ? rect.bottom + 8
+    : Math.max(margin, rect.top - SPECIES_POPUP_ESTIMATED_HEIGHT - 8);
   const centeredLeft = rect.left + rect.width / 2 - SPECIES_POPUP_WIDTH / 2;
-  const left = Math.min(
-    Math.max(margin, centeredLeft),
-    Math.max(margin, window.innerWidth - SPECIES_POPUP_WIDTH - margin)
+  const left = Math.max(
+    margin,
+    Math.min(centeredLeft, window.innerWidth - SPECIES_POPUP_WIDTH - margin)
+  );
+
+  return { top, left };
+};
+
+const getChemicalPopupPosition = (anchor: HTMLElement) => {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 12;
+  const popupWidth = 320;
+
+  // Prefer placing below the clicked word, matching species popup
+  const spaceBelow = window.innerHeight - rect.bottom - margin;
+  const spaceAbove = rect.top - margin;
+
+  // Place below unless there is very little room below (< 140px) AND significantly more room above
+  const placeBelow = spaceBelow >= 140 || spaceBelow >= spaceAbove;
+  let top = placeBelow ? rect.bottom + 8 : Math.max(margin, rect.top - 330);
+
+  // Guard against bottom of viewport
+  if (placeBelow && top + 320 > window.innerHeight - margin) {
+    top = Math.max(margin, Math.min(top, window.innerHeight - margin - 330));
+  }
+
+  const centeredLeft = rect.left + rect.width / 2 - popupWidth / 2;
+  const left = Math.max(
+    margin,
+    Math.min(centeredLeft, window.innerWidth - popupWidth - margin)
   );
 
   return { top, left };
@@ -334,7 +363,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const exportRef = useRef<HTMLDivElement>(null);
   const [showHL, setShowHL] = useState(true);
 
-  const [nav, setNav] = useState<{ name: string; idx: number; total: number } | null>(null);
+  const [nav, setNav] = useState<{ name: string; idx: number; total: number; aliases?: string[] } | null>(null);
   const mentionsRef = useRef<HTMLElement[]>([]);
 
   // A map of lowercase entity name/aliases to its uppercase category group
@@ -377,82 +406,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setChemicalStructureError(false);
     setExpandedChemical(null);
     setActiveChemicalPopup(null);
-  }, []);
-
-  const activateEntity = useCallback((name: string) => {
-    const key = name.toLowerCase().replace(/\s+/g, ' ');
-    const group = entityToGroupMap.get(key);
-    if (group) {
-      setExpandedGroups(prev => ({ ...prev, [group]: true }));
-    }
-
-    const els = Array.from(document.querySelectorAll(`[data-entity="${key}"]`)) as HTMLElement[];
-    mentionsRef.current = els;
-    if (els.length > 0) {
-      setNav({ name, idx: 0, total: els.length });
-      
-      const rect = els[0].getBoundingClientRect();
-      const scrollContainer = document.getElementById('main-content-display');
-      if (scrollContainer) {
-        scrollContainer.scrollTo({
-          top: rect.top + scrollContainer.scrollTop - 160,
-          behavior: 'smooth'
-        });
-      } else {
-        window.scrollTo({
-          top: rect.top + window.scrollY - 160,
-          behavior: 'smooth'
-        });
-      }
-      
-      els.forEach(el => el.classList.remove('entity-flash'));
-      void els[0].offsetWidth; // force reflow
-      els[0].classList.add('entity-flash');
-      setTimeout(() => els[0].classList.remove('entity-flash'), 1600);
-    }
-  }, [entityToGroupMap]);
-
-  const gotoMention = useCallback((i: number, total: number) => {
-    const els = mentionsRef.current;
-    if (!els.length) return;
-    const idx = (i + total) % total;
-    const el = els[idx];
-    
-    const scrollContainer = document.getElementById('main-content-display');
-    if (scrollContainer) {
-      scrollContainer.scrollTo({
-        top: el.getBoundingClientRect().top + scrollContainer.scrollTop - 160,
-        behavior: 'smooth'
-      });
-    } else {
-      window.scrollTo({
-        top: el.getBoundingClientRect().top + window.scrollY - 160,
-        behavior: 'smooth'
-      });
-    }
-    
-    els.forEach(e => e.classList.remove('entity-flash'));
-    void el.offsetWidth; // force reflow
-    el.classList.add('entity-flash');
-    
-    setNav(n => n ? { ...n, idx } : n);
-  }, []);
-
-  const pulseEntity = useCallback((name: string) => {
-    const key = name.toLowerCase().replace(/\s+/g, ' ');
-    const group = entityToGroupMap.get(key);
-    const accentVar = group ? ENTITY_GROUP_CONFIG[group].accentVar : '--entity-default';
-    
-    document.querySelectorAll(`[data-entity="${key}"]`).forEach(el => {
-      el.classList.add('entity-pulse');
-      (el as HTMLElement).style.setProperty('--hl-bd', `var(${accentVar})`);
-    });
-  }, [entityToGroupMap]);
-
-  const clearPulse = useCallback(() => {
-    document.querySelectorAll('.entity-pulse').forEach(el => {
-      el.classList.remove('entity-pulse');
-    });
   }, []);
 
   const toggleExpandedChemical = useCallback((key: string) => {
@@ -548,7 +501,12 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         }
       }
     }
-    if (!species) return;
+    if (!species) {
+      species = {
+        primaryName: text,
+        metadataScore: 0,
+      };
+    }
 
     activeSpeciesAnchorRef.current = target;
     setActiveSpeciesPopup({
@@ -623,6 +581,186 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     return lookup;
   }, [entities]);
 
+  const findMentionsForEntity = useCallback((name: string, aliases?: string[]) => {
+    const roots = getInteractiveRoots();
+    if (roots.length === 0) return [];
+
+    const targetSet = new Set<string>();
+    const addTarget = (val?: string | null) => {
+      if (!val) return;
+      const clean = stripHtml(val).trim().toLowerCase().replace(/\s+/g, ' ');
+      if (clean) {
+        targetSet.add(clean);
+        if (clean.includes('-')) targetSet.add(clean.replace(/-/g, ' '));
+        if (clean.includes(' ')) targetSet.add(clean.replace(/\s+/g, '-'));
+      }
+    };
+
+    addTarget(name);
+    (aliases || []).forEach(addTarget);
+
+    const normalizedName = normalizeLookupText(name);
+    const sp = speciesLookup.get(normalizedName);
+    if (sp) {
+      addTarget(sp.primaryName);
+      addTarget(sp.scientificNameVerified);
+      addTarget(sp.commonName);
+    }
+    const ch = chemicalLookup.get(normalizedName);
+    if (ch) {
+      addTarget(ch.primaryName);
+      addTarget(ch.preferredName);
+      (ch.synonyms || []).forEach(addTarget);
+    }
+
+    const selector = [
+      '.ent-species, mark.ner-species',
+      '.ent-chemical, mark.ner-chemical',
+      '.ent-plant-part, mark.ner-plant-part',
+      '.ent-development-stage, mark.ner-development-stage',
+      '.ent-extraction-method, mark.ner-extraction-method',
+      '.ent-analytical-technique, mark.ner-analytical-technique, .ent-isolation-method, mark.ner-isolation-method',
+      '.ent-bioactivity, mark.ner-bioactivity',
+      '.ent-disease, mark.ner-disease',
+      '.ent-season, mark.ner-season',
+      '.ent-location, mark.ner-location'
+    ].join(', ');
+
+    const allNodes: HTMLElement[] = [];
+    roots.forEach((root) => {
+      allNodes.push(...Array.from(root.querySelectorAll<HTMLElement>(selector)));
+    });
+
+    return allNodes.filter((node) => {
+      const text = stripHtml(node.textContent).trim().toLowerCase().replace(/\s+/g, ' ');
+      const dataEnt = (node.getAttribute('data-entity') || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const spKey = (node.dataset.speciesLookupKey || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const chKey = (node.dataset.chemicalLookupKey || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+      if (
+        targetSet.has(text) ||
+        (dataEnt && targetSet.has(dataEnt)) ||
+        (text.includes('-') && targetSet.has(text.replace(/-/g, ' '))) ||
+        (text.includes(' ') && targetSet.has(text.replace(/\s+/g, '-')))
+      ) {
+        return true;
+      }
+
+      const nodeSpecies = speciesLookup.get(normalizeLookupText(node.textContent)) || (spKey ? speciesLookup.get(spKey) : undefined);
+      if (nodeSpecies) {
+        if (targetSet.has(nodeSpecies.primaryName.toLowerCase()) ||
+            (nodeSpecies.scientificNameVerified && targetSet.has(nodeSpecies.scientificNameVerified.toLowerCase())) ||
+            (nodeSpecies.commonName && targetSet.has(nodeSpecies.commonName.toLowerCase()))) {
+          return true;
+        }
+      }
+
+      const nodeChem = chemicalLookup.get(normalizeLookupText(node.textContent)) || (chKey ? chemicalLookup.get(chKey) : undefined);
+      if (nodeChem) {
+        if (targetSet.has(nodeChem.primaryName.toLowerCase()) ||
+            (nodeChem.preferredName && targetSet.has(nodeChem.preferredName.toLowerCase()))) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  }, [getInteractiveRoots, speciesLookup, chemicalLookup]);
+
+  const scrollToMention = useCallback((el: HTMLElement) => {
+    if (!el || !el.isConnected) return;
+
+    if (!showHL) {
+      setShowHL(true);
+    }
+
+    isClickScrollingRef.current = true;
+    if (clickScrollTimeoutRef.current) window.clearTimeout(clickScrollTimeoutRef.current);
+    clickScrollTimeoutRef.current = window.setTimeout(() => {
+      isClickScrollingRef.current = false;
+    }, 800);
+
+    const scrollContainer = document.getElementById('main-content-display');
+    if (scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const relativeTop = elRect.top - containerRect.top;
+      // Center the element nicely in the visible container viewport
+      const targetScrollTop = scrollContainer.scrollTop + relativeTop - (scrollContainer.clientHeight / 2) + (elRect.height / 2);
+      scrollContainer.scrollTo({
+        top: Math.max(0, targetScrollTop),
+        behavior: 'smooth',
+      });
+    } else {
+      const yOffset = -160;
+      const y = el.getBoundingClientRect().top + window.scrollY + yOffset;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    }
+
+    document.querySelectorAll('.entity-mention-active, .entity-flash').forEach((e) => {
+      e.classList.remove('entity-mention-active', 'entity-flash');
+    });
+    void el.offsetWidth;
+    el.classList.add('entity-mention-active', 'entity-flash');
+    setTimeout(() => {
+      el.classList.remove('entity-flash');
+    }, 1600);
+  }, [showHL]);
+
+  const activateEntity = useCallback((name: string, aliases?: string[]) => {
+    const key = name.toLowerCase().replace(/\s+/g, ' ');
+    const group = entityToGroupMap.get(key);
+    if (group) {
+      setExpandedGroups((prev) => ({ ...prev, [group]: true }));
+    }
+
+    // If clicking the currently active entity, cycle to its next mention
+    if (nav && nav.name.toLowerCase() === name.toLowerCase()) {
+      let els = mentionsRef.current;
+      if (!els || els.length === 0 || !els.some((n) => n.isConnected)) {
+        els = findMentionsForEntity(name, aliases);
+        mentionsRef.current = els;
+      }
+      els = (els || []).filter((n) => n.isConnected);
+      if (els.length > 0) {
+        const total = els.length;
+        const nextIdx = (nav.idx + 1) % total;
+        setNav({ name, idx: nextIdx, total, aliases });
+        scrollToMention(els[nextIdx]);
+        return;
+      }
+    }
+
+    // First click or switching entities: jump to first mention (idx = 0)
+    const els = findMentionsForEntity(name, aliases);
+    mentionsRef.current = els;
+
+    if (els.length > 0) {
+      setNav({ name, idx: 0, total: els.length, aliases });
+      scrollToMention(els[0]);
+    } else {
+      setNav(null);
+    }
+  }, [nav, entityToGroupMap, findMentionsForEntity, scrollToMention]);
+
+  const pulseEntity = useCallback((name: string, aliases?: string[]) => {
+    const key = name.toLowerCase().replace(/\s+/g, ' ');
+    const group = entityToGroupMap.get(key);
+    const accentVar = group ? ENTITY_GROUP_CONFIG[group].accentVar : '--entity-default';
+    
+    const els = findMentionsForEntity(name, aliases);
+    els.forEach((el) => {
+      el.classList.add('entity-pulse');
+      el.style.setProperty('--hl-bd', `var(${accentVar})`);
+    });
+  }, [entityToGroupMap, findMentionsForEntity]);
+
+  const clearPulse = useCallback(() => {
+    document.querySelectorAll('.entity-pulse').forEach((el) => {
+      el.classList.remove('entity-pulse');
+    });
+  }, []);
+
   const openChemicalPopup = useCallback((target: HTMLElement) => {
     const requestId = chemicalPopupRequestIdRef.current + 1;
     chemicalPopupRequestIdRef.current = requestId;
@@ -648,7 +786,11 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         }
       }
     }
-    if (!chemical) return;
+    if (!chemical) {
+      chemical = {
+        primaryName: text,
+      };
+    }
     if (requestId !== chemicalPopupRequestIdRef.current || !target.isConnected) {
       return;
     }
@@ -658,7 +800,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setActiveChemicalPopup({
       chemical,
       anchorText: stripHtml(target.textContent),
-      position: getSpeciesPopupPosition(target),
+      position: getChemicalPopupPosition(target),
     });
   }, [chemicalLookup]);
 
@@ -684,9 +826,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     setIsRenderingChemicalStructure(true);
     setChemicalStructureError(false);
 
-    const drawer = new window.SmilesDrawer.SvgDrawer({ width: 400, height: 300 });
+    const drawer = new SmilesDrawer.SvgDrawer({ width: 320, height: 180 });
 
-    window.SmilesDrawer.parse(
+    SmilesDrawer.parse(
       smiles,
       (tree: unknown) => {
         if (cancelled || chemicalStructureRenderIdRef.current !== renderId || !chemicalStructureSvgRef.current) {
@@ -734,7 +876,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [activeChemicalPopup]);
 
   // Group entities by label and calculate true frequency from frontend HTML
-  const groupedEntities = useCallback(() => {
+  const groupedEntityMap = useMemo(() => {
     const grouped: GroupedEntities = {};
     if (!entities || entities.length === 0) return grouped;
 
@@ -857,7 +999,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     return grouped;
   }, [entities, html]);
 
-  const groupedEntityMap = useMemo(() => groupedEntities(), [groupedEntities]);
   const sanitizedHtml = useMemo(() => sanitizeHtml(html), [html]);
 
   const visibleGroupedEntities = useMemo(() => {
@@ -872,6 +1013,29 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         ...ENTITY_GROUP_CONFIG[label],
       };
     });
+  }, [groupedEntityMap]);
+
+  const graphEntities: Entity[] = useMemo(() => {
+    const result: Entity[] = [];
+    ENTITY_GROUP_ORDER.forEach((label) => {
+      const items = groupedEntityMap[label] || [];
+      items.forEach((item) => {
+        result.push({
+          label,
+          text: item.text,
+          canonical: item.text,
+          count: item.count,
+          aliases: item.aliases,
+          preferred_name: item.preferred_name,
+          smiles: item.smiles,
+          inchikey: item.inchikey,
+          molecular_formula: item.molecular_formula,
+          source_db: item.source_db,
+          source_url: item.source_url,
+        });
+      });
+    });
+    return result;
   }, [groupedEntityMap]);
 
   const disabledHighlightGroups = useMemo(() => {
@@ -940,13 +1104,13 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [groupedEntityMap, paperIdentifier, identifierValue]);
 
   const triggerExportGraph = useCallback(() => {
-    const nodes = entities.map((e) => ({
+    const nodes = graphEntities.map((e) => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
       type: e.label,
-      count: (e as Entity & { count?: number }).count || 1
+      count: e.count || 1
     }));
-    const edges = entities.map((e) => ({
+    const edges = graphEntities.map((e) => ({
       from: `paper-${identifierValue}`,
       to: `${e.label}-${e.text.toLowerCase()}`
     }));
@@ -966,7 +1130,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     a.download = `graph-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [entities, paperIdentifier, identifierValue, title]);
+  }, [graphEntities, paperIdentifier, identifierValue, title]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -995,7 +1159,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         node.setAttribute('tabindex', '0');
         node.setAttribute('aria-haspopup', 'dialog');
         node.setAttribute('aria-expanded', activeSpeciesAnchorRef.current === node && activeSpeciesPopup ? 'true' : 'false');
-        node.setAttribute('title', species.primaryName);
+        node.removeAttribute('title');
       });
     });
   }, [
@@ -1004,51 +1168,42 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     speciesLookup,
     activeSpeciesPopup,
     tab,
-    showHL,
-    nav,
-    expandedGroups,
-    activeChemicalPopup
   ]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
-    console.log('[SpeciesEffect] roots:', roots.length, roots.map(r => r.id || r.tagName));
     if (roots.length === 0) return;
 
     const handleSpeciesClick = (event: MouseEvent) => {
+      if (!showHL) return;
       const clickedEl = event.target as HTMLElement;
-      console.log('[SpeciesClick] event.target:', clickedEl.tagName, clickedEl.className, clickedEl.textContent?.slice(0, 30));
       
-      // Only handle clicks on highlighted species elements
-      if (!clickedEl.classList.contains('ent-species') && !clickedEl.closest('.ent-species')) {
-        console.log('[SpeciesClick] NO ent-species class found, skipping');
+      const targetEl = clickedEl.closest(SPECIES_SELECTOR) as HTMLElement | null;
+      if (!targetEl) {
         return;
       }
       
-      // Get the text content and lookup in speciesLookup
-      const textContent = clickedEl.textContent?.trim();
+      const textContent = targetEl.textContent?.trim();
       if (!textContent) return;
       
       event.preventDefault();
-
-      // Use clicked element directly
-      const targetEl = clickedEl.closest('.ent-species') || clickedEl;
+      event.stopPropagation();
 
       if (activeSpeciesAnchorRef.current === targetEl && activeSpeciesPopup) {
         closeSpeciesPopup();
         return;
       }
 
-      console.log('[SpeciesClick] calling openSpeciesPopup with:', targetEl.textContent?.slice(0, 30));
-      openSpeciesPopup(targetEl as HTMLElement);
+      openSpeciesPopup(targetEl);
     };
 
     const handleSpeciesKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest('.ent-species') as HTMLElement | null;
+      const target = (event.target as HTMLElement).closest(SPECIES_SELECTOR) as HTMLElement | null;
       if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
+        event.stopPropagation();
         openSpeciesPopup(target);
       }
 
@@ -1069,7 +1224,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         container.removeEventListener('keydown', handleSpeciesKeyDown);
       });
     };
-  }, [activeSpeciesPopup, closeSpeciesPopup, getInteractiveRoots, openSpeciesPopup, speciesLookup]);
+  }, [activeSpeciesPopup, closeSpeciesPopup, getInteractiveRoots, openSpeciesPopup, speciesLookup, showHL]);
 
   useEffect(() => {
     if (!activeSpeciesPopup) return;
@@ -1101,14 +1256,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       }
     };
 
+    const scrollContainer = document.getElementById('main-content-display');
     window.addEventListener('resize', repositionPopup);
     window.addEventListener('scroll', repositionPopup, true);
+    scrollContainer?.addEventListener('scroll', repositionPopup, { passive: true });
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
 
     return () => {
       window.removeEventListener('resize', repositionPopup);
       window.removeEventListener('scroll', repositionPopup, true);
+      scrollContainer?.removeEventListener('scroll', repositionPopup);
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
@@ -1126,10 +1284,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
       chemicalNodes.forEach((node) => {
         const lookupKey = normalizeLookupText(node.textContent);
-        const chemical = chemicalLookup.get(lookupKey);
-
-        const fallbackKey = normalizeLookupText(node.textContent || '');
-        const chemicalFallback = !chemical ? chemicalLookup.get(fallbackKey) : chemical;
+        const chemicalFallback = chemicalLookup.get(lookupKey);
 
         if (!chemicalFallback) {
           node.removeAttribute('data-chemical-lookup-key');
@@ -1145,7 +1300,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         node.setAttribute('tabindex', '0');
         node.setAttribute('aria-haspopup', 'dialog');
         node.setAttribute('aria-expanded', activeChemicalAnchorRef.current === node && activeChemicalPopup ? 'true' : 'false');
-        node.setAttribute('title', chemicalFallback.primaryName);
+        node.removeAttribute('title');
       });
     });
   }, [
@@ -1154,52 +1309,43 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     chemicalLookup,
     activeChemicalPopup,
     tab,
-    showHL,
-    nav,
-    expandedGroups,
-    activeSpeciesPopup
   ]);
 
   // Chemical popup click/key handlers
   useEffect(() => {
     const roots = getInteractiveRoots();
-    console.log('[ChemicalEffect] roots:', roots.length, roots.map(r => r.id || r.tagName));
     if (roots.length === 0) return;
 
     const handleChemicalClick = (event: MouseEvent) => {
+      if (!showHL) return;
       const clickedEl = event.target as HTMLElement;
-      console.log('[ChemicalClick] event.target:', clickedEl.tagName, clickedEl.className, clickedEl.textContent?.slice(0, 30));
       
-      // Only handle clicks on highlighted chemical elements
-      if (!clickedEl.classList.contains('ent-chemical') && !clickedEl.closest('.ent-chemical')) {
-        console.log('[ChemicalClick] NO ent-chemical class found, skipping');
+      const targetEl = clickedEl.closest(CHEMICAL_SELECTOR) as HTMLElement | null;
+      if (!targetEl) {
         return;
       }
       
-      // Get the text content and lookup in chemicalLookup
-      const textContent = clickedEl.textContent?.trim();
+      const textContent = targetEl.textContent?.trim();
       if (!textContent) return;
       
       event.preventDefault();
+      event.stopPropagation();
 
-      // Use clicked element directly - wrap to provide needed interface
-      const targetEl = clickedEl.closest('.ent-chemical') || clickedEl;
-      
       if (activeChemicalAnchorRef.current === targetEl && activeChemicalPopup) {
         closeChemicalPopup();
         return;
       }
 
-      console.log('[ChemicalClick] calling openChemicalPopup with:', targetEl.textContent?.slice(0, 30));
-      openChemicalPopup(targetEl as HTMLElement);
+      openChemicalPopup(targetEl);
     };
 
     const handleChemicalKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-chemical-lookup-key], .ent-chemical');
+      const target = (event.target as HTMLElement).closest(CHEMICAL_SELECTOR) as HTMLElement | null;
       if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
+        event.stopPropagation();
         openChemicalPopup(target);
       }
 
@@ -1220,14 +1366,14 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         container.removeEventListener('keydown', handleChemicalKeyDown);
       });
     };
-  }, [activeChemicalPopup, closeChemicalPopup, getInteractiveRoots, openChemicalPopup, chemicalLookup]);
+  }, [activeChemicalPopup, closeChemicalPopup, getInteractiveRoots, openChemicalPopup, chemicalLookup, showHL]);
 
   useEffect(() => {
     const repositionPopup = () => {
       const anchor = activeChemicalAnchorRef.current;
       if (!anchor || !activeChemicalPopup) return;
 
-      const nextPosition = getSpeciesPopupPosition(anchor);
+      const nextPosition = getChemicalPopupPosition(anchor);
       setActiveChemicalPopup((current) => {
         if (!current) return current;
         return { ...current, position: nextPosition };
@@ -1249,14 +1395,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       }
     };
 
+    const scrollContainer = document.getElementById('main-content-display');
     window.addEventListener('resize', repositionPopup);
     window.addEventListener('scroll', repositionPopup, true);
+    scrollContainer?.addEventListener('scroll', repositionPopup, { passive: true });
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
 
     return () => {
       window.removeEventListener('resize', repositionPopup);
       window.removeEventListener('scroll', repositionPopup, true);
+      scrollContainer?.removeEventListener('scroll', repositionPopup);
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
@@ -1266,16 +1415,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   useEffect(() => {
     const container = htmlContainerRef.current;
     const titleContainer = titleContainerRef.current;
-
-    // Debug logging
-    (window as any).__phytoquery_debug = {
-      mounted: true,
-      containerExists: !!container,
-      titleContainerExists: !!titleContainer,
-      isExtracted,
-      htmlLength: html?.length || 0,
-      nodesFound: 0
-    };
 
     if (!isExtracted) return;
 
@@ -1300,18 +1439,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       nodes.push(...Array.from(titleContainer.querySelectorAll<HTMLElement>(selector)));
     }
 
-    (window as any).__phytoquery_debug.nodesFound = nodes.length;
-    (window as any).__phytoquery_debug.matchedTags = nodes.slice(0, 5).map(n => ({
-      tag: n.tagName,
-      text: n.textContent?.trim(),
-      classes: n.className,
-      hasDataEntity: n.hasAttribute('data-entity'),
-      dataEntityVal: n.getAttribute('data-entity')
-    }));
-
     const clickHandlers: { node: HTMLElement; handler: (e: MouseEvent) => void }[] = [];
 
     nodes.forEach((node) => {
+      node.removeAttribute('title');
       const name = node.textContent?.trim();
       if (!name) return;
       
@@ -1320,16 +1451,16 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       node.style.cursor = 'pointer';
 
       const handler = () => {
+        if (!showHL) return;
+        if (node.closest(SPECIES_SELECTOR) || node.closest(CHEMICAL_SELECTOR)) {
+          return;
+        }
         activateEntity(name);
       };
       
       node.addEventListener('click', handler);
       clickHandlers.push({ node, handler });
     });
-
-    if (nodes.length > 0) {
-      (window as any).__phytoquery_debug.node1_outerHTML_after_setAttribute = nodes[0].outerHTML;
-    }
 
     return () => {
       clickHandlers.forEach(({ node, handler }) => {
@@ -1496,19 +1627,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
   // Citation click handler - REMOVED (references section no longer displayed)
 
-  const miniNavStyle: React.CSSProperties = {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
-    display: "grid",
-    placeItems: "center",
-    background: "var(--surface-c)",
-    color: "var(--on-surface)",
-    border: "none",
-    cursor: "pointer",
-    fontSize: 8,
-    fontWeight: "bold"
-  };
 
   return (
     <div className="w-full max-w-[1440px] mx-auto px-6 lg:px-14 py-8 paper-enter">
@@ -1707,14 +1825,26 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
             {isExtracted && entities && entities.length > 0 && (
               <button 
-                onClick={() => setShowHL(v => !v)} 
-                className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors ml-auto p-1 cursor-pointer"
+                type="button"
+                onClick={() => {
+                  setShowHL(v => {
+                    const next = !v;
+                    if (!next) {
+                      closeSpeciesPopup();
+                      closeChemicalPopup();
+                    }
+                    return next;
+                  });
+                }} 
+                className="status-ic ml-auto text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0"
+                style={{ width: 28, height: 28 }}
                 title={showHL ? "Hide highlights" : "Show highlights"}
+                aria-label={showHL ? "Hide highlights" : "Show highlights"}
               >
                 {showHL ? (
-                  <Eye size={18} weight="regular" />
+                  <Eye size={17} weight="regular" />
                 ) : (
-                  <EyeSlash size={18} weight="regular" />
+                  <EyeSlash size={17} weight="regular" />
                 )}
               </button>
             )}
@@ -1733,27 +1863,37 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           </div>
 
           {/* Species Popup */}
-          {activeSpeciesPopup && (
+          {activeSpeciesPopup && typeof document !== 'undefined' && createPortal(
             <div
               ref={speciesPopupRef}
               role="dialog"
               aria-label={`Species metadata for ${activeSpeciesPopup.species.primaryName}`}
-              className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-teal-100 bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
+              className="fixed z-50 w-[min(20rem,calc(100vw-1.5rem))] max-h-[min(480px,calc(100vh-2rem))] overflow-y-auto rounded-2xl border border-[rgba(22,163,74,0.22)] bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
               style={{
                 top: `${activeSpeciesPopup.position.top}px`,
                 left: `${activeSpeciesPopup.position.left}px`,
+                fontFamily: 'var(--font-google-sans)',
               }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-teal-600">
+                  <p
+                    style={{ fontFamily: 'var(--font-google-sans)', color: 'var(--entity-species, #16A34A)' }}
+                    className="text-[12px] font-bold uppercase tracking-[0.14em]"
+                  >
                     Species
                   </p>
-                  <h3 className="mt-2 text-sm font-semibold text-on-surface italic leading-snug">
+                  <h3
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                    className="mt-1.5 text-[19px] font-bold text-on-surface italic leading-snug"
+                  >
                     {activeSpeciesPopup.species.scientificNameVerified || activeSpeciesPopup.species.primaryName}
                   </h3>
                   {activeSpeciesPopup.species.commonName && normalizeLookupText(activeSpeciesPopup.species.commonName) !== normalizeLookupText(activeSpeciesPopup.species.primaryName) && (
-                    <p className="mt-1 text-[11px] font-medium text-on-surface-variant normal-case">
+                    <p
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="mt-1 text-[14.5px] font-medium text-on-surface-variant normal-case"
+                    >
                       {activeSpeciesPopup.species.commonName}
                     </p>
                   )}
@@ -1761,74 +1901,110 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 <button
                   type="button"
                   onClick={closeSpeciesPopup}
-                  className="rounded-lg border border-border px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-muted transition-colors hover:border-outline hover:text-on-surface-variant cursor-pointer"
+                  aria-label="Close"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800 cursor-pointer shrink-0"
                 >
-                  Close
+                  <X size={15} weight="bold" />
                 </button>
               </div>
 
-              <div className="mt-4 space-y-2 border-t border-border pt-3 text-[10px] text-on-surface-variant">
+              <div className="mt-4 space-y-2.5 border-t border-border pt-3">
                 {activeSpeciesPopup.species.taxonId && (
-                  <div className="flex items-start gap-2">
-                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Taxon</span>
-                    <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.taxonId}</span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="w-[72px] shrink-0 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface-variant"
+                    >
+                      Taxon
+                    </span>
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="min-w-0 break-words font-medium text-[13px] text-on-surface"
+                    >
+                      {activeSpeciesPopup.species.taxonId}
+                    </span>
                   </div>
                 )}
                 {(activeSpeciesPopup.species.sourceDb || activeSpeciesPopup.species.sourceUrl) && (
-                  <div className="flex items-start gap-2">
-                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Source</span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="w-[72px] shrink-0 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface-variant"
+                    >
+                      Source
+                    </span>
                     {activeSpeciesPopup.species.sourceUrl ? (
                       <a
                         href={activeSpeciesPopup.species.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-w-0 break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                        className="min-w-0 break-words font-medium text-[13px] text-blue-600 hover:text-blue-800 hover:underline"
                       >
                         {activeSpeciesPopup.species.sourceDb || 'View'}
                       </a>
                     ) : (
-                      <span className="min-w-0 break-words font-medium">{activeSpeciesPopup.species.sourceDb}</span>
+                      <span
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                        className="min-w-0 break-words font-medium text-[13px] text-on-surface"
+                      >
+                        {activeSpeciesPopup.species.sourceDb}
+                      </span>
                     )}
                   </div>
                 )}
               </div>
-            </div>
+            </div>,
+            document.body
           )}
 
           {/* Chemical Popup */}
-          {activeChemicalPopup && (
+          {activeChemicalPopup && typeof document !== 'undefined' && createPortal(
             <div
               ref={chemicalPopupRef}
               role="dialog"
               aria-label={`Chemical metadata for ${activeChemicalPopup.chemical.primaryName}`}
-              className="fixed z-40 w-[min(20rem,calc(100vw-1.5rem))] rounded-2xl border border-primary/20 bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
+              className="fixed z-50 w-[min(20rem,calc(100vw-1.5rem))] max-h-[min(500px,calc(100vh-2rem))] overflow-y-auto rounded-2xl border border-[rgba(37,99,235,0.22)] bg-background p-4 shadow-2xl shadow-on-surface/10 animate-fade-in"
               style={{
                 top: `${activeChemicalPopup.position.top}px`,
                 left: `${activeChemicalPopup.position.left}px`,
+                fontFamily: 'var(--font-google-sans)',
               }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-primary">
+                  <p
+                    style={{ fontFamily: 'var(--font-google-sans)', color: 'var(--entity-chemical, #2563EB)' }}
+                    className="text-[12px] font-bold uppercase tracking-[0.14em]"
+                  >
                     Chemical
                   </p>
-                  <h3 className="mt-2 text-sm font-semibold text-on-surface leading-snug">
+                  <h3
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                    className="mt-1.5 text-[19px] font-bold text-on-surface leading-snug"
+                  >
                     {activeChemicalPopup.chemical.primaryName}
                   </h3>
                   {activeChemicalPopup.chemical.preferredName && normalizeLookupText(activeChemicalPopup.chemical.preferredName) !== normalizeLookupText(activeChemicalPopup.chemical.primaryName) && (
-                    <p className="mt-1 text-[11px] font-medium text-on-surface-variant normal-case">
+                    <p
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="mt-1 text-[14.5px] font-medium text-on-surface-variant normal-case"
+                    >
                       {activeChemicalPopup.chemical.preferredName}
                     </p>
                   )}
                   {activeChemicalPopup.chemical.synonyms && activeChemicalPopup.chemical.synonyms.length > 0 && (
-                    <div className="mt-1 text-[10px] font-medium text-on-surface-muted normal-case">
+                    <div
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="mt-1.5 text-[12px] font-medium text-on-surface-muted normal-case"
+                    >
                       Also: {isExpandedChemical ? (
                         <>
                           {activeChemicalPopup.chemical.synonyms.join(', ')}
                           <button
                             type="button"
                             onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
-                            className="ml-1 font-semibold text-primary hover:underline cursor-pointer"
+                            className="ml-1 font-semibold text-blue-600 hover:underline cursor-pointer"
                           >
                             Show less
                           </button>
@@ -1840,7 +2016,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                             <button
                               type="button"
                               onClick={() => toggleExpandedChemical(activeChemicalPopup.chemical.primaryName)}
-                              className="ml-1 font-semibold text-primary hover:underline cursor-pointer"
+                              className="ml-1 font-semibold text-blue-600 hover:underline cursor-pointer"
                             >
                               +{activeChemicalPopup.chemical.synonyms.length - 3} more
                             </button>
@@ -1853,70 +2029,102 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 <button
                   type="button"
                   onClick={closeChemicalPopup}
-                  className="rounded-lg border border-border px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-muted transition-colors hover:border-outline hover:text-on-surface-variant cursor-pointer"
+                  aria-label="Close"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800 cursor-pointer shrink-0"
                 >
-                  Close
+                  <X size={15} weight="bold" />
                 </button>
               </div>
 
-              {/* Molecular Structure */}
-              <div className="mt-3 min-h-[19rem] rounded-xl border border-border bg-surface-c/70 px-3 py-4">
-                {activeChemicalPopup.chemical.smiles ? (
-                  <div className="relative flex min-h-[17rem] items-center justify-center">
-                    {isRenderingChemicalStructure && (
-                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-lg bg-background/75 backdrop-blur-[1px]">
-                        <SpinnerGap size={24} className="animate-spin text-slate-900" />
-                        <p className="text-xs font-medium text-on-surface-variant">Rendering structure…</p>
-                      </div>
-                    )}
-                    {!chemicalStructureError ? (
-                      <svg
-                        ref={chemicalStructureSvgRef}
-                        className="h-auto max-h-[18rem] w-full max-w-[24rem]"
-                        viewBox="0 0 400 300"
-                        aria-label={`${activeChemicalPopup.chemical.primaryName} molecular structure`}
-                      />
-                    ) : (
-                      <div className="text-xs text-on-surface-muted">No structure</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex min-h-[17rem] items-center justify-center text-xs text-on-surface-muted">No structure</div>
-                )}
-              </div>
-
-              <div className="mt-4 space-y-2 border-t border-border pt-3 text-[10px] text-on-surface-variant">
+              {/* Metadata Rows — arranged immediately under header with divider, identical to species popup */}
+              <div className="mt-4 space-y-2.5 border-t border-border pt-3">
                 {activeChemicalPopup.chemical.molecularFormula && (
-                  <div className="flex items-start gap-2">
-                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Formula</span>
-                    <span className="min-w-0 break-words font-mono font-medium">{activeChemicalPopup.chemical.molecularFormula}</span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="w-[72px] shrink-0 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface-variant"
+                    >
+                      Formula
+                    </span>
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="min-w-0 break-words font-medium text-[13px] text-on-surface"
+                    >
+                      {activeChemicalPopup.chemical.molecularFormula}
+                    </span>
                   </div>
                 )}
                 {activeChemicalPopup.chemical.inchikey && (
-                  <div className="flex items-start gap-2">
-                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">InChIKey</span>
-                    <span className="min-w-0 break-words font-mono font-medium break-all">{activeChemicalPopup.chemical.inchikey}</span>
+                  <div className="flex items-start gap-3">
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="w-[72px] shrink-0 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface-variant"
+                    >
+                      InChIKey
+                    </span>
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="min-w-0 break-words font-medium text-[12px] text-on-surface break-all"
+                    >
+                      {activeChemicalPopup.chemical.inchikey}
+                    </span>
                   </div>
                 )}
                 {(activeChemicalPopup.chemical.sourceDb || activeChemicalPopup.chemical.sourceUrl) && (
-                  <div className="flex items-start gap-2">
-                    <span className="w-16 shrink-0 font-semibold uppercase tracking-wider text-on-surface-muted">Source</span>
+                  <div className="flex items-center gap-3">
+                    <span
+                      style={{ fontFamily: 'var(--font-google-sans)' }}
+                      className="w-[72px] shrink-0 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface-variant"
+                    >
+                      Source
+                    </span>
                     {activeChemicalPopup.chemical.sourceUrl ? (
                       <a
                         href={activeChemicalPopup.chemical.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-w-0 break-words font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                        className="min-w-0 break-words font-medium text-[13px] text-blue-600 hover:text-blue-800 hover:underline"
                       >
                         {activeChemicalPopup.chemical.sourceDb || 'View'}
                       </a>
                     ) : (
-                      <span className="min-w-0 break-words font-medium">{activeChemicalPopup.chemical.sourceDb}</span>
+                      <span
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                        className="min-w-0 break-words font-medium text-[13px] text-on-surface"
+                      >
+                        {activeChemicalPopup.chemical.sourceDb}
+                      </span>
                     )}
                   </div>
                 )}
               </div>
-            </div>
+
+              {/* Molecular Structure — properly boxed */}
+              {activeChemicalPopup.chemical.smiles && (
+                <div className="mt-3.5 rounded-xl border border-slate-200/90 bg-slate-50/70 p-2.5">
+                  <div className="relative flex h-[130px] w-full items-center justify-center overflow-hidden">
+                    {isRenderingChemicalStructure && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg bg-background/80 backdrop-blur-[1px]">
+                        <SpinnerGap size={20} className="animate-spin text-slate-800" />
+                        <p style={{ fontFamily: 'var(--font-google-sans)' }} className="text-xs font-medium text-on-surface-variant">Rendering structure…</p>
+                      </div>
+                    )}
+                    {!chemicalStructureError ? (
+                      <svg
+                        ref={chemicalStructureSvgRef}
+                        className="h-full w-full max-h-[120px] object-contain"
+                        viewBox="0 0 320 180"
+                        aria-label={`${activeChemicalPopup.chemical.primaryName} molecular structure`}
+                      />
+                    ) : (
+                      <div style={{ fontFamily: 'var(--font-google-sans)' }} className="text-xs text-on-surface-muted">Structure unavailable</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>,
+            document.body
           )}
 
           {isFetchingFallback && (
@@ -1930,7 +2138,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         </main>
 
         {/* Right Sidebar: Entity Groups */}
-        <aside className="w-full lg:w-[330px] sticky top-[88px] h-fit flex flex-col gap-3.5 shrink-0 z-30">
+        <aside className="w-full lg:w-[330px] sticky top-[88px] h-fit flex flex-col gap-3.5 shrink-0 z-30" style={{ fontFamily: "var(--font-google-sans)" }}>
           {!isExtracted ? (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
@@ -1967,8 +2175,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               >
                 {isExtracting ? (
                   <>
-                    <SpinnerGap size={14} className="animate-spin mr-2" />
-                    Extracting Terms...
+                    <SpinnerGap size={16} className="animate-spin" />
+                    Extracting...
                   </>
                 ) : (
                   <>
@@ -1982,8 +2190,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               {/* Centered view switcher pill header */}
               <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14 }}>
                 <div style={{
-                  display: "inline-flex", gap: 2,
-                  padding: 5, borderRadius: 999,
+                  display: "inline-flex", gap: 3,
+                  padding: 4, borderRadius: 999,
                   border: "none", background: "var(--surface-c)"
                 }}>
                   {(
@@ -2002,18 +2210,26 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                         onMouseLeave={() => setHoverTab(null)}
                         style={{
                           display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
-                          height: 34, borderRadius: 999,
-                          width: expanded ? "auto" : 38,
+                          height: 36, borderRadius: 999,
+                          width: expanded ? "auto" : 40,
                           padding: expanded ? "0 14px" : 0,
-                          background: isActive ? "#FFFFFF" : "transparent",
-                          boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                          background: isActive ? "var(--background, #FFFFFF)" : "transparent",
+                          boxShadow: isActive ? "0 1px 3px rgba(0,0,0,.08)" : "none",
                           border: "none", cursor: "pointer",
-                          fontSize: 13, fontWeight: isActive ? 600 : 500,
+                          fontSize: 13.5, fontWeight: isActive ? 600 : 500,
+                          fontFamily: "var(--font-google-sans)",
                           color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
                           whiteSpace: "nowrap", overflow: "hidden",
                           transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
                         }}>
-                          {expanded ? <span>{label}</span> : <Icon size={16} />}
+                          {expanded ? (
+                            <span className="inline-flex items-center gap-2" style={{ fontFamily: "var(--font-google-sans)" }}>
+                              <Icon size={18} weight={isActive ? "bold" : "regular"} />
+                              <span style={{ fontSize: 13.5, fontWeight: isActive ? 600 : 500 }}>{label}</span>
+                            </span>
+                          ) : (
+                            <Icon size={19} weight={isActive ? "bold" : "regular"} />
+                          )}
                         </button>
                     );
                   })}
@@ -2026,7 +2242,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 >
                   <button 
                     onClick={() => setExportOpen((o) => !o)} 
-                    title="Export options" 
+                    title="Export" 
+                    aria-label="Export"
                     style={{
                       width: 40, height: 40, borderRadius: 999,
                       background: exportOpen ? "var(--surface-c)" : "transparent",
@@ -2046,25 +2263,28 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                       border: "1px solid var(--border)", borderRadius: 12,
                       boxShadow: "0 2px 6px 2px rgba(0, 0, 0, 0.08)",
                       padding: 5, zIndex: 100,
+                      fontFamily: "var(--font-google-sans)",
                       animation: "fadeUp .16s ease"
                     }}>
                       <button 
                         className="export-opt" 
+                        style={{ fontFamily: "var(--font-google-sans)" }}
                         onClick={() => {
                           setExportOpen(false);
                           triggerExportCsv();
                         }}
                       >
-                        <span>Export CSV</span>
+                        <span style={{ fontFamily: "var(--font-google-sans)" }}>Export CSV</span>
                       </button>
                       <button 
                         className="export-opt" 
+                        style={{ fontFamily: "var(--font-google-sans)" }}
                         onClick={() => {
                           setExportOpen(false);
                           triggerExportGraph();
                         }}
                       >
-                        <span>Export Graph</span>
+                        <span style={{ fontFamily: "var(--font-google-sans)" }}>Export Graph</span>
                       </button>
                     </div>
                   )}
@@ -2096,7 +2316,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                             width: "100%", padding: "13px 4px",
                             background: "transparent", border: "none",
                             cursor: empty ? "default" : "pointer",
-                            opacity: empty ? 0.5 : 1
+                            opacity: empty ? 0.5 : 1,
+                            fontFamily: "var(--font-google-sans)"
                           }}
                         >
                           {/* Left category accent dot bar */}
@@ -2107,18 +2328,19 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                           }} />
                           
                           <span style={{
-                            flex: 1, textAlign: "left", fontSize: 14, fontWeight: 600,
+                            flex: 1, textAlign: "left", fontSize: 14.5, fontWeight: 600,
                             color: isExpanded ? accentColor : "var(--on-surface)",
                             transition: "color .15s",
-                            textTransform: "capitalize"
+                            textTransform: "capitalize",
+                            fontFamily: "var(--font-google-sans)"
                           }}>
                             {group.label.toLowerCase()}
                           </span>
 
                           {/* Hover caret transitions slot */}
-                          <span style={{ flexShrink: 0 }}>
+                          <span style={{ flexShrink: 0, fontFamily: "var(--font-google-sans)" }}>
                             {empty ? (
-                              <span style={{ fontSize: 14, color: "var(--on-surface-variant)" }}>–</span>
+                              <span style={{ fontSize: 14, color: "var(--on-surface-variant)", fontFamily: "var(--font-google-sans)" }}>–</span>
                             ) : isExpanded ? (
                               <span className="relative flex items-center justify-center min-w-[24px] h-[20px] text-on-surface-variant">
                                 <CaretUp size={16} weight="bold" />
@@ -2126,7 +2348,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                             ) : (
                               <span className="relative flex items-center justify-center min-w-[24px] h-[20px]">
                                 {/* Entity Count: visible without cursor, fades out on hover */}
-                                <span className="transition-all duration-200 text-[13px] font-semibold text-on-surface-variant group-hover:opacity-0 group-hover:scale-75">
+                                <span className="transition-all duration-200 text-[13px] font-semibold text-on-surface-variant group-hover:opacity-0 group-hover:scale-75" style={{ fontFamily: "var(--font-google-sans)" }}>
                                   {group.termCount}
                                 </span>
                                 
@@ -2149,44 +2371,54 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                               return (
                                 <div 
                                   key={eIdx}
-                                  onClick={() => activateEntity(name)}
-                                  title={`Go to "${name}" in the paper`}
-                                  className="ent-row"
+                                  onClick={() => activateEntity(name, ent.aliases)}
+                                  className="ent-row group/item"
                                   style={{
                                     display: "flex", alignItems: "center", gap: 10,
-                                    padding: "6px 10px", borderRadius: 7, cursor: "pointer",
-                                    transition: "background .12s"
+                                    padding: "7px 10px", borderRadius: 7, cursor: "pointer",
+                                    transition: "all .12s ease",
+                                    background: isNavigated ? "var(--surface-c)" : "transparent",
+                                    fontFamily: "var(--font-google-sans)"
                                   }}
                                   onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = "var(--surface-low)";
-                                    pulseEntity(name);
+                                    if (!isNavigated) e.currentTarget.style.background = "var(--surface-low)";
+                                    pulseEntity(name, ent.aliases);
                                   }}
                                   onMouseLeave={(e) => {
-                                    e.currentTarget.style.background = "transparent";
+                                    if (!isNavigated) e.currentTarget.style.background = "transparent";
                                     clearPulse();
                                   }}
                                 >
                                   {/* Item dot */}
-                                  <span style={{ width: 7, height: 7, borderRadius: 999, background: accentColor, flexShrink: 0 }} />
+                                  <span style={{ width: 7.5, height: 7.5, borderRadius: 999, background: accentColor, flexShrink: 0 }} />
                                   
                                   {/* Item name (italicized for Species label) */}
                                   <span style={{
-                                    flex: 1, fontSize: 13.5,
+                                    flex: 1, fontSize: 14,
+                                    lineHeight: "1.35",
                                     color: "var(--on-surface)",
-                                    fontStyle: group.label === "SPECIES" ? "italic" : "normal"
+                                    fontStyle: group.label === "SPECIES" ? "italic" : "normal",
+                                    fontFamily: "var(--font-google-sans)",
+                                    fontWeight: isNavigated ? 600 : 400,
                                   }}>
                                     {name}
                                   </span>
 
-                                  {/* Stepper pager navigator on active item, or item count otherwise */}
+                                  {/* Clean active indicator or item count */}
                                   {isNavigated ? (
-                                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
-                                      <button onClick={() => gotoMention(nav.idx - 1, nav.total)} title="Previous" style={miniNavStyle}>◀</button>
-                                      <span className="mono font-semibold" style={{ fontSize: 11.5, color: "var(--on-surface)", minWidth: 28, textAlign: "center" }}>{nav.idx + 1}/{nav.total}</span>
-                                      <button onClick={() => gotoMention(nav.idx + 1, nav.total)} title="Next" style={miniNavStyle}>▶</button>
+                                    <span
+                                      className="select-none font-semibold"
+                                      style={{
+                                        fontSize: 12,
+                                        color: accentColor,
+                                        fontFamily: "var(--font-google-sans)",
+                                        letterSpacing: "0.02em"
+                                      }}
+                                    >
+                                      {nav.idx + 1}/{nav.total}
                                     </span>
                                   ) : (
-                                    <span className="mono" style={{ fontSize: 12, color: "var(--on-surface-variant)" }}>
+                                    <span style={{ fontSize: 12.5, color: "var(--on-surface-variant)", fontFamily: "var(--font-google-sans)", fontWeight: 500 }}>
                                       {ent.count}
                                     </span>
                                   )}
@@ -2202,7 +2434,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               ) : (
                 <div className="flex-1 min-h-[400px]">
                   <KnowledgeGraph 
-                    entities={entities} 
+                    entities={graphEntities} 
                     paperIdentifier={paperIdentifier}
                     entityConfig={ENTITY_GROUP_CONFIG}
                   />

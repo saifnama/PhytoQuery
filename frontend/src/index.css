@@ -701,7 +701,7 @@ input, textarea {
 .ent-count {
     font-size: 11px;
     color: var(--on-surface-variant);
-    font-family: var(--font-mono);
+    font-family: var(--font-google-sans);
     margin-left: auto;
     margin-right: 8px;
 }
@@ -820,39 +820,50 @@ input, textarea {
     padding: 10px 12px;
     border-radius: var(--radius-md);
     cursor: pointer;
+    font-family: var(--font-google-sans);
+    font-size: 13px;
+    font-weight: 500;
     transition: background 140ms ease;
 }
 .export-opt:hover { background: var(--surface-c); }
 
-/* â”€â”€ Entity flash / pulse (search results hover) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── Entity flash / pulse (search results hover & navigation) ────────────── */
 .entity-flash {
-    animation: entityFlash 1.5s ease-out !important;
-    border-radius: 3px;
+    animation: entityFlash 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+    border-radius: 4px;
 }
 .entity-pulse {
     animation: entityPulse 1s ease-in-out infinite !important;
-    border-radius: 3px;
+    border-radius: 4px;
+}
+.entity-mention-active {
+    outline: 2px solid rgba(13, 148, 136, 0.9) !important;
+    outline-offset: 2px !important;
+    box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.35), 0 0 16px rgba(13, 148, 136, 0.4) !important;
+    border-radius: 4px !important;
 }
 
-/* When the user has toggled "eye off" on the paper, dim marks. */
-.hl-off .article-prose .ent-chemical,
-.hl-off .article-prose .ent-species,
-.hl-off .article-prose .ent-plant-part,
-.hl-off .article-prose .ent-extraction-method,
-.hl-off .article-prose .ent-development-stage,
-.hl-off .article-prose .ent-season,
-.hl-off .article-prose .ent-location,
-.hl-off .article-prose .ent-bioactivity,
-.hl-off .article-prose .ent-analytical-technique,
-.hl-off .article-prose .ent-isolation-method,
-.hl-off .article-prose .ent-disease,
-.hl-off .article-prose mark.ner-default {
-    background-color: transparent !important;
-    color: inherit !important;
-    padding: 0 !important;
-    border-radius: 0 !important;
-    cursor: default;
-    font-weight: inherit !important;
+@keyframes entityFlash {
+    0% {
+        box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.75), 0 0 20px rgba(13, 148, 136, 0.5);
+        filter: brightness(1.2);
+    }
+    40% {
+        box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.5), 0 0 12px rgba(13, 148, 136, 0.3);
+    }
+    100% {
+        box-shadow: none;
+        filter: brightness(1);
+    }
+}
+
+@keyframes entityPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 2px var(--hl-bd, rgba(13, 148, 136, 0.6));
+    }
+    50% {
+        box-shadow: 0 0 0 4px var(--hl-bd, rgba(13, 148, 136, 0.2));
+    }
 }
 
 /* =============================================================================
@@ -886,14 +897,6 @@ input, textarea {
     0%   { opacity: 0; transform: translateY(-6px) scale(0.985); }
     60%  { opacity: 1; transform: translateY(1px) scale(1.004); }
     100% { opacity: 1; transform: translateY(0) scale(1); }
-}
-@keyframes entityFlash {
-    0%   { background: #FDE68A !important; }
-    100% { background: var(--entity-flash-bg, transparent) !important; }
-}
-@keyframes entityPulse {
-    0%, 100% { box-shadow: 0 0 0 0 transparent; }
-    50%      { box-shadow: 0 0 0 3px var(--hl-bd, #8B5CF6); }
 }
 @keyframes skelShimmer {
     0%   { background-position: 200% 0; }
@@ -1220,7 +1223,6 @@ mark.ner-disease,
     mark.ner-disease
 ) {
     background-color: rgb(var(--entity-accent-rgb, var(--entity-default-rgb)) / var(--entity-highlight-alpha)) !important;
-    border-bottom: 2px solid var(--entity-accent, var(--entity-default)) !important;
     border-radius: 2px;
     box-decoration-break: clone;
     -webkit-box-decoration-break: clone;
@@ -1244,6 +1246,44 @@ mark.ner-default {
     padding: 1px 5px;
     text-decoration: none;
     transition: all 0.15s;
+}
+
+/* Master override when highlights are toggled off: completely clear styling and interaction on title and body */
+.hl-off :is(
+    .ent-chemical,
+    .ent-species,
+    .ent-plant-part,
+    .ent-extraction-method,
+    .ent-development-stage,
+    .ent-season,
+    .ent-location,
+    .ent-bioactivity,
+    .ent-analytical-technique,
+    .ent-isolation-method,
+    .ent-disease,
+    mark.ner-chemical,
+    mark.ner-species,
+    mark.ner-plant-part,
+    mark.ner-extraction-method,
+    mark.ner-development-stage,
+    mark.ner-season,
+    mark.ner-location,
+    mark.ner-bioactivity,
+    mark.ner-analytical-technique,
+    mark.ner-isolation-method,
+    mark.ner-disease,
+    mark.ner-default
+) {
+    background-color: transparent !important;
+    color: inherit !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    cursor: inherit !important;
+    font-weight: inherit !important;
+    text-decoration: none !important;
+    pointer-events: none !important;
+    box-shadow: none !important;
+    outline: none !important;
 }
 
 /* =============================================================================

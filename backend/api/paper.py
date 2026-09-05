@@ -139,9 +139,16 @@ async def analyze_paper_json(
     run_ner: bool = Form(False),
     source: str = Form(""),  # "europepmc", "openalex", or "" - case insensitive
     service: NERService = Depends(get_ner_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """JSON endpoint for fetching paper data with identifier-aware fallback.
-    
+
+    Highlighting priority:
+      1. NER in-memory / ner_cache hit  → entities highlighted at NER-run time
+      2. run_ner=True                   → live NER, result cached
+      3. paper_entities DB table        → pre-extracted entities used to highlight
+         HTML so the entity-index <> navigation finds real DOM nodes
+
     If source="openalex", skip Europe PMC fallback - only return OpenAlex metadata.
     """
     # Normalize source: "Europe PMC" → "europepmc", "OpenAlex" → "openalex"
@@ -349,7 +356,42 @@ async def analyze_paper_json(
             ner_cache.set(clean_id, cache_payload)
             is_extracted = True
 
-        # Highlight title and ALL sections if NER was run
+        # ── DB fallback: use pre-extracted entities from SQLite ──────────────
+        # This path is taken when the paper was imported via the ingestion
+        # pipeline but the NER cache is cold (e.g. after a server restart) and
+        # the caller didn't ask for a live NER run (run_ner=False).
+        # We load the DB rows and use them to highlight the HTML so that the
+        # entity-index sidebar and its <> navigation can find real DOM nodes.
+        if not is_extracted:
+            try:
+                db_paper_result = await db.execute(
+                    select(Paper.id).where(Paper.doi == clean_id)
+                )
+                db_paper_id = db_paper_result.scalar_one_or_none()
+                if not db_paper_id and clean_id != doi:
+                    db_paper_result = await db.execute(
+                        select(Paper.id).where(Paper.doi == doi)
+                    )
+                    db_paper_id = db_paper_result.scalar_one_or_none()
+
+                if db_paper_id:
+                    db_rows_result = await db.execute(
+                        select(PaperEntity).where(PaperEntity.paper_id == db_paper_id)
+                    )
+                    db_rows = db_rows_result.scalars().all()
+                    if db_rows:
+                        entities = [_entity_row_to_dict(pe) for pe in db_rows]
+                        is_extracted = True
+                        cache_payload = {"entities": entities, "summary": summary}
+                        service.result_cache[clean_id] = cache_payload
+                        ner_cache.set(clean_id, cache_payload)
+                        logger.info(
+                            f"Loaded {len(entities)} pre-extracted entities from DB for {clean_id}"
+                        )
+            except Exception as db_err:
+                logger.warning(f"DB entity fallback failed for {clean_id}: {db_err}")
+
+        # Highlight title and ALL sections if NER was run or pre-extracted entities loaded
         if is_extracted and entities:
             try:
                 # Highlight title
@@ -372,6 +414,10 @@ async def analyze_paper_json(
                         section_html = f'<section id="section-{idx}"><h2>{s.get("title", "")}</h2>{s.get("content", "")}</section>'
                         html_parts.append(section_html)
                     paper_data["html"] = "".join(html_parts)
+                elif paper_data.get("html"):
+                    paper_data["html"] = Highlighter.highlight(
+                        paper_data["html"], entities
+                    )
             except Exception as e:
                 logger.error(f"Highlighting failed for {clean_id}: {e}")
 

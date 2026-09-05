@@ -128,9 +128,8 @@ class Highlighter:
                     # Create the span tag
                     span = soup.new_tag("span")
                     span["class"] = (
-                        f"{css_class} rounded-sm cursor-help transition-all hover:brightness-95"
+                        f"{css_class} rounded-sm transition-all hover:brightness-95"
                     )
-                    span["title"] = match_label
                     
                     # Add species metadata as data attributes if available
                     if match_label == "SPECIES" and match_entity:
