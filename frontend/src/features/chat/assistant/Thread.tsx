@@ -51,12 +51,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardTitle,
-} from '@/components/ui/card';
 import type { Citation, RagMessageCustomData, RagSource } from './runtime';
 import { exportThreadAsPdf, type ThreadTurn } from './exportPdf';
 
@@ -83,12 +77,13 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
     <ThreadPrimitive.Root
       className="flex h-full flex-col bg-card"
       style={{
+        fontFamily: 'var(--font-google-sans)',
         ['--thread-max-width' as string]: '50rem',
         ['--turn-gap-prompt-to-answer' as string]: '36px',
         ['--turn-gap-answer-to-prompt' as string]: '50px',
       }}
     >
-      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-8 flex flex-col">
+      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-8 flex flex-col chat-scrollbar">
         <ThreadPrimitive.Empty>
           <div className="flex h-full items-center justify-center text-muted-foreground">
             {emptyContent ?? <DefaultEmpty />}
@@ -163,7 +158,7 @@ const ScrollToBottomButton: FC = () => (
       size="icon-sm"
       side="left"
       tooltip="Scroll to latest"
-      className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-md flex items-center justify-center p-0 disabled:hidden transition-transform active:scale-95"
+      className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-none flex items-center justify-center p-0 disabled:hidden transition-transform active:scale-95"
     >
       <ArrowDown size={16} weight="bold" />
     </TooltipIconButton>
@@ -171,14 +166,20 @@ const ScrollToBottomButton: FC = () => (
 );
 
 const DefaultEmpty: FC = () => (
-  <Card size="sm" className="max-w-md ring-0 shadow-none">
-    <CardContent className="flex flex-col items-center gap-2 text-center">
-      <CardTitle className="text-base">Ask about your papers</CardTitle>
-      <CardDescription className="text-center">
-        Upload PDFs in the sidebar, then ask questions.
-      </CardDescription>
-    </CardContent>
-  </Card>
+  <div 
+    className="flex flex-col items-center justify-center text-center max-w-xl px-10 py-12 mx-auto select-none rounded-3xl border-2 border-dashed border-slate-200/90 bg-transparent shadow-none"
+    style={{ fontFamily: 'var(--font-google-sans)' }}
+  >
+    <p className="text-[20px] text-slate-800 font-normal leading-relaxed">
+      Upload your papers and ask questions
+    </p>
+    <span className="my-3 text-[13px] uppercase tracking-widest text-slate-400 font-medium">
+      OR
+    </span>
+    <p className="text-[20px] text-slate-800 font-normal leading-relaxed">
+      Search our <span className="text-[#d63384] font-medium">knowledge base</span> for answers.
+    </p>
+  </div>
 );
 
 const CitationLink: FC<{
@@ -214,12 +215,12 @@ const CitationLink: FC<{
 const markdownComponents = memoizeMarkdownComponents({
   a: CitationLink,
   hr: () => <hr className="my-4 border-0 border-t border-slate-200" />,
-  p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed text-[15px] text-slate-800">{children}</p>,
-  h1: ({ children }) => <h1 className="text-base font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-[15px] font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-[14px] font-bold text-slate-900 mt-2 mb-1 first:mt-0">{children}</h3>,
-  ul: ({ children }) => <ul className="list-disc pl-5 mb-2.5 space-y-1 text-[15px] text-slate-800">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal pl-5 mb-2.5 space-y-1.5 text-[15px] text-slate-800">{children}</ol>,
+  p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed text-[16.5px] text-slate-800">{children}</p>,
+  h1: ({ children }) => <h1 className="text-[19px] font-bold text-slate-900 mt-3.5 mb-2 first:mt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-[17px] font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-[15.5px] font-bold text-slate-900 mt-2.5 mb-1 first:mt-0">{children}</h3>,
+  ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1.5 text-[16.5px] text-slate-800">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1.5 text-[16.5px] text-slate-800">{children}</ol>,
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
 });
@@ -258,7 +259,7 @@ const MarkdownText: FC = () => {
       smooth
       components={markdownComponents}
       preprocess={preprocess}
-      className="w-full text-slate-800 text-[15px] leading-relaxed"
+      className="w-full text-slate-800 text-[16.5px] leading-relaxed"
     />
   );
 };
@@ -278,8 +279,8 @@ const UserMessage: FC = () => {
           <UserActionBar />
 
           <div
-            className="max-w-[85%] rounded-[22px] px-5 py-2.5 text-[15px] leading-normal text-slate-800 break-words whitespace-pre-wrap select-text"
-            style={{ backgroundColor: PINK_USER_BG }}
+            className="max-w-[85%] rounded-[22px] px-5 py-3 text-[16px] leading-normal text-slate-800 break-words whitespace-pre-wrap select-text shadow-none"
+            style={{ backgroundColor: PINK_USER_BG, fontFamily: 'var(--font-google-sans)' }}
           >
             {text}
           </div>
@@ -293,10 +294,11 @@ const UserMessage: FC = () => {
 
 const UserEditComposer: FC = () => (
   <ComposerPrimitive.Root className="w-full max-w-2xl">
-    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm">
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3 shadow-none">
       <ComposerPrimitive.Input asChild>
         <Textarea
-          className="min-h-[60px] resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          className="min-h-[60px] max-h-[200px] resize-none border-0 bg-transparent text-[16px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 chat-scrollbar pr-1.5"
+          style={{ fontFamily: 'var(--font-google-sans)' }}
           autoFocus
         />
       </ComposerPrimitive.Input>
@@ -468,13 +470,14 @@ const BranchPicker: FC = () => (
 
 const Composer: FC = () => (
   <ComposerPrimitive.Root className="bg-transparent px-4 pb-6 pt-2">
-    <div className="mx-auto flex max-w-4xl items-center gap-2.5 rounded-[26px] border border-border/80 bg-background py-1.5 pl-5 pr-2 shadow-xl shadow-black/[0.04] focus-within:border-border transition-all">
+    <div className="mx-auto flex max-w-4xl items-center gap-2.5 rounded-[26px] border border-border/80 bg-background py-1.5 pl-5 pr-2 shadow-none focus-within:border-border transition-all">
       <ComposerPrimitive.Input asChild>
         <Textarea
           rows={1}
           autoFocus
           placeholder="Ask anything..."
-          className="min-h-[38px] max-h-[200px] flex-1 resize-none border-0 bg-transparent py-1.5 px-0 text-[15px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/70"
+          className="min-h-[40px] max-h-[200px] flex-1 resize-none border-0 bg-transparent py-1.5 pl-0 pr-1.5 text-[16px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/70 chat-scrollbar"
+          style={{ fontFamily: 'var(--font-google-sans)' }}
         />
       </ComposerPrimitive.Input>
       <div className="flex items-center shrink-0">
@@ -486,7 +489,7 @@ const Composer: FC = () => (
               size="icon"
               side="top"
               tooltip="Stop"
-              className="h-9 w-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-sm active:scale-95 flex items-center justify-center p-0 shrink-0 border-0"
+              className="h-9 w-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-none active:scale-95 flex items-center justify-center p-0 shrink-0 border-0"
             >
               <Stop size={14} weight="fill" className="size-3.5" />
             </TooltipIconButton>
@@ -499,7 +502,7 @@ const Composer: FC = () => (
               size="icon"
               side="top"
               tooltip="Send"
-              className="h-9 w-9 rounded-full text-white shadow-sm hover:shadow active:scale-95 disabled:opacity-35 disabled:shadow-none flex items-center justify-center p-0 shrink-0 border-0"
+              className="h-9 w-9 rounded-full text-white shadow-none active:scale-95 disabled:opacity-35 flex items-center justify-center p-0 shrink-0 border-0"
               style={{ backgroundColor: PINK_ACCENT }}
             >
               <ArrowUp size={18} weight="bold" className="size-4.5" />

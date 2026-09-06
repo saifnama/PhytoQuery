@@ -474,17 +474,17 @@ const AnalysePage = () => {
                 onClick={() => fileInputRef.current?.click()}
                 style={{
                   backgroundColor: '#ffecf6',
-                  color: '#ff6dba',
+                  color: '#d63384',
                   borderColor: '#fbcfe8',
                   boxShadow: 'none',
                 }}
-                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#ff6dba] text-[#ff6dba] shadow-none outline-none"
-                title="Add sources"
+                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#d63384] text-[#d63384] shadow-none outline-none"
+                title="Add Sources"
               >
                 {isUploading ? (
-                  <SpinnerGap size={20} className="animate-spin text-[#ff6dba]" />
+                  <SpinnerGap size={20} className="animate-spin text-[#d63384]" />
                 ) : (
-                  <Plus size={20} weight="bold" className="text-[#ff6dba]" />
+                  <Plus size={20} weight="bold" className="text-[#d63384]" />
                 )}
               </button>
 
@@ -556,19 +556,19 @@ const AnalysePage = () => {
                   <div 
                     style={{
                       backgroundColor: '#ffecf6',
-                      color: '#ff6dba',
+                      color: '#d63384',
                       borderColor: '#fbcfe8',
                       fontFamily: 'var(--font-google-sans)',
                       boxShadow: 'none',
                     }}
-                    className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#ff6dba] shadow-none outline-none"
+                    className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#d63384] shadow-none outline-none"
                   >
                     {isUploading ? (
-                      <SpinnerGap size={18} className="animate-spin text-[#ff6dba]" />
+                      <SpinnerGap size={18} className="animate-spin text-[#d63384]" />
                     ) : (
-                      <Plus size={18} weight="bold" className="text-[#ff6dba]" />
+                      <Plus size={18} weight="bold" className="text-[#d63384]" />
                     )}
-                    <span className="text-[#ff6dba]">{isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add sources'}</span>
+                    <span className="text-[#d63384]">{isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add Sources'}</span>
                   </div>
                 </label>
                 

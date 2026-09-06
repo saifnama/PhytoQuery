@@ -371,7 +371,7 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed"
+        className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed chat-scrollbar"
       >
         {loading && (
           <div className="space-y-3" aria-label="Loading paper">

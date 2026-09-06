@@ -463,7 +463,7 @@ const RagPage: React.FC = () => {
 
   return (
     <div
-      className="h-full flex px-0"
+      className="chat-section h-full flex px-0"
       style={{ fontFamily: 'var(--font-google-sans)' }}
     >
       {/* ─── Sources Sidebar ─── */}
@@ -472,14 +472,22 @@ const RagPage: React.FC = () => {
           sidebarCollapsed ? 'w-14' : 'w-72'
         }`}
       >
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileUpload}
+          multiple
+          accept=".pdf"
+          className="hidden"
+        />
         {sidebarCollapsed ? (
-          /* ── Collapsed: icon strip matching Compare mode ── */
+          /* ── Collapsed: icon strip matching Analyse mode ── */
           <div className="flex flex-col h-full w-full">
             {/* Top Header Bar matching expanded h-14 */}
             <div className="h-14 border-b border-surface-c flex items-center justify-center shrink-0">
               <button
                 onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c transition-colors outline-none"
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none"
                 title="Expand sidebar"
               >
                 <SidebarSimple size={20} />
@@ -487,21 +495,30 @@ const RagPage: React.FC = () => {
             </div>
 
             {/* Mini View Icons */}
-            <div className="flex flex-col items-center pt-3 gap-2.5 flex-1 w-full overflow-y-auto custom-scrollbar pb-6">
-              {/* Add sources button */}
+            <div className="flex flex-col items-center pt-3 gap-2.5 flex-1 w-full overflow-y-auto chat-scrollbar pb-6">
+              {/* Mini Add Sources button */}
               <button
                 type="button"
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="p-2 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center justify-center disabled:opacity-50"
-                title="Add sources"
+                style={{
+                  backgroundColor: '#ffecf6',
+                  color: '#d63384',
+                  borderColor: '#fbcfe8',
+                  boxShadow: 'none',
+                }}
+                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#d63384] text-[#d63384] shadow-none outline-none disabled:opacity-50"
+                title="Add Sources"
               >
                 {isUploading ? (
-                  <SpinnerGap size={20} className="animate-spin text-slate-900" />
+                  <SpinnerGap size={20} className="animate-spin text-[#d63384]" />
                 ) : (
-                  <Plus size={20} weight="bold" />
+                  <Plus size={20} weight="bold" className="text-[#d63384]" />
                 )}
               </button>
+
+              {/* Divider before file stack */}
+              <div className="w-6 h-[1.5px] bg-[#e0e0e0] rounded-full mx-auto my-1.5" />
 
               {/* File icons */}
               {uploadedFiles.map((file) => {
@@ -512,10 +529,10 @@ const RagPage: React.FC = () => {
                     onClick={() => openPdfViewer(file)}
                     className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all shrink-0 border-0 outline-none shadow-none ${
                       isActive
-                        ? 'bg-[#fff5fa] opacity-100'
+                        ? 'bg-[#f4f4f4] opacity-100'
                         : file.selected
-                          ? 'hover:bg-slate-50 opacity-100'
-                          : 'hover:bg-slate-50 opacity-60 hover:opacity-100'
+                          ? 'hover:bg-[#fafafa] opacity-100'
+                          : 'hover:bg-[#fafafa] opacity-70 hover:opacity-100'
                     }`}
                     title={file.name}
                   >
@@ -523,6 +540,18 @@ const RagPage: React.FC = () => {
                   </button>
                 );
               })}
+            </div>
+
+            {/* Collapsed Sidebar Footer: Delete Chats Fire Icon */}
+            <div className="pb-4 flex items-center justify-center mt-auto shrink-0">
+              <button
+                type="button"
+                onClick={handleResetAll}
+                className="w-10 h-10 rounded-full border border-red-200 bg-background hover:bg-red-50 hover:border-red-300 text-red-600 flex items-center justify-center transition-all active:scale-90 shadow-none outline-none"
+                title="Delete Chats"
+              >
+                <Fire size={20} weight="regular" />
+              </button>
             </div>
           </div>
         ) : (
@@ -535,7 +564,7 @@ const RagPage: React.FC = () => {
               </span>
               <button
                 onClick={() => setSidebarCollapsed(true)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c transition-colors outline-none"
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none"
                 title="Collapse sidebar"
               >
                 <SidebarSimple size={20} />
@@ -544,96 +573,102 @@ const RagPage: React.FC = () => {
 
             {/* Upload controls */}
             <div className="px-4 py-3 space-y-2">
-              {/* Parser type toggle */}
-              <div className="flex items-center bg-surface-c rounded-lg p-1">
+              {/* Parser type toggle matching Analyse switcher pill */}
+              <div 
+                className="flex items-center rounded-full p-1 border-0"
+                style={{ background: "var(--surface-c)" }}
+              >
                 <button
                   type="button"
                   onClick={() => setParserType('pymupdf')}
-                  className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
-                    parserType === 'pymupdf'
-                      ? 'bg-background shadow-sm font-semibold'
-                      : 'text-on-surface-variant hover:text-on-surface'
-                  }`}
-                  style={parserType === 'pymupdf' ? { color: '#ff6dba' } : undefined}
+                  className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0"
+                  style={{
+                    fontFamily: 'var(--font-google-sans)',
+                    boxShadow: 'none',
+                    background: parserType === 'pymupdf' ? '#FFFFFF' : 'transparent',
+                    color: parserType === 'pymupdf' ? '#000000' : '#666666',
+                    fontWeight: parserType === 'pymupdf' ? 600 : 500,
+                  }}
                 >
                   Fast
                 </button>
                 <button
                   type="button"
                   onClick={() => setParserType('docling')}
-                  className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-md transition-all ${
-                    parserType === 'docling'
-                      ? 'bg-background shadow-sm font-semibold'
-                      : 'text-on-surface-variant hover:text-on-surface'
-                  }`}
-                  style={parserType === 'docling' ? { color: '#ff6dba' } : undefined}
+                  className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0"
+                  style={{
+                    fontFamily: 'var(--font-google-sans)',
+                    boxShadow: 'none',
+                    background: parserType === 'docling' ? '#FFFFFF' : 'transparent',
+                    color: parserType === 'docling' ? '#000000' : '#666666',
+                    fontWeight: parserType === 'docling' ? 600 : 500,
+                  }}
                 >
                   Detailed
                 </button>
               </div>
 
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                multiple
-                accept=".pdf"
-                className="hidden"
-              />
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg transition-all font-medium text-sm disabled:opacity-50 border hover:opacity-90"
                 style={{
                   backgroundColor: '#ffecf6',
                   color: '#d63384',
                   borderColor: '#fbcfe8',
+                  fontFamily: 'var(--font-google-sans)',
+                  boxShadow: 'none',
                 }}
+                className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#d63384] shadow-none outline-none disabled:opacity-50"
               >
                 {isUploading ? (
-                  <SpinnerGap size={16} className="animate-spin text-[#d63384]" />
+                  <SpinnerGap size={18} className="animate-spin text-[#d63384]" />
                 ) : (
-                  <Plus size={16} weight="bold" />
+                  <Plus size={18} weight="bold" className="text-[#d63384]" />
                 )}
                 <span>{isUploading ? 'Uploading...' : 'Add Sources'}</span>
               </button>
             </div>
 
+            {/* Subtle divider before file stack */}
+            <div className="mx-4 mb-2 h-[1px] bg-slate-200/60 shrink-0" />
+
             {/* File List */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1 flex flex-col chat-scrollbar">
               {uploadedFiles.length > 0 ? (
-                <div className="py-1">
+                <div>
                   {uploadedFiles.map((file) => (
                     <div
                       key={file.name}
                       onClick={() => openPdfViewer(file)}
-                      className={`w-full flex items-center space-x-3 px-4 py-2.5 transition-colors group cursor-pointer border-0 shadow-none outline-none ${
+                      className={`w-full flex items-center space-x-3 p-3 rounded-2xl transition-all group cursor-pointer border-0 shadow-none outline-none ${
                         activePdfFile?.name === file.name
-                          ? 'bg-[#fff5fa]'
-                          : 'hover:bg-slate-50'
+                          ? 'bg-[#f4f4f4] opacity-100'
+                          : file.selected
+                            ? 'bg-transparent hover:bg-[#fafafa] opacity-100'
+                            : 'bg-transparent hover:bg-[#fafafa] opacity-70 hover:opacity-100'
                       }`}
                     >
                       <FileTypeIcon ext={file.fileType} size={24} />
                       <div className="flex-1 min-w-0 text-left">
-                        <p className="text-sm text-on-surface truncate leading-tight font-medium">
+                        <p className={`text-[14px] truncate leading-tight ${activePdfFile?.name === file.name ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
                           {displayName(file.name)}
                         </p>
                         {(file.authors || file.journal) && (
-                          <p className="text-[10px] text-on-surface-muted truncate leading-tight mt-0.5">
+                          <p className="text-[11px] text-on-surface-muted truncate leading-tight mt-0.5">
                             {file.authors && <span>{file.authors}</span>}
                             {file.authors && file.journal && <span> · </span>}
                             {file.journal && <span className="italic">{file.journal}</span>}
                           </p>
                         )}
                         {file.summary && (
-                          <p className="text-[10px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
+                          <p className="text-[11px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
                             {file.summary}
                           </p>
                         )}
                       </div>
                       <button
                         onClick={(e) => handleDeleteFile(file.name, e)}
-                        className="text-slate-400 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
+                        className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
                         title={`Remove ${file.name}`}
                       >
                         <TrashSimple size={16} weight="regular" />
@@ -648,9 +683,9 @@ const RagPage: React.FC = () => {
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-16 px-4">
-                  <FileText size={36} className="text-on-surface-muted/30 mx-auto mb-3" />
-                  <p className="text-xs text-on-surface-muted leading-relaxed">
+                <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-8">
+                  <FileText size={40} className="text-on-surface-muted/30 mb-3" />
+                  <p className="text-[14px] text-on-surface-muted leading-relaxed font-normal">
                     No sources added yet.
                   </p>
                 </div>
@@ -661,7 +696,8 @@ const RagPage: React.FC = () => {
             <div className="p-4 bg-background mt-auto">
               <button
                 onClick={handleResetAll}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-background border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 rounded-full transition-all font-semibold text-sm shadow-sm hover:shadow"
+                style={{ fontFamily: 'var(--font-google-sans)', boxShadow: 'none' }}
+                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-background border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 rounded-full transition-all font-semibold text-[14.5px] shadow-none outline-none"
               >
                 <Fire size={18} weight="regular" />
                 <span>Delete Chats</span>
@@ -725,7 +761,7 @@ const RagPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex-1 overflow-auto bg-surface-c p-2">
+          <div className="flex-1 overflow-auto bg-surface-c p-2 chat-scrollbar">
             {activePdfUrl ? (
               <SimplePdfViewer pdfUrl={activePdfUrl} />
             ) : (
