@@ -343,8 +343,8 @@ ${legendHtml}
 <div class="toolbar">
   <input type="text" id="searchInput" class="search-input" placeholder="Search node…" />
   <button type="button" id="resetBtn" class="btn-icon" title="Reset layout" aria-label="Reset layout">
-    <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor">
-      <path d="M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.6A79.36,79.36,0,0,0,128,208h1.29A80,80,0,1,0,80,83.2V120a8,8,0,0,1-16,0V72a8,8,0,0,1,8-8h48a8,8,0,0,1,0,16H82.4A96,96,0,0,1,224,128Z"/>
+    <svg width="18" height="18" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">
+      <path d="M228,128a100,100,0,0,1-98.66,100H128a99.39,99.39,0,0,1-68.62-27.29,12,12,0,0,1,16.48-17.45,76,76,0,1,0-1.57-109c-.13.13-.25.25-.39.37L54.89,92H72a12,12,0,0,1,0,24H24a12,12,0,0,1-12-12V56a12,12,0,0,1,24,0V76.72L57.48,57.06A100,100,0,0,1,228,128Z"/>
     </svg>
   </button>
   <button type="button" id="labelsBtn" class="btn-label" aria-label="Toggle labels">Labels</button>
