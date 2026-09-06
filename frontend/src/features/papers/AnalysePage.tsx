@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
+import { Plus, X, TrashSimple, FileArrowUp, ListBullets, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
 import { KnowledgeGraph, type KnowledgeGraphHandle } from '../reader/KnowledgeGraph';
 import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 import { CompareMatrix } from './CompareMatrix';
@@ -89,6 +89,7 @@ const AnalysePage = () => {
   const [viewerLoadingPaperId, setViewerLoadingPaperId] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
+  const [isDragging, setIsDragging] = useState(false);
   
   // Dashboard layout states
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -445,7 +446,10 @@ const AnalysePage = () => {
   }, [activePapers, isCompareMode, viewerPaper?.id, viewerLoadingPaperId]);
 
   return (
-    <div className="flex h-screen bg-background text-on-background overflow-hidden flex-col">
+    <div
+      className="flex h-full w-full bg-background text-on-background overflow-hidden flex-col"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
       <main className="flex flex-1 overflow-hidden">
         
         {/* Left Sidebar: PDF Library & Actions */}
@@ -453,11 +457,11 @@ const AnalysePage = () => {
           <aside className={`sidebar-transition border-r border-outline-variant bg-surface-bright flex flex-col shrink-0 relative ${leftSidebarCollapsed ? 'sidebar-collapsed' : 'w-72'}`} id="library-sidebar">
             {/* Unified Top Header Bar */}
             <div className="px-3.5 h-14 border-b border-outline-variant/40 flex items-center justify-between shrink-0">
-              <span className={`!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-200 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
+              <span className={`!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-150 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
                 Sources
               </span>
               <button 
-                className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low transition-colors outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`} 
+                className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low active:scale-90 transition-all duration-100 outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`} 
                 onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
                 title={leftSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
@@ -471,13 +475,19 @@ const AnalysePage = () => {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="p-2 rounded-lg text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center justify-center"
+                style={{
+                  backgroundColor: '#ffecf6',
+                  color: '#ff6dba',
+                  borderColor: '#fbcfe8',
+                  boxShadow: 'none',
+                }}
+                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#ff6dba] text-[#ff6dba] shadow-none outline-none"
                 title="Add sources"
               >
                 {isUploading ? (
-                  <SpinnerGap size={20} className="animate-spin text-slate-900" />
+                  <SpinnerGap size={20} className="animate-spin text-[#ff6dba]" />
                 ) : (
-                  <Plus size={20} weight="bold" />
+                  <Plus size={20} weight="bold" className="text-[#ff6dba]" />
                 )}
               </button>
 
@@ -493,19 +503,20 @@ const AnalysePage = () => {
                       if (selectedPaper) setCompareSelection([selectedPaper.id]);
                     }
                   }}
-                  className={`p-2 rounded-lg transition-colors flex items-center justify-center ${
+                  style={{ boxShadow: 'none' }}
+                  className={`w-10 h-10 rounded-xl border transition-all flex items-center justify-center shadow-none outline-none ${
                     isCompareMode
-                      ? 'bg-violet-50 text-violet-700'
-                      : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                      ? 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100/70'
+                      : 'bg-white border-[#e0e0e0] text-[#333333] hover:bg-[#f4f4f4]'
                   }`}
-                  title={isCompareMode ? 'Cancel Compare' : 'Compare'}
+                  title={isCompareMode ? 'Cancel' : 'Compare'}
                 >
-                  <ChartBar size={20} weight="bold" />
+                  {isCompareMode ? <X size={20} weight="bold" className="text-red-600" /> : <ChartBar size={20} weight="bold" />}
                 </button>
               )}
 
               {/* Divider before paper stack */}
-              <div className="w-6 h-[1.5px] bg-slate-200 rounded-full mx-auto my-1.5" />
+              <div className="w-6 h-[1.5px] bg-[#e0e0e0] rounded-full mx-auto my-1.5" />
 
               {papers.map((paper) => {
                 const isSelected = selectedPaper?.id === paper.id;
@@ -525,7 +536,7 @@ const AnalysePage = () => {
                           setExpandedGroups(initial);
                         }
                     }}
-                    className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${active ? 'bg-[#edf2fa] opacity-100' : 'hover:bg-slate-50 opacity-70 hover:opacity-100'}`}
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all ${active ? 'bg-[#f4f4f4] opacity-100' : 'hover:bg-[#fafafa] opacity-70 hover:opacity-100'}`}
                   >
                     <PdfIcon size={26} />
                   </button>
@@ -534,7 +545,7 @@ const AnalysePage = () => {
             </div>
 
             {/* Main Sidebar Content */}
-            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-72 transition-opacity duration-200 ${leftSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-72 transition-opacity duration-150 ${leftSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
               <div className="pt-3 space-y-2 px-4 pb-3">
                 <label className="block relative">
                   <input
@@ -545,18 +556,28 @@ const AnalysePage = () => {
                     onChange={handleFileChange}
                     className="hidden"
                   />
-                  <div className="w-full py-2 px-4 bg-white border border-slate-200 text-slate-900 hover:bg-slate-50 rounded-full flex items-center justify-center gap-2 text-sm font-medium transition-colors cursor-pointer">
+                  <div 
+                    style={{
+                      backgroundColor: '#ffecf6',
+                      color: '#ff6dba',
+                      borderColor: '#fbcfe8',
+                      fontFamily: 'var(--font-google-sans)',
+                      boxShadow: 'none',
+                    }}
+                    className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#ff6dba] shadow-none outline-none"
+                  >
                     {isUploading ? (
-                      <SpinnerGap size={16} className="animate-spin text-slate-900" />
+                      <SpinnerGap size={18} className="animate-spin text-[#ff6dba]" />
                     ) : (
-                      <Plus size={16} weight="bold" className="text-slate-900" />
+                      <Plus size={18} weight="bold" className="text-[#ff6dba]" />
                     )}
-                    {isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add sources'}
+                    <span className="text-[#ff6dba]">{isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add sources'}</span>
                   </div>
                 </label>
                 
                 {papers.length >= 2 && (
                   <button 
+                    type="button"
                     onClick={() => {
                       if (isCompareMode) {
                         setIsCompareMode(false);
@@ -566,14 +587,15 @@ const AnalysePage = () => {
                         if (selectedPaper) setCompareSelection([selectedPaper.id]);
                       }
                     }}
-                    className={`w-full py-2 px-4 rounded-full flex items-center justify-center gap-2 text-sm transition-colors border ${
+                    style={{ fontFamily: 'var(--font-google-sans)', boxShadow: 'none' }}
+                    className={`w-full py-2.5 px-4 rounded-full flex items-center justify-center gap-2 text-[14.5px] transition-all border active:scale-[0.99] shadow-none outline-none ${
                       isCompareMode 
-                        ? 'bg-violet-50 border-violet-200 text-violet-700 font-semibold' 
-                        : 'bg-white border-slate-200 text-slate-900 hover:bg-slate-50 font-medium'
+                        ? 'bg-red-50 border-red-200 text-red-600 font-semibold hover:bg-red-100/70' 
+                        : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50 hover:border-slate-300 font-semibold'
                     }`}
                   >
-                    {isCompareMode ? <X size={16} weight="bold" /> : <ChartBar size={16} weight="bold" className="text-slate-900" />}
-                    {isCompareMode ? 'Cancel Compare' : 'Compare'}
+                    {isCompareMode ? <X size={18} weight="bold" className="text-red-600" /> : <ChartBar size={18} weight="bold" className="text-slate-700" />}
+                    <span>{isCompareMode ? 'Cancel' : 'Compare'}</span>
                   </button>
                 )}
               </div>
@@ -600,7 +622,7 @@ const AnalysePage = () => {
                           setExpandedGroups(initial);
                         }
                       }}
-                      className={`p-3 relative group cursor-pointer transition-all flex items-center gap-3 rounded-2xl ${active ? 'bg-[#edf2fa] opacity-100' : 'bg-white hover:bg-slate-50 opacity-70 hover:opacity-100'}`}
+                      className={`p-3 relative group cursor-pointer transition-all flex items-center gap-3 rounded-2xl ${active ? 'bg-[#f4f4f4] opacity-100' : 'bg-transparent hover:bg-[#fafafa] opacity-70 hover:opacity-100'}`}
                     >
                       <PdfIcon size={24} className="shrink-0" />
                       <div className="flex-1 min-w-0 pr-6">
@@ -628,17 +650,62 @@ const AnalysePage = () => {
         )}
 
         {/* Center Viewport: Document Reader or Upload Hero */}
-        <section className="flex-1 bg-surface-dim overflow-y-auto custom-scrollbar flex flex-col items-center relative">
+        <section className="flex-1 w-full h-full bg-surface-dim overflow-y-auto custom-scrollbar flex flex-col items-center justify-center relative">
           {papers.length === 0 ? (
             <div className="flex-1 relative dot-pattern flex flex-col items-center justify-center overflow-hidden w-full h-full bg-background">
               {/* Abstract Background Shapes */}
-              <div className="absolute top-[20%] left-[10%] w-64 h-64 bg-teal-500 opacity-10 blur-[100px] rounded-full pointer-events-none" />
-              <div className="absolute bottom-[20%] right-[10%] w-96 h-96 bg-purple-500 opacity-10 blur-[120px] rounded-full pointer-events-none" />
+              <div className="absolute top-[20%] left-[10%] w-64 h-64 bg-[#ff6dba] opacity-10 blur-[100px] rounded-full pointer-events-none" />
+              <div className="absolute bottom-[20%] right-[10%] w-96 h-96 bg-[#ff85c8] opacity-10 blur-[120px] rounded-full pointer-events-none" />
               
               <div className="relative z-10 w-full max-w-2xl px-6">
                 <label 
-                  className={`upload-dashed pulse-border relative w-full aspect-[1.6/1] bg-surface-lowest/50 flex flex-col items-center justify-center transition-all duration-500 cursor-pointer group hover:bg-surface-c/80 hover:scale-[1.005] ${isUploading ? 'bg-surface-high' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    processFiles(e.dataTransfer.files);
+                  }}
+                  className={`
+                    relative w-full aspect-[1.6/1] rounded-3xl
+                    flex flex-col items-center justify-center
+                    transition-all duration-500
+                    ${isUploading 
+                      ? 'bg-white/90 border border-[#ff6dba]/30 shadow-[0_4px_30px_rgba(255,109,186,0.18),_0_0_60px_rgba(255,109,186,0.12)] cursor-default pointer-events-none' 
+                      : isDragging
+                        ? 'bg-[#ffecf6]/50 scale-[1.01] cursor-pointer'
+                        : 'bg-white/70 hover:bg-[#ffecf6]/30 cursor-pointer group hover:scale-[1.005]'
+                    }
+                  `}
                 >
+                  {/* Thick, long-dash border in signature light pink (Upload state only) */}
+                  <svg
+                    className={`
+                      absolute inset-0 w-full h-full pointer-events-none overflow-visible rounded-3xl
+                      transition-opacity duration-500
+                      ${isUploading ? 'opacity-0 pointer-events-none' : 'opacity-100'}
+                    `}
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <rect
+                      x="1.5"
+                      y="1.5"
+                      style={{ width: 'calc(100% - 3px)', height: 'calc(100% - 3px)' }}
+                      rx="24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                      strokeDasharray="20 12"
+                      className={`
+                        transition-colors duration-300
+                        ${isDragging 
+                          ? 'text-[#ff6dba]' 
+                          : 'text-[#ff6dba]/50 group-hover:text-[#ff6dba]'
+                        }
+                      `}
+                    />
+                  </svg>
+
                   <input
                     type="file"
                     accept=".pdf"
@@ -648,26 +715,55 @@ const AnalysePage = () => {
                   />
                   
                   {!isUploading ? (
-                    <div className="flex flex-col items-center transition-all duration-500 relative z-10">
-                      <div className="mb-6 group-hover:scale-110 transition-transform duration-500">
-                        <FileArrowUp size={64} weight="light" className="text-teal-600" />
+                    <div className="flex flex-col items-center transition-all duration-300 relative z-10 text-center px-6">
+                      <div className="mb-5 group-hover:scale-110 transition-transform duration-300">
+                        <FileArrowUp size={82} weight="regular" className="text-[#ff6dba]" />
                       </div>
-                      <h1 className="text-2xl font-bold text-primary mb-2 tracking-tight font-display">Upload Research Papers</h1>
-                      <p className="text-base text-on-surface-variant">Analyze documents and extract structured entities automatically.</p>
+                      <h1 
+                        className="text-[28px] font-bold mb-5 tracking-tight text-[#ff6dba]"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                      >
+                        Upload
+                      </h1>
+                      <p 
+                        className="text-[15px] text-on-surface-variant text-center"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                      >
+                        Analyse papers and extract structured entities automatically.
+                      </p>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center w-full max-w-md relative z-10">
-                      <div className="w-20 h-20 bg-slate-100 flex items-center justify-center rounded-xl mb-6 shadow-sm border border-slate-200">
-                        <SpinnerGap size={40} className="text-slate-900 animate-spin" />
+                    <div className="flex flex-col items-center transition-all duration-300 relative z-10 text-center px-6 w-full">
+                      <div className="mb-5">
+                        <SpinnerGap size={52} className="text-slate-900 animate-spin" />
                       </div>
-                      <h2 className="text-xl font-semibold text-slate-900 mb-1">Processing Papers...</h2>
-                      <p className="text-sm text-on-surface-variant mb-8">
-                        {uploadProgress.current} of {uploadProgress.total} documents
+                      <h2 
+                        className="text-[26px] font-bold mb-3 tracking-tight text-slate-900"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                      >
+                        Extracting...
+                      </h2>
+                      <p 
+                        className="text-[15px] font-bold text-on-surface-variant mb-6 text-center tracking-wide"
+                        style={{ fontFamily: 'var(--font-google-sans)' }}
+                      >
+                        {uploadProgress.current}/{uploadProgress.total}
                       </p>
-                      <div className="w-full h-1.5 bg-surface-variant rounded-full overflow-hidden">
+                      <div className="w-full max-w-xs h-[3px] bg-[#ffecf6] rounded-full overflow-hidden relative">
                         <div 
-                          className="h-full bg-slate-900 transition-all duration-300 ease-out" 
-                          style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                          className="
+                            absolute inset-0 rounded-full
+                            bg-gradient-to-r from-transparent via-[#ff6dba] to-transparent
+                            shadow-[0_0_12px_rgba(255,109,186,0.8)]
+                            animate-pulse pointer-events-none
+                          "
+                        />
+                        <div 
+                          className="absolute inset-y-0 w-2/5 bg-gradient-to-r from-transparent via-[#ff6dba] to-transparent"
+                          style={{
+                            animation: 'pq-trail-slide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite',
+                            filter: 'drop-shadow(0 0 6px rgba(255, 109, 186, 0.9))',
+                          }}
                         />
                       </div>
                     </div>
@@ -678,15 +774,19 @@ const AnalysePage = () => {
           ) : activePapers.length > 0 ? (
             <>
               {/* Doc Header Toolbar */}
-              <div className="w-full bg-surface-bright border-b border-outline-variant px-6 py-4 sticky top-0 z-40 shadow-sm flex items-center justify-between">
-                <div className="flex items-center gap-4">
+              <div className="w-full h-14 bg-surface-bright border-b border-outline-variant/40 px-6 sticky top-0 z-40 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4 flex-1 min-w-0">
                   {isCompareMode ? (
-                    <h3 className="font-serif font-semibold text-on-surface">Comparing {activePapers.length} Papers</h3>
+                    <h3 className="font-semibold text-on-surface text-[15px] sm:text-base">Comparing {activePapers.length} Papers</h3>
                   ) : (
-                    <div className="flex flex-col">
-                      <h3 className="font-serif font-semibold text-on-surface truncate max-w-2xl">{activePapers[0]?.name}</h3>
+                    <div className="flex flex-col flex-1 min-w-0 pr-4">
+                      <h3 className="font-semibold text-on-surface text-[14px] sm:text-[15px] leading-tight break-words line-clamp-1" title={activePapers[0]?.name}>
+                        {activePapers[0]?.name}
+                      </h3>
                       {activePapers[0]?.doi && (
-                        <span className="text-[11px] text-on-surface-variant mt-0.5">{activePapers[0].doi}</span>
+                        <span className="font-mono text-[10.5px] text-blue-600 hover:text-blue-800 font-medium">
+                          {activePapers[0].doi}
+                        </span>
                       )}
                     </div>
                   )}
@@ -722,10 +822,12 @@ const AnalysePage = () => {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-on-surface-muted text-sm">
-              {isCompareMode
-                ? 'Select at least 2 papers to compare'
-                : 'Select a paper to view its analysis'}
+            <div className="flex-1 flex items-center justify-center text-center px-6" style={{ fontFamily: 'var(--font-google-sans)' }}>
+              <p className="text-[19px] md:text-[21px] italic font-normal text-on-surface-variant/70">
+                {isCompareMode
+                  ? 'Select at least 2 papers to compare'
+                  : 'Select a paper to view entities'}
+              </p>
             </div>
           )}
         </section>
@@ -735,36 +837,53 @@ const AnalysePage = () => {
           <aside className={`sidebar-transition border-l border-outline-variant bg-surface flex flex-col shrink-0 relative ${rightSidebarCollapsed ? 'sidebar-collapsed' : 'w-[400px]'}`} id="insights-sidebar">
             {/* Integrated Sidebar Toggle (Top Left) */}
             <button 
-              className="toggle-btn-right absolute left-3 top-3 z-50 p-1.5 text-on-surface-variant rounded-full flex items-center justify-center hover:bg-surface-low transition-all outline-none focus:outline-none focus:ring-0"
+              className="toggle-btn-right absolute left-4 top-3 z-50 p-1.5 text-on-surface-variant rounded-full flex items-center justify-center hover:bg-surface-low active:scale-90 transition-all duration-100 outline-none focus:outline-none focus:ring-0"
               onClick={() => setRightSidebarCollapsed(!rightSidebarCollapsed)}
             >
               <SidebarSimple size={20} className="rotate-180" />
             </button>
 
             {/* Mini View (Icons only) */}
-            <div className={`sidebar-mini-view ${rightSidebarCollapsed ? 'flex opacity-100' : 'hidden opacity-0 pointer-events-none'} flex-col items-center pt-16 gap-6 h-full w-full transition-opacity duration-200`}>
+            <div className={`sidebar-mini-view ${rightSidebarCollapsed ? 'flex opacity-100' : 'hidden opacity-0 pointer-events-none'} flex-col items-center pt-16 gap-6 h-full w-full transition-opacity duration-150`}>
               {!isCompareMode && (
-                <button onClick={() => { setRightSidebarMode('entities'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors" title="Entity Index">
-                  <ListNumbers className={`text-xl ${rightSidebarMode === 'entities' ? 'text-primary' : 'text-on-surface-variant'}`} />
+                <button 
+                  onClick={() => { setRightSidebarMode('entities'); setRightSidebarCollapsed(false); }} 
+                  className={`p-2 rounded-lg active:scale-90 transition-all duration-100 ${
+                    rightSidebarMode === 'entities' 
+                      ? 'text-black bg-[#f4f4f4]' 
+                      : 'text-[#666666] hover:text-black hover:bg-[#fafafa]'
+                  }`} 
+                  title="Entity Index"
+                >
+                  <ListBullets size={22} weight={rightSidebarMode === 'entities' ? "bold" : "regular"} />
                 </button>
               )}
-              <button onClick={() => { setRightSidebarMode('graph'); setRightSidebarCollapsed(false); }} className="p-2 rounded-full hover:bg-surface-c transition-colors" title="Graph View">
-                <Graph className={`text-xl ${rightSidebarMode === 'graph' ? 'text-primary' : 'text-on-surface-variant'}`} />
+              <button 
+                onClick={() => { setRightSidebarMode('graph'); setRightSidebarCollapsed(false); }} 
+                className={`p-2 rounded-lg active:scale-90 transition-all duration-100 ${
+                  (rightSidebarMode === 'graph' || isCompareMode)
+                    ? 'text-black bg-[#f4f4f4]' 
+                    : 'text-[#666666] hover:text-black hover:bg-[#fafafa]'
+                }`} 
+                title="Graph View"
+              >
+                <Graph size={22} weight={(rightSidebarMode === 'graph' || isCompareMode) ? "bold" : "regular"} />
               </button>
             </div>
 
             {/* Main Sidebar Content */}
-            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-[400px] transition-opacity duration-200 ${rightSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14, marginTop: 56 }}>
+            <div className={`sidebar-content h-full flex flex-col overflow-hidden w-[400px] transition-opacity duration-150 ${rightSidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+              {/* Centered view switcher pill header */}
+              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 26, marginTop: 56, paddingLeft: 28, paddingRight: 28 }}>
                 {!isCompareMode ? (
                   <div style={{
-                    display: "inline-flex", gap: 2,
-                    padding: 5, borderRadius: 999,
+                    display: "inline-flex", gap: 3,
+                    padding: 4, borderRadius: 999,
                     border: "none", background: "var(--surface-c)"
                   }}>
                     {(
                       [
-                        { id: 'entities', icon: ListNumbers, label: 'Entity Index' },
+                        { id: 'entities', icon: ListBullets, label: 'Entity Index' },
                         { id: 'graph', icon: Graph, label: 'Graph View' }
                       ] as const
                     ).map(({ id, icon: Icon, label }) => {
@@ -778,86 +897,108 @@ const AnalysePage = () => {
                           onMouseLeave={() => setHoverRightSidebarMode(null)}
                           style={{
                             display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
-                            height: 34, borderRadius: 999,
-                            width: expanded ? "auto" : 38,
+                            height: 36, borderRadius: 999,
+                            width: expanded ? "auto" : 40,
                             padding: expanded ? "0 14px" : 0,
-                            background: isActive ? "#FFFFFF" : "transparent",
-                            boxShadow: isActive ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                            background: isActive ? "var(--background, #FFFFFF)" : "transparent",
+                            boxShadow: isActive ? "0 1px 3px rgba(0,0,0,.08)" : "none",
                             border: "none", cursor: "pointer",
-                            fontSize: 13, fontWeight: isActive ? 600 : 500,
+                            fontSize: 13.5, fontWeight: isActive ? 600 : 500,
+                            fontFamily: "var(--font-google-sans)",
                             color: isActive ? "var(--on-surface)" : "var(--on-surface-variant)",
                             whiteSpace: "nowrap", overflow: "hidden",
                             transition: "width .22s ease, padding .22s ease, background .15s, color .15s"
                           }}>
-                            {expanded ? <span>{label}</span> : <Icon size={16} />}
+                            {expanded ? (
+                              <span className="inline-flex items-center gap-2" style={{ fontFamily: "var(--font-google-sans)" }}>
+                                <Icon size={18} weight={isActive ? "bold" : "regular"} />
+                                <span style={{ fontSize: 13.5, fontWeight: isActive ? 600 : 500 }}>{label}</span>
+                              </span>
+                            ) : (
+                              <Icon size={19} weight={isActive ? "bold" : "regular"} />
+                            )}
                           </button>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="flex items-center justify-center">
-                    <span className="text-[14px] font-semibold text-slate-800 tracking-tight">Graph View</span>
+                  <div className="flex items-center justify-center" style={{ height: 36 }}>
+                    <span style={{
+                      fontSize: 17,
+                      fontWeight: 600,
+                      fontFamily: "var(--font-google-sans)",
+                      color: "var(--on-surface)",
+                      letterSpacing: "normal"
+                    }}>
+                      Graph View
+                    </span>
                   </div>
                 )}
 
-                {/* Export options pinned right */}
-                <div
-                  ref={exportRef}
-                  style={{ position: "absolute", right: 0, top: 0 }}
-                >
-                  <button 
-                    onClick={() => setExportOpen((o) => !o)} 
-                    title="Export options" 
-                    style={{
-                      width: 40, height: 40, borderRadius: 999,
-                      background: exportOpen ? "var(--surface-c)" : "transparent",
-                      color: "var(--on-surface-variant)",
-                      border: "none", cursor: "pointer",
-                      display: "grid", placeItems: "center",
-                      transition: "background .15s"
-                    }}
+                {/* Export options pinned right (single paper mode only) */}
+                {!isCompareMode && (
+                  <div
+                    ref={exportRef}
+                    style={{ position: "absolute", right: 28, top: 2 }}
                   >
-                    <DotsThreeVertical size={20} weight="bold" />
-                  </button>
-                  {exportOpen && (
-                    <div style={{
-                      position: "absolute", top: "calc(100% + 4px)", right: 0,
-                      width: "max-content",
-                      background: "#FFFFFF",
-                      border: "1px solid var(--border)", borderRadius: 12,
-                      boxShadow: "0 2px 6px 2px rgba(0, 0, 0, 0.08)",
-                      padding: 5, zIndex: 100,
-                      animation: "fadeUp .16s ease"
-                    }}>
-                      <button 
-                        className="export-opt" 
-                        onClick={() => {
-                          setExportOpen(false);
-                          exportCSV();
-                        }}
-                      >
-                        <span>Export CSV</span>
-                      </button>
-                      <button 
-                        className="export-opt" 
-                        onClick={() => {
-                          setExportOpen(false);
-                          exportGraph();
-                        }}
-                      >
-                        <span>Export Graph</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                    <button 
+                      onClick={() => setExportOpen((o) => !o)} 
+                      title="Export" 
+                      aria-label="Export"
+                      style={{
+                        width: 40, height: 40, borderRadius: 999,
+                        background: exportOpen ? "var(--surface-c)" : "transparent",
+                        color: "var(--on-surface-variant)",
+                        border: "none", cursor: "pointer",
+                        display: "grid", placeItems: "center",
+                        transition: "background .15s"
+                      }}
+                    >
+                      <DotsThreeVertical size={20} weight="bold" />
+                    </button>
+                    {exportOpen && (
+                      <div style={{
+                        position: "absolute", top: "calc(100% + 4px)", right: 0,
+                        width: "max-content",
+                        background: "#FFFFFF",
+                        border: "1px solid var(--border)", borderRadius: 12,
+                        boxShadow: "0 2px 6px 2px rgba(0, 0, 0, 0.08)",
+                        padding: 5, zIndex: 100,
+                        fontFamily: "var(--font-google-sans)",
+                        animation: "fadeUp .16s ease"
+                      }}>
+                        <button 
+                          className="export-opt" 
+                          style={{ fontFamily: "var(--font-google-sans)" }}
+                          onClick={() => {
+                            setExportOpen(false);
+                            exportCSV();
+                          }}
+                        >
+                          <span style={{ fontFamily: "var(--font-google-sans)" }}>Export CSV</span>
+                        </button>
+                        <button 
+                          className="export-opt" 
+                          style={{ fontFamily: "var(--font-google-sans)" }}
+                          onClick={() => {
+                            setExportOpen(false);
+                            exportGraph();
+                          }}
+                        >
+                          <span style={{ fontFamily: "var(--font-google-sans)" }}>Export Graph</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Entity Index + Graph share one anchored scroll region, so switching
                   tabs or expanding groups never moves surrounding content */}
-              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
+              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide px-8">
               {(!isCompareMode && rightSidebarMode === 'entities') && (
                 <>
-                  <div className="px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
+                  <div className="pb-8" style={{ display: "flex", flexDirection: "column" }}>
                     {groupedEntities.map((group) => {
                       const isExpanded = expandedGroups[group.label] !== false;
                       const accentColor = getEntityAccentColor(group.label);
@@ -958,7 +1099,7 @@ const AnalysePage = () => {
                                       {name}
                                     </span>
 
-                                    <span className="mono" style={{ fontSize: 12, color: "var(--on-surface-variant)" }}>
+                                    <span style={{ fontSize: 12, color: "var(--on-surface-variant)", fontVariantNumeric: 'tabular-nums' }}>
                                       {ent.count}
                                     </span>
                                   </div>
@@ -976,19 +1117,21 @@ const AnalysePage = () => {
               )}
               {/* Always mounted (hidden when inactive) so Export Graph snapshots the live view from any tab */}
               <div
-                className="flex flex-col"
+                className="flex flex-col pb-8"
                 style={{ display: !isCompareMode && rightSidebarMode === 'entities' ? 'none' : undefined }}
               >
-                <KnowledgeGraph
-                  ref={graphRef}
-                  active={isCompareMode || rightSidebarMode === 'graph'}
-                  entities={graphEntities}
+                <div className="w-[320px] mx-auto">
+                  <KnowledgeGraph
+                    ref={graphRef}
+                    active={isCompareMode || rightSidebarMode === 'graph'}
+                    entities={graphEntities}
                     paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
                     paperIdentifiers={isComparing ? paperIdentifiers : undefined}
                     entityConfig={entityConfig}
                     entityPaperMap={isComparing ? entityPaperMap : undefined}
                   />
                 </div>
+              </div>
               </div>
             </div>
           </aside>

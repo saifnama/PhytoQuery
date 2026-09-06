@@ -108,26 +108,34 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
   if (papers.length === 0) return null;
 
   return (
-    <div className="flex-1 w-full max-w-[1400px] mx-auto p-4 md:p-6 flex flex-col min-h-0 h-full overflow-hidden">
-      <div className="bg-white border border-outline-variant rounded-md overflow-hidden flex-1 flex flex-col min-h-0 shadow-sm">
-        <div className="overflow-auto custom-scrollbar flex-1 relative">
-          <table className="w-full text-left border-collapse table-fixed min-w-[1200px]">
+    <div
+      className="flex-1 w-full flex flex-col min-h-0 h-full overflow-hidden"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {/* Table container: borderless on left and right sides */}
+      <div className="bg-white border-y border-outline-variant/40 border-x-0 overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="overflow-auto thin-scrollbar flex-1 relative">
+          <table className="w-full text-left border-collapse table-fixed min-w-[1100px]">
             <thead className="sticky top-0 z-40">
-              <tr className="bg-white border-b border-outline-variant shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
-                <th className="p-3 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant w-56 sticky left-0 bg-white z-50 border-r border-outline-variant shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
+              <tr className="bg-white border-b border-outline-variant/50 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
+                <th className="px-5 py-3.5 text-[11px] font-bold uppercase tracking-[0.08em] text-on-surface-variant w-72 min-w-[240px] max-w-[340px] sticky left-0 bg-white z-50 border-r border-outline-variant/40 shadow-[2px_0_6px_rgba(0,0,0,0.03)]">
                   Entity Index
                 </th>
                 {papers.map((p) => (
-                  <th key={p.id} className="p-3 text-[10px] font-medium text-center border-r border-outline-variant bg-white min-w-[160px]">
-                    <div className="flex flex-col items-center gap-1">
-                      <span className="font-bold text-on-surface line-clamp-2 leading-tight px-2" title={p.name}>{p.name}</span>
-                      {p.doi && <span className="opacity-70 text-[9px]">{p.doi}</span>}
+                  <th key={p.id} className="px-4 py-3 text-center border-r last:border-r-0 border-outline-variant/35 bg-white min-w-[170px]">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <span className="font-semibold text-on-surface text-[13px] line-clamp-2 leading-snug px-1" title={p.name}>{p.name}</span>
+                      {p.doi && (
+                        <span className="font-mono text-blue-600/80 font-medium text-[10.5px] mt-0.5 block truncate max-w-[210px] mx-auto hover:text-blue-700" title={p.doi}>
+                          {p.doi}
+                        </span>
+                      )}
                     </div>
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="text-xs text-on-surface-variant">
+            <tbody className="text-[13px] text-on-surface-variant">
               {matrixData.rows.map((row) => {
                 if (row.type === 'group') {
                   const accentColor = `var(${getEntityAccentVar(row.category)}, var(--primary))`;
@@ -137,13 +145,13 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                       style={{ backgroundColor: `color-mix(in srgb, ${accentColor} 8%, #ffffff)` }}
                     >
                       <td 
-                        className="px-4 py-2 font-bold text-[10px] uppercase tracking-widest border-b border-r border-outline-variant/60 sticky left-0 z-30 shadow-[2px_0_4px_rgba(0,0,0,0.03)]"
+                        className="px-5 py-2 font-bold text-[11px] uppercase tracking-[0.08em] border-b border-r border-outline-variant/40 sticky left-0 z-30 shadow-[2px_0_6px_rgba(0,0,0,0.03)] whitespace-normal break-words"
                         style={{ backgroundColor: `color-mix(in srgb, ${accentColor} 12%, #ffffff)`, color: accentColor }}
                       >
                         {LABEL_NAMES[row.category] || row.category}
                       </td>
                       {papers.map(p => (
-                        <td key={`group-spacer-${p.id}`} className="border-b border-r border-outline-variant/60" style={{ backgroundColor: 'inherit' }}></td>
+                        <td key={`group-spacer-${p.id}`} className="border-b border-r last:border-r-0 border-outline-variant/35" style={{ backgroundColor: 'inherit' }}></td>
                       ))}
                     </tr>
                   );
@@ -155,26 +163,36 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                 const maxCount = matrixData.globalMaxCount || 1;
                 
                 return (
-                  <tr key={`entity-${entityRow.category}-${entityRow.name}`} className="border-b border-outline-variant/40 hover:bg-slate-50 transition-colors group">
-                    <td className="p-3 font-medium border-r border-outline-variant sticky left-0 bg-white group-hover:bg-slate-50 transition-colors z-20 shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
-                      <span className="text-on-surface truncate block pr-2" title={entityRow.name}>{entityRow.name}</span>
+                  <tr key={`entity-${entityRow.category}-${entityRow.name}`} className="border-b border-outline-variant/25 hover:bg-slate-50/70 transition-colors group">
+                    <td className="px-5 py-2.5 font-medium border-r border-outline-variant/40 sticky left-0 bg-white group-hover:bg-slate-50/70 transition-colors z-20 shadow-[2px_0_6px_rgba(0,0,0,0.03)] align-middle">
+                      <span 
+                        className="text-on-surface text-[13px] leading-snug whitespace-normal break-words block pr-2" 
+                        style={{ fontStyle: entityRow.category === 'SPECIES' ? 'italic' : 'normal' }}
+                        title={entityRow.name}
+                      >
+                        {entityRow.name}
+                      </span>
                     </td>
                     {papers.map(p => {
                       const count = entityRow.counts[p.id];
                       if (!count) {
-                        return <td key={`cell-${entityRow.name}-${p.id}`} className="p-1.5 px-2 border-r border-outline-variant/40 text-center text-on-surface-variant/40 text-xs">—</td>;
+                        return (
+                          <td key={`cell-${entityRow.name}-${p.id}`} className="py-2 px-3 border-r last:border-r-0 border-outline-variant/25 text-center align-middle">
+                            <span className="text-slate-300 text-[13px] font-light select-none">–</span>
+                          </td>
+                        );
                       }
                       
-                      // Universal dynamic opacity percentage (18% to 90%) calculated from entity mention number
+                      // Universal dynamic opacity percentage (18% to 85%) calculated from entity mention number
                       const norm = maxCount > 1 ? count / maxCount : 0.5;
-                      const opacityPercent = Math.min(90, Math.max(18, Math.round(18 + 72 * Math.pow(norm, 0.5))));
-                      // High-contrast, fairly visible numbers on both light and saturated backgrounds
-                      const textColor = opacityPercent > 55 ? '#ffffff' : `color-mix(in srgb, ${accentColor} 85%, #0f172a)`;
+                      const opacityPercent = Math.min(85, Math.max(18, Math.round(18 + 67 * Math.pow(norm, 0.5))));
+                      // High-contrast text color on tinted background
+                      const textColor = opacityPercent > 55 ? '#ffffff' : `color-mix(in srgb, ${accentColor} 88%, #0f172a)`;
                       
                       return (
-                        <td key={`cell-${entityRow.name}-${p.id}`} className="p-1.5 px-2 border-r border-outline-variant/40 text-center">
+                        <td key={`cell-${entityRow.name}-${p.id}`} className="py-2 px-3 border-r last:border-r-0 border-outline-variant/25 text-center align-middle">
                           <div 
-                            className="w-full h-7 rounded-md flex items-center justify-center font-bold text-xs transition-all shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+                            className="inline-flex items-center justify-center min-w-[38px] px-3 py-0.5 h-[25px] rounded-full font-semibold text-[12.5px] tabular-nums transition-all hover:scale-105"
                             style={{ 
                               backgroundColor: `color-mix(in srgb, ${accentColor} ${opacityPercent}%, transparent)`,
                               color: textColor 
@@ -190,18 +208,6 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                 );
               })}
             </tbody>
-            <tfoot className="bg-slate-50 border-t-2 border-outline-variant sticky bottom-0 z-40 shadow-[0_-2px_4px_rgba(0,0,0,0.04)]">
-              <tr className="font-bold text-on-surface text-xs bg-slate-50">
-                <td className="p-3 border-r border-outline-variant sticky left-0 bg-slate-50 z-50 shadow-[2px_0_4px_rgba(0,0,0,0.03)]">
-                  Total mentions
-                </td>
-                {papers.map(p => (
-                  <td key={`total-${p.id}`} className="p-3 border-r border-outline-variant text-center bg-slate-50 font-bold text-slate-800">
-                    {matrixData.paperTotals[p.id].toLocaleString()}
-                  </td>
-                ))}
-              </tr>
-            </tfoot>
           </table>
         </div>
       </div>

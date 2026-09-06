@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF (the canonical import name; `fitz` is deprecated)
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from backend.core.session import attach_session_cookie, get_or_set_session_id, get_session_id
@@ -97,7 +97,7 @@ def _cleanup_upload_artifacts(file_path: str, stored_filename: str) -> None:
                 logger.warning("Failed to remove upload artifact: %s", path)
 
 
-async def extract_metadata_from_pdf(doc: fitz.Document) -> Dict[str, Any]:
+async def extract_metadata_from_pdf(doc: pymupdf.Document) -> Dict[str, Any]:
     """Extract metadata from PDF using PyMuPDF."""
     meta = doc.metadata
     title = meta.get("title", "")
@@ -126,7 +126,7 @@ async def extract_metadata_from_pdf(doc: fitz.Document) -> Dict[str, Any]:
     }
 
 
-async def extract_text_from_pdf(doc: fitz.Document) -> str:
+async def extract_text_from_pdf(doc: pymupdf.Document) -> str:
     """Extract full text from PDF using PyMuPDF."""
     text_parts = []
 
@@ -265,9 +265,9 @@ async def upload_pdf_for_ner(
         _cleanup_upload_artifacts(file_path, stored_filename)
         raise HTTPException(status_code=500, detail="Failed to save file") from exc
 
-    doc: Optional[fitz.Document] = None
+    doc: Optional[pymupdf.Document] = None
     try:
-        doc = fitz.open(file_path)
+        doc = pymupdf.open(file_path)
         metadata = await extract_metadata_from_pdf(doc)
         text = await extract_text_from_pdf(doc)
         entities_by_type, entity_counts, canonical_data = extract_entities_fast(text)

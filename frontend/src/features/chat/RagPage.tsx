@@ -462,7 +462,10 @@ const RagPage: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex px-0">
+    <div
+      className="h-full flex px-0"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
       {/* ─── Sources Sidebar ─── */}
       <aside
         className={`border-r border-surface-c bg-background flex flex-col flex-shrink-0 transition-all duration-200 ${

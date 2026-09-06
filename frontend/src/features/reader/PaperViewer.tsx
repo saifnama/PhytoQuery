@@ -1066,19 +1066,51 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     };
     // Build grouped data from existing grouping logic
     const grouped = groupedEntityMap;
-    // Sort groups alphabetically (already alphabetical by label names)
+    // Sort groups alphabetically
     const sortedLabels = Object.keys(grouped).sort((a, b) => a.localeCompare(b));
     const rows: string[] = [];
     for (const label of sortedLabels) {
       const items = [...grouped[label]].sort((a, b) => a.text.localeCompare(b.text));
       for (const item of items) {
+        const rawVariants = (item.aliases && item.aliases.length > 0) ? item.aliases : [item.text];
+        const seen = new Set<string>();
+        const variantsList: string[] = [];
+        for (const v of rawVariants) {
+          const trimmed = (v || '').trim();
+          if (trimmed && !seen.has(trimmed.toLowerCase())) {
+            seen.add(trimmed.toLowerCase());
+            variantsList.push(trimmed);
+          }
+        }
+        if (!seen.has(item.text.toLowerCase())) {
+          variantsList.unshift(item.text);
+        }
+        const variantsStr = variantsList.join('; ');
         rows.push(
-          [label, item.text, String(item.count), item.aliases.slice(0, 5).join('; ')].map(escape).join(',')
+          [label, item.text, String(item.count), variantsStr].map(escape).join(',')
         );
       }
     }
-    const doiCell = escape(`${paperIdentifier?.type?.toUpperCase() || 'PAPER'}:${identifierValue}`);
-    const csv = `DOI,Type,Name,Count,Variants\n${rows.map((row) => `${doiCell},${row}`).join('\n')}`;
+
+    let prefix = 'DOI';
+    let cleanVal = identifierValue;
+    if (cleanVal.toLowerCase().startsWith('doi:')) {
+      cleanVal = cleanVal.slice(4).trim();
+      prefix = 'DOI';
+    } else if (cleanVal.toLowerCase().startsWith('pmcid:')) {
+      cleanVal = cleanVal.slice(6).trim();
+      prefix = 'PMCID';
+    } else if (cleanVal.toLowerCase().startsWith('pmid:')) {
+      cleanVal = cleanVal.slice(5).trim();
+      prefix = 'PMID';
+    } else if (paperIdentifier?.type) {
+      prefix = paperIdentifier.type.toUpperCase();
+    } else if (!cleanVal.startsWith('10.')) {
+      prefix = 'PAPER';
+    }
+
+    const firstLine = `${escape(`${prefix}:${cleanVal}`)},,,`;
+    const csv = `${firstLine}\nType,Name,Count,Variants\n${rows.join('\n')}`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

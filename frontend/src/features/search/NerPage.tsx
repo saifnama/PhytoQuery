@@ -843,21 +843,14 @@ const NerPage: React.FC = () => {
                 )}
 
                 {noResults ? (
-                  /* No-results screen — cat-in-a-bag illustration */
-                  <div className="flex flex-col items-center gap-6 px-5 pt-[50px] pb-10">
-                    <img
-                      src="/404.png"
-                      alt="No results found"
-                      className="w-full max-w-[460px] rounded-2xl"
-                    />
-                    <div className="text-center">
-                      <div className="mb-1.5 text-[20px] font-bold text-on-surface">
-                        No publications found
-                      </div>
-                      <div className="text-[14.5px] text-on-surface-variant">
-                        We couldn&apos;t find anything for &ldquo;{currentQuery}&rdquo;. Try different keywords.
-                      </div>
-                    </div>
+                  /* No-results message */
+                  <div
+                    className="flex justify-center px-5 pt-[90px] pb-10"
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                  >
+                    <p className="text-[16px] italic text-on-surface-variant">
+                      No publications were found for that term.
+                    </p>
                   </div>
                 ) : (
                   <>

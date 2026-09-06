@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 
 
 class NERRequest(BaseModel):
-    doi: str = Field(..., min_length=1, example="10.1016/j.phytochem.2021.112818")
+    doi: str = Field(..., min_length=1)
 
 
 class Entity(BaseModel):
@@ -41,11 +41,7 @@ class ChatMessage(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(
-        ...,
-        min_length=1,
-        example="What are the main bioactive compounds in Ocimum sanctum?",
-    )
+    query: str = Field(..., min_length=1)
     selected_files: Optional[List[str]] = None  # Filter RAG to only these sources
     chat_history: Optional[List[ChatMessage]] = None  # Previous conversation turns
 

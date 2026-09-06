@@ -2102,9 +2102,9 @@ class RAGService:
         """Extract DOI, authors, and journal from PDF metadata and first pages."""
         metadata = {"authors": "", "doi": "", "journal": "", "title": ""}
         try:
-            import fitz
+            import pymupdf
 
-            doc = fitz.open(pdf_path)
+            doc = pymupdf.open(pdf_path)
 
             # Try PDF document info first
             pdf_info = doc.metadata or {}
