@@ -197,7 +197,7 @@ export const CompareMatrix = ({ papers }: { papers: UploadedPaper[] }) => {
                               backgroundColor: `color-mix(in srgb, ${accentColor} ${opacityPercent}%, transparent)`,
                               color: textColor 
                             }}
-                            title={`${count} mentions`}
+                            title={String(count)}
                           >
                             {count}
                           </div>

@@ -181,9 +181,8 @@ const AnalysePage = () => {
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
       setViewerSrc(objectUrl);
-    } catch (error) {
-      console.error('Failed to open PDF viewer:', error);
-      setViewerError('Unable to load this PDF preview right now.');
+    } catch {
+      setViewerError('Unable to load this PDF preview.');
     } finally {
       setIsViewerLoading(false);
       setViewerLoadingPaperId(null);
@@ -202,16 +201,15 @@ const AnalysePage = () => {
     try {
       const storedFilename = paper.pdfUrl.split('/').pop()?.split('?')[0];
       if (storedFilename) {
-        const res = await fetch(`/ner/uploaded/${storedFilename}`, {
+        // Backend deletion is best-effort; the paper is removed locally regardless.
+        await fetch(`/ner/uploaded/${storedFilename}`, {
           method: 'DELETE',
           credentials: 'same-origin',
         });
-        if (!res.ok) {
-          console.error('Failed to delete PDF from backend:', await res.text());
-        }
       }
-    } catch (err) {
-      console.error('Delete paper failed:', err);
+    } catch {
+      // Backend deletion failures are intentionally silent: local removal
+      // below is the source of truth for the UI.
     } finally {
       removePaper(paper.id);
     }
@@ -460,10 +458,9 @@ const AnalysePage = () => {
               <span className={`!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-150 ${leftSidebarCollapsed ? 'hidden' : 'block'}`}>
                 Sources
               </span>
-              <button 
-                className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low active:scale-90 transition-all duration-100 outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`} 
+              <button
+                className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-low active:scale-90 transition-all duration-100 outline-none ${leftSidebarCollapsed ? 'mx-auto' : ''}`}
                 onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
-                title={leftSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 <SidebarSimple size={20} />
               </button>
@@ -637,7 +634,7 @@ const AnalysePage = () => {
                           void deletePaper(paper);
                         }}
                         className="absolute right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 transition-colors"
-                        title="Delete paper"
+                        title="Delete"
                       >
                         <TrashSimple size={16} weight="regular" />
                       </button>
