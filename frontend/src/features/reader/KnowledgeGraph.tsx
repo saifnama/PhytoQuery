@@ -6,6 +6,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CornersOut, CornersIn, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import type { Entity } from '../../types';
 import { downloadGraphHtml } from '../../utils/exportGraphHtml';
@@ -37,6 +38,9 @@ function buildOptions() {
     nodes: {
       shape: 'dot',
       borderWidth: 0,
+      font: {
+        face: 'Google Sans, Inter, sans-serif',
+      },
     },
     edges: {
       smooth: false, // straight lines
@@ -93,7 +97,6 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   entityPaperMap,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const networkRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -118,6 +121,10 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   useEffect(() => {
     activeTypesRef.current = activeTypes;
   }, [activeTypes]);
+  const showLabelsRef = useRef(showLabels);
+  useEffect(() => {
+    showLabelsRef.current = showLabels;
+  }, [showLabels]);
 
   const papers = useMemo(
     () => paperIdentifiers || (paperIdentifier ? [paperIdentifier] : []),
@@ -342,6 +349,22 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     nodesDS.current = data.nodes;
     edgesDS.current = data.edges;
 
+    // Apply activeTypes filter and label state to data.nodes
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    nodesData.forEach((n: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const updates: any = {};
+      if (!n._isPaper && !activeTypesRef.current.has(n._type)) {
+        updates.hidden = true;
+      }
+      if (!showLabelsRef.current) {
+        updates.label = '';
+      }
+      if (Object.keys(updates).length > 0) {
+        data.nodes.update({ id: n.id, ...updates });
+      }
+    });
+
     const network = new vis.Network(containerRef.current, data, buildOptions());
     networkRef.current = network;
 
@@ -497,7 +520,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
       nodesDS.current = null;
       edgesDS.current = null;
     };
-  }, [vis, nodesData, edgesData]);
+  }, [vis, nodesData, edgesData, isFullscreen]);
 
   // ── Sync labels toggle ────────────────────────────────────────────────
   useEffect(() => {
@@ -595,21 +618,21 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     };
   }, [isFullscreen]);
 
-  // ── True fullscreen via the Fullscreen API (Esc handled by browser) ───
-  // ponytail: native API — no z-index fights, no portal, no remount.
+  // ── Browser-tab viewport fullscreen (fills the browser window/tab, not OS fullscreen) ──
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen().catch(() => {});
-    } else {
-      void wrapperRef.current?.requestFullscreen().catch(() => {});
-    }
+    setIsFullscreen((prev) => !prev);
   }, []);
 
   useEffect(() => {
-    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
+    if (!isFullscreen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
 
   // ── Helpers ───────────────────────────────────────────────────────────
   const toggleType = useCallback((type: string) => {
@@ -643,18 +666,36 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
       papers.length > 1
         ? `compare-${papers.length}-papers`
         : paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export';
+    const nodeInfoObj: Record<string, { type: string; name: string; freq: number; color: string; isPaper: boolean }> = {};
+    nodeInfo.forEach((val, key) => {
+      nodeInfoObj[key] = val;
+    });
+
     void downloadGraphHtml({
       nodes: nodesDS.current.get(),
       edges: edgesDS.current.get(),
       filename: `GraphView-${safeLabel}.html`,
       title: `Knowledge Graph - ${paperLabel}`,
       subtitle: `Entities linked to ${paperLabel}`,
-      legend: [...typeColors.entries()].map(([, info]) => ({
+      legend: [...typeColors.entries()].map(([typeKey, info]) => ({
+        typeKey,
         color: info.color,
         name: info.name,
+        count: info.count,
       })),
+      nodeInfo: nodeInfoObj,
     });
-  }, [typeColors, papers, paperIdentifier]);
+  }, [typeColors, papers, paperIdentifier, nodeInfo]);
+
+  // ── Prevent background scroll when fullscreen overlay is active ─────────
+  useEffect(() => {
+    if (!isFullscreen || typeof document === 'undefined') return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isFullscreen]);
 
   const hasPaper = paperIdentifier || (paperIdentifiers && paperIdentifiers.length > 0);
   if (entities.length === 0 || !hasPaper) return null;
@@ -662,174 +703,192 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   const presentTypes = [...typeColors.entries()];
   const tooltipInfo = tooltip ? nodeInfo.get(tooltip.nodeId) : null;
 
+  const renderTooltip = () => {
+    if (!tooltip || !tooltipInfo) return null;
+    return (
+      <div
+        className="absolute pointer-events-none z-30"
+        style={{
+          left: tooltip.x + 14,
+          top: tooltip.y - 10,
+          background: '#fff',
+          border: '1px solid #e2e2e2',
+          borderRadius: 8,
+          padding: '9px 12px',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+          minWidth: 155,
+          fontFamily: 'var(--font-google-sans), Inter, sans-serif',
+        }}
+      >
+        {!tooltipInfo.isPaper && (
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: tooltipInfo.color,
+              marginBottom: 3,
+              fontFamily: 'var(--font-google-sans)',
+            }}
+          >
+            {tooltipInfo.type}
+          </div>
+        )}
+        <div
+          style={{
+            fontSize: 13.5,
+            fontWeight: 600,
+            color: '#111',
+            marginBottom: 3,
+            lineHeight: 1.3,
+            fontFamily: 'var(--font-google-sans)',
+          }}
+        >
+          {tooltipInfo.name}
+        </div>
+        {!tooltipInfo.isPaper && (
+          <div style={{ fontFamily: 'var(--font-google-sans)', fontSize: 11, color: '#64748b' }}>
+            frequency · {tooltipInfo.freq}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col">
+      {isFullscreen ? (
+        <>
+          {/* Placeholder preserving space in sidebar */}
+          <div className="relative bg-surface-b border border-dashed border-border rounded-xl h-[300px] flex items-center justify-center text-on-surface-muted text-xs font-medium select-none">
+            Graph open in fullscreen overlay
+          </div>
 
-      <div
-        ref={wrapperRef}
-        className={
-          isFullscreen
-            ? 'bg-background w-screen h-[100dvh] flex flex-col overflow-hidden'
-            : 'relative bg-background border border-border rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200'
-        }
-      >
-        <div
-          className={
-            isFullscreen
-              ? 'relative w-full h-full flex flex-col overflow-hidden'
-              : 'relative w-full flex flex-col'
-          }
-        >
+          {/* Fullscreen Overlay via React Portal */}
+          {typeof document !== 'undefined' &&
+            createPortal(
+              <div className="fixed inset-0 z-[1000] bg-background w-screen h-screen flex flex-col overflow-hidden">
+                {/* Top control bar */}
+                <div className="absolute top-3 right-3 z-20 flex gap-2 items-center">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search node…"
+                    className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-background/90 text-on-surface-variant outline-none focus:border-on-surface-muted w-36"
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={resetLayout}
+                    className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+                    aria-label="Reset layout"
+                  >
+                    <ArrowCounterClockwise weight="bold" size={18} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowLabels((v) => !v)}
+                    className={`text-[12px] font-medium px-3 py-1.5 rounded-lg border transition-colors cursor-pointer ${
+                      showLabels
+                        ? 'bg-on-surface text-background border-on-surface'
+                        : 'bg-background text-on-surface-variant border-border hover:bg-surface-c'
+                    }`}
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                    aria-label="Toggle labels"
+                  >
+                    Labels
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadHTML}
+                    className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+                    aria-label="Download"
+                  >
+                    <DownloadSimple weight="bold" size={20} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
+                    aria-label="Exit fullscreen"
+                  >
+                    <CornersIn weight="bold" size={20} />
+                  </button>
+                </div>
+
+                {/* Legend with counts — borderless, fullscreen only */}
+                {presentTypes.length > 0 && (
+                  <div
+                    className="absolute top-4 left-4 z-10 min-w-[240px] p-2 select-none"
+                    style={{ fontFamily: 'var(--font-google-sans)' }}
+                  >
+                    <div className="text-[12px] font-bold uppercase tracking-[0.12em] text-on-surface-variant mb-2 px-2">
+                      Entities
+                    </div>
+                    <div className="space-y-0.5">
+                      {presentTypes.map(([type, info]) => {
+                        const on = activeTypes.has(type);
+                        return (
+                          <div
+                            key={type}
+                            onClick={() => toggleType(type)}
+                            className="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-all hover:bg-surface-c/70"
+                            style={{ opacity: on ? 1 : 0.3 }}
+                          >
+                            <div
+                              className="w-3 h-3 rounded-full flex-shrink-0"
+                              style={{ background: info.color }}
+                            />
+                            <span className="text-[14px] font-medium text-on-surface flex-1 truncate">
+                              {info.name}
+                            </span>
+                            <span className="text-[13px] font-semibold text-on-surface-variant tabular-nums">
+                              {info.count}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* React tooltip */}
+                {renderTooltip()}
+
+                {/* Graph container */}
+                <div
+                  ref={containerRef}
+                  className="w-full flex-1 min-h-0 cursor-grab active:cursor-grabbing bg-transparent"
+                />
+              </div>,
+              document.body
+            )}
+        </>
+      ) : (
+        <div className="relative bg-background border border-border rounded-xl overflow-hidden flex flex-col transition-all duration-200">
           {/* Top control bar */}
           <div className="absolute top-3 right-3 z-20 flex gap-2 items-center">
-            {isFullscreen && (
-              <>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search node…"
-                  className="text-[12px] px-3 py-1.5 rounded-lg border border-border bg-background/90 text-on-surface-variant outline-none focus:border-on-surface-muted w-36"
-                  style={{ fontFamily: 'var(--font-google-sans)' }}
-                />
-                <button
-                  type="button"
-                  onClick={resetLayout}
-                  className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
-                  aria-label="Reset layout"
-                >
-                  <ArrowCounterClockwise weight="bold" size={18} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowLabels((v) => !v)}
-                  className={`text-[12px] font-medium px-3 py-1.5 rounded-lg border transition-colors cursor-pointer ${
-                    showLabels
-                      ? 'bg-on-surface text-background border-on-surface'
-                      : 'bg-background text-on-surface-variant border-border hover:bg-surface-c'
-                  }`}
-                  style={{ fontFamily: 'var(--font-google-sans)' }}
-                  aria-label="Toggle labels"
-                >
-                  Labels
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={downloadHTML}
-              className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
-              aria-label="Download"
-            >
-              <DownloadSimple weight="bold" size={20} />
-            </button>
             <button
               type="button"
               onClick={toggleFullscreen}
               className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              aria-label="Fullscreen"
             >
-              {isFullscreen ? (
-                <CornersIn weight="bold" size={20} />
-              ) : (
-                <CornersOut weight="bold" size={20} />
-              )}
+              <CornersOut weight="bold" size={20} />
             </button>
           </div>
 
-          {/* Legend with counts — borderless, fullscreen only */}
-          {isFullscreen && presentTypes.length > 0 && (
-            <div
-              className="absolute top-4 left-4 z-10 min-w-[240px] p-2"
-              style={{ fontFamily: 'var(--font-google-sans)' }}
-            >
-              <div className="text-[12px] font-bold uppercase tracking-[0.12em] text-on-surface-variant mb-2 px-2">
-                Entities
-              </div>
-              <div className="space-y-0.5">
-                {presentTypes.map(([type, info]) => {
-                  const on = activeTypes.has(type);
-                  return (
-                    <div
-                      key={type}
-                      onClick={() => toggleType(type)}
-                      className="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-all hover:bg-surface-c/70"
-                      style={{ opacity: on ? 1 : 0.3 }}
-                    >
-                      <div
-                        className="w-3 h-3 rounded-full flex-shrink-0"
-                        style={{ background: info.color }}
-                      />
-                      <span className="text-[14px] font-medium text-on-surface flex-1 truncate">
-                        {info.name}
-                      </span>
-                      <span className="text-[13px] font-semibold text-on-surface-variant tabular-nums">
-                        {info.count}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* React tooltip — fires from network's hoverNode event */}
-          {tooltip && tooltipInfo && (
-            <div
-              className="absolute pointer-events-none z-30"
-              style={{
-                left: tooltip.x + 14,
-                top: tooltip.y - 10,
-                background: '#fff',
-                border: '1px solid #e2e2e2',
-                borderRadius: 8,
-                padding: '9px 12px',
-                boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
-                minWidth: 155,
-                fontFamily: 'var(--font-google-sans), Inter, sans-serif',
-              }}
-            >
-              {!tooltipInfo.isPaper && (
-                <div
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
-                    color: tooltipInfo.color,
-                    marginBottom: 3,
-                    fontFamily: 'var(--font-google-sans)',
-                  }}
-                >
-                  {tooltipInfo.type}
-                </div>
-              )}
-              <div
-                style={{
-                  fontSize: 13.5,
-                  fontWeight: 600,
-                  color: '#111',
-                  marginBottom: 3,
-                  lineHeight: 1.3,
-                  fontFamily: 'var(--font-google-sans)',
-                }}
-              >
-                {tooltipInfo.name}
-              </div>
-              {!tooltipInfo.isPaper && (
-                <div style={{ fontFamily: 'var(--font-google-sans)', fontSize: 11, color: '#64748b' }}>
-                  frequency · {tooltipInfo.freq}
-                </div>
-              )}
-            </div>
-          )}
+          {/* React tooltip */}
+          {renderTooltip()}
 
           {/* Graph container */}
           <div
             ref={containerRef}
-            className={`w-full ${isFullscreen ? 'flex-1 min-h-0' : 'h-[300px]'} cursor-grab active:cursor-grabbing bg-transparent`}
+            className="w-full h-[300px] cursor-grab active:cursor-grabbing bg-transparent"
           />
         </div>
-      </div>
+      )}
     </div>
   );
 };

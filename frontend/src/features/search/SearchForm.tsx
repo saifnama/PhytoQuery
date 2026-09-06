@@ -576,7 +576,6 @@ const SearchForm: React.FC<SearchFormProps> = ({
                 type="button"
                 onClick={(e) => { e.stopPropagation(); clear(); }}
                 aria-label="Clear search"
-                title="Clear"
                 className="grid place-items-center w-[40px] h-[40px] rounded-full text-on-surface-variant hover:text-on-surface bg-transparent transition-colors shrink-0"
               >
                 <XCircle size={22} weight="regular" />

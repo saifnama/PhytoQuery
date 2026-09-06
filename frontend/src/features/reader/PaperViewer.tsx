@@ -1093,20 +1093,54 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     const nodes = graphEntities.map((e) => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
+      _label: e.text,
+      _type: e.label,
+      _isPaper: false,
       group: e.label,
     }));
     const edges = graphEntities.map((e) => ({
       from: `paper-${identifierValue}`,
       to: `${e.label}-${e.text.toLowerCase()}`
     }));
+    const legendItems: { typeKey: string; color: string; name: string; count: number }[] = [];
+    const nodeInfoObj: Record<string, { type: string; name: string; freq: number; color: string; isPaper: boolean }> = {
+      [`paper-${identifierValue}`]: { type: 'Paper', name: identifierValue, freq: 0, color: '#10B981', isPaper: true }
+    };
+    ENTITY_GROUP_ORDER.forEach((label) => {
+      const items = groupedEntityMap[label] || [];
+      if (items.length > 0) {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const config = ENTITY_GROUP_CONFIG[label];
+        const solidColor = (config?.accentVar ? rootStyle.getPropertyValue(config.accentVar).trim() : '') || '#94a3b8';
+        legendItems.push({
+          typeKey: label,
+          color: solidColor,
+          name: label.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+          count: items.length,
+        });
+        items.forEach((item) => {
+          const k = `${label}-${item.text.toLowerCase()}`;
+          nodeInfoObj[k] = {
+            type: label.toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            name: item.text,
+            freq: item.count || 1,
+            color: solidColor,
+            isPaper: false,
+          };
+        });
+      }
+    });
+
     void downloadGraphHtml({
-      nodes: [{ id: `paper-${identifierValue}`, label: identifierValue, group: 'PAPER' }, ...nodes],
+      nodes: [{ id: `paper-${identifierValue}`, label: identifierValue, _label: identifierValue, _isPaper: true, group: 'PAPER' }, ...nodes],
       edges,
       filename: `graph-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.html`,
       title: `Knowledge Graph - ${identifierValue}`,
       subtitle: `Entities linked to ${identifierValue}`,
+      legend: legendItems,
+      nodeInfo: nodeInfoObj,
     });
-  }, [graphEntities, identifierValue]);
+  }, [graphEntities, identifierValue, groupedEntityMap]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -1583,16 +1617,20 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   return (
     <div className="w-full max-w-[1440px] mx-auto px-6 lg:px-14 py-8 paper-enter">
 
-      <div className={`grid grid-cols-1 lg:grid-cols-[190px_minmax(0,1fr)_300px] gap-14 items-start w-full ${showHL ? '' : 'hl-off'}`}>
+      <div className={`grid grid-cols-1 lg:grid-cols-[190px_minmax(0,1fr)_320px] gap-12 lg:gap-x-24 items-start w-full ${showHL ? '' : 'hl-off'}`}>
         
         {/* Left Sidebar: Table of Contents */}
         <aside 
           style={{
             width: 220, flexShrink: 0,
             position: "sticky", top: 232, height: "fit-content",
+            maxHeight: "calc(100vh - 260px)",
+            overflowY: "auto",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
             paddingRight: 8, marginTop: 39, marginLeft: -40
           }} 
-          className="hidden lg:block shrink-0"
+          className="hidden lg:block shrink-0 scrollbar-hide"
         >
           <div style={{
             fontSize: 15, fontWeight: 700, color: "var(--on-surface)",
@@ -1611,8 +1649,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     setActiveHeading(null);
                     scrollToId(item.id, item.text);
                   }}
+                  title={item.text}
                   style={{
-                    display: "flex", alignItems: "center", gap: 16,
+                    display: "flex", alignItems: "flex-start", gap: 16,
                     width: "100%", textAlign: "left",
                     background: "transparent", border: "none", cursor: "pointer",
                     padding: "9px 0"
@@ -1635,13 +1674,20 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     background: active ? "var(--on-surface)" : "transparent",
                     flexShrink: 0
                   }} />
-                  <span style={{
-                    fontSize: 15,
-                    fontWeight: active ? 600 : 400,
-                    color: active ? "var(--on-surface)" : "var(--on-surface-variant)",
-                    fontFamily: "var(--font-google-sans)",
-                    transition: "color .15s"
-                  }}>{item.text}</span>
+                  <span 
+                    className="line-clamp-3"
+                    style={{
+                      minWidth: 0,
+                      wordBreak: "break-word",
+                      overflowWrap: "break-word",
+                      fontSize: 15,
+                      lineHeight: 1.4,
+                      fontWeight: active ? 600 : 400,
+                      color: active ? "var(--on-surface)" : "var(--on-surface-variant)",
+                      fontFamily: "var(--font-google-sans)",
+                      transition: "color .15s"
+                    }}
+                  >{item.text}</span>
                 </button>
               );
             })}
@@ -1649,7 +1695,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         </aside>
 
         {/* Main Content Area */}
-        <main className="w-full max-w-[990px] min-w-0 flex flex-col bg-background relative">
+        <main className="w-full max-w-[990px] min-w-0 flex flex-col bg-background relative lg:pr-4">
           
           {/* Metadata Row */}
           <div className="flex items-center gap-2.5 mb-[18px] text-[12.5px] text-on-surface-variant">
@@ -1809,7 +1855,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             ref={htmlContainerRef}
             id="section-content-area"
             data-disabled-entity-groups={disabledHighlightGroupData}
-            className="article-prose scroll-mt-20"
+            className="article-prose scroll-mt-20 min-w-0 max-w-full"
           >
             <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
           </div>
@@ -2090,7 +2136,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         </main>
 
         {/* Right Sidebar: Entity Groups */}
-        <aside className="w-full lg:w-[330px] sticky top-[88px] h-fit flex flex-col gap-3.5 shrink-0 z-30" style={{ fontFamily: "var(--font-google-sans)" }}>
+        <aside className="w-full lg:w-[320px] sticky top-[88px] h-fit flex flex-col gap-3.5 shrink-0 z-30 lg:ml-2" style={{ fontFamily: "var(--font-google-sans)" }}>
           {!isExtracted ? (
             <div style={{
               display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
@@ -2140,7 +2186,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
           ) : (
             <div className="flex flex-col flex-1 mt-2">
               {/* Centered view switcher pill header */}
-              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 14 }}>
+              <div style={{ position: "relative", display: "flex", justifyContent: "center", minHeight: 44, marginBottom: 26 }}>
                 <div style={{
                   display: "inline-flex", gap: 3,
                   padding: 4, borderRadius: 999,

@@ -80,7 +80,8 @@ const FilterSection: React.FC<FilterSectionProps> = ({ title, defaultOpen = fals
         style={{ fontFamily: 'var(--font-google-sans)' }}
         className={`
           flex w-full items-center justify-between bg-transparent border-0 cursor-pointer
-          py-1 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface
+          py-1.5 text-[12px] font-bold uppercase tracking-[0.14em] text-on-surface
+          hover:text-on-surface-variant transition-colors
           ${open ? 'mb-3.5' : 'mb-0'}
           transition-[margin-bottom] duration-200
         `}
@@ -435,19 +436,19 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
   return (
     <aside
       className="
-        sticky top-[100px] h-fit
-        flex flex-col gap-5 pr-6
+        mt-[92px] h-fit self-start
+        flex flex-col gap-7 pr-6 pb-2
         border-r border-border
       "
     >
       <div
         style={{ fontFamily: 'var(--font-google-sans)' }}
-        className="text-[19px] font-bold tracking-[-0.01em] text-on-surface"
+        className="text-[19px] font-bold tracking-[-0.01em] text-on-surface shrink-0 mb-1"
       >
         Filter by
       </div>
 
-      <FilterSection title="Sources">
+      <FilterSection title="Sources" defaultOpen>
         <div className="flex flex-col gap-2 items-start">
           <SourcePill role="europepmc" label="Europe PMC"
             active={source === 'europepmc'}
@@ -459,7 +460,7 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
       </FilterSection>
 
       {source === 'europepmc' && (
-        <FilterSection title="Availability">
+        <FilterSection title="Availability" defaultOpen>
           <div className="flex flex-col gap-2 items-start">
             <FilterTogglePill
               icon={<LockSimpleOpen size={14} weight="regular" />}
@@ -477,26 +478,31 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
         </FilterSection>
       )}
 
-      <FilterSection title="Type">
-        {(source === 'openalex' ? OPENALEX_TYPES : EUROPEPMC_TYPES).map((t) => {
-          // Map UI label back to backend key.
-          const key = source === 'openalex'
-            ? t.toLowerCase().replace(/\s+/g, '-')
-            : t === 'Research Articles' ? 'Research-article'
-            : t === 'Review Articles'   ? 'Review'
-            : '';
-          const checked = filters.article_type === key;
-          return (
-            <CircleCheck
-              key={t}
-              label={t}
-              checked={checked}
-              onToggle={() =>
-                onChange({ ...filters, article_type: checked ? '' : key })
-              }
-            />
-          );
-        })}
+      <FilterSection title="Type" defaultOpen>
+        <div
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          className="flex flex-col gap-2.5 max-h-[380px] overflow-y-auto scrollbar-hide pr-1"
+        >
+          {(source === 'openalex' ? OPENALEX_TYPES : EUROPEPMC_TYPES).map((t) => {
+            // Map UI label back to backend key.
+            const key = source === 'openalex'
+              ? t.toLowerCase().replace(/\s+/g, '-')
+              : t === 'Research Articles' ? 'Research-article'
+              : t === 'Review Articles'   ? 'Review'
+              : '';
+            const checked = filters.article_type === key;
+            return (
+              <CircleCheck
+                key={t}
+                label={t}
+                checked={checked}
+                onToggle={() =>
+                  onChange({ ...filters, article_type: checked ? '' : key })
+                }
+              />
+            );
+          })}
+        </div>
       </FilterSection>
     </aside>
   );
@@ -505,13 +511,13 @@ const FilterSidebar: React.FC<FilterSidebarProps> = ({ filters, onChange }) => {
 const FilterSidebarSkeleton: React.FC = () => (
   <aside
     className="
-      sticky top-[100px] h-fit
-      flex flex-col gap-6 pr-6
+      mt-[92px] h-fit self-start
+      flex flex-col gap-7 pr-6 pb-2
       border-r border-border
       animate-in fade-in duration-300
     "
   >
-    <Skeleton className="h-5 w-20 rounded" />
+    <Skeleton className="h-5 w-20 rounded mb-1" />
 
     {/* Sources */}
     <div className="space-y-3">

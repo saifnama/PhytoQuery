@@ -335,7 +335,6 @@ const DbExplorerDrawer: React.FC<Props> = ({
                 searchInputRef.current?.focus();
               }}
               aria-label="Clear search"
-              title="Clear"
               style={{
                 position: 'absolute', right: 10, top: '50%',
                 transform: 'translateY(-50%)',

@@ -1304,6 +1304,7 @@ mark.ner-default {
     line-height: 1.7;
     font-size: 16px;
     font-family: var(--font-google-sans);
+    overflow-wrap: break-word;
 }
 .article-prose h1,
 .article-prose h2,
@@ -1358,6 +1359,26 @@ mark.ner-default {
     transition: border-color 0.15s;
 }
 .article-prose a[target="_blank"]:hover { border-bottom-color: var(--blue-700); }
+
+.article-prose img,
+.article-prose svg,
+.article-prose video {
+    max-width: 100%;
+    height: auto;
+}
+
+.article-prose pre {
+    max-width: 100%;
+    overflow-x: auto;
+    word-break: normal;
+    background: var(--surface-c);
+    padding: 12px;
+    border-radius: 8px;
+}
+
+.article-prose table {
+    max-width: 100%;
+}
 
 /* =============================================================================
    JATS TABLES
