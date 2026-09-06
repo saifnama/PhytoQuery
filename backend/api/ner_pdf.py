@@ -139,95 +139,96 @@ async def extract_text_from_pdf(doc: pymupdf.Document) -> str:
     return "\n\n".join(text_parts)
 
 
-def extract_entities_fast(text: str) -> tuple[Dict[str, List[str]], Dict[str, Dict[str, int]], Dict[str, Dict[str, Dict[str, Any]]]]:
-    """Fast dictionary-only entity extraction (no LLM). Returns (entities, counts, canonical_data)."""
-    from backend.gazetteer import analytical_technique_matcher, bioactivity_matcher
-    from backend.gazetteer import chemical_matcher, development_stage_matcher, extraction_method_matcher
-    from backend.gazetteer import plant_part_matcher, season_matcher, species_matcher
+async def extract_entities_full(
+    text: str,
+) -> tuple[
+    Dict[str, List[str]],
+    Dict[str, Dict[str, int]],
+    Dict[str, Dict[str, Dict[str, Any]]],
+]:
+    """Full NER pipeline — dictionary + LLM, the same engine the paper
+    viewer uses (NERService.process_sections).
 
-    # Collect all entities with their output labels
-    matchers = [
-        (chemical_matcher.match_chemicals, "CHEMICAL"),
-        (plant_part_matcher.match_plant_parts, "PLANT_PART"),
-        (species_matcher.match_species, "SPECIES"),
-        (analytical_technique_matcher.match_analytical_techniques, "ANALYTICAL_TECHNIQUE"),
-        (extraction_method_matcher.match_extraction_methods, "EXTRACTION_METHOD"),
-        (development_stage_matcher.match_development_stages, "DEVELOPMENT_STAGE"),
-        (season_matcher.match_seasons, "SEASON"),
-        (bioactivity_matcher.match_bioactivities, "BIOACTIVITY"),
+    The text is split into word chunks and processed as pseudo-sections:
+    dictionary matchers run over everything, the LLM runs per chunk under
+    the configured time budget, and results are normalized, merged, and
+    hallucination-filtered by the pipeline. The output shape matches what
+    extract_entities_fast produced (entities / entity_counts /
+    canonical_data) so the Analyse frontend contract is unchanged.
+
+    Without a configured LLM provider the pipeline degrades to
+    dictionary-only automatically.
+    """
+    from backend.services.ner_engine import ner_service
+    from backend.config import NER_UPLOAD_CHUNK_WORDS
+
+    text = (text or "").strip()
+    if not text:
+        return {}, {}, {}
+
+    chunks = ner_service.split_into_word_chunks(text, NER_UPLOAD_CHUNK_WORDS)
+    sections = [
+        {"title": f"Part {i + 1}", "content": chunk}
+        for i, chunk in enumerate(chunks)
     ]
-    all_labeled = []
-    for fn, label in matchers:
-        for e in fn(text):
-            all_labeled.append((e, label))
+    summary, filtered = await ner_service.process_sections(sections)
 
-    # Cross-type dedup: longest span wins regardless of type
-    kept = []
-    for e, label in sorted(all_labeled, key=lambda x: (x[0].get("start") or 0, -(x[0].get("end") or 0))):
-        s, en = e.get("start"), e.get("end")
-        if s is None or en is None:
-            kept.append((e, label))
+    # variant (lowercased) -> canonical, per label, from the pipeline's
+    # normalization (species/chemical matcher enrichment etc.)
+    variant_canonical: Dict[tuple, str] = {}
+    canonical_aliases: Dict[tuple, set] = {}
+    for e in filtered:
+        label = e.get("label", "")
+        variant = (e.get("text") or "").strip()
+        if not label or not variant:
             continue
-        if not any(s < k[0]["end"] and en > k[0]["start"] for k in kept if "start" in k[0] and "end" in k[0]):
-            kept.append((e, label))
+        canon = (e.get("canonical") or variant).strip()
+        variant_canonical[(label, variant.lower())] = canon
+        key = (label, canon.lower())
+        aliases = canonical_aliases.setdefault(key, set())
+        aliases.add(variant)
+        for alias in e.get("aliases") or []:
+            if alias and str(alias).strip():
+                aliases.add(str(alias).strip())
 
-    grouped: Dict[str, list] = {}
-    for e, label in kept:
-        grouped.setdefault(label, []).append(e)
+    # Merge the pipeline's per-label counts (already whole-word counted
+    # against the full text and hallucination-filtered) by canonical.
+    merged: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for label, items in summary.items():
+        for item in items:
+            display = (item.get("text") or "").strip()
+            count = int(item.get("count") or 0)
+            if not display or count <= 0:
+                continue
+            canon = variant_canonical.get((label, display.lower()), display)
+            buckets = merged.setdefault(label, {})
+            bucket = buckets.setdefault(
+                canon.lower(), {"canonical": canon, "count": 0, "aliases": set()}
+            )
+            bucket["count"] += count
+            bucket["aliases"].add(display)
+            bucket["aliases"].update(
+                canonical_aliases.get((label, canon.lower()), set())
+            )
+            bucket["aliases"].discard(bucket["canonical"])
 
     entities: Dict[str, List[str]] = {}
-    seen_lower: Dict[str, set] = {}
     count_map: Dict[str, Dict[str, int]] = {}
     canonical_data: Dict[str, Dict[str, Dict[str, Any]]] = {}
-
-    def add_canonical_ents(ents: list, label: str):
-        if label not in entities:
-            entities[label] = []
-            seen_lower[label] = set()
-            count_map[label] = {}
-            canonical_data[label] = {}
-
-        alias_counts: Dict[str, Dict[str, int]] = {}
-        canonical_aliases_map: Dict[str, List[str]] = {}
-
-        for entity in ents:
-            txt = entity.get("span", entity.get("text", ""))
-            canonical = entity.get("canonical", txt)
-            if txt and canonical:
-                alias_counts.setdefault(canonical, {})
-                alias_counts[canonical][txt] = alias_counts[canonical].get(txt, 0) + 1
-                if canonical not in canonical_aliases_map and entity.get("aliases"):
-                    canonical_aliases_map[canonical] = entity.get("aliases", [])
-
-        for canonical, matched_texts in alias_counts.items():
-            if not matched_texts:
-                continue
-
-            total_count = sum(matched_texts.values())
-            canonical_lower = canonical.lower()
-
-            if canonical_lower not in seen_lower[label]:
-                seen_lower[label].add(canonical_lower)
-                entities[label].append(canonical)
-                count_map[label][canonical_lower] = total_count
-                all_variants = list(matched_texts.keys())
-                meta_aliases = canonical_aliases_map.get(canonical, [])
-                canonical_data[label][canonical_lower] = {
-                    "canonical": canonical,
-                    "display_text": canonical,
-                    "aliases": list(dict.fromkeys(all_variants + meta_aliases)),
-                }
-            else:
-                count_map[label][canonical_lower] = count_map[label].get(canonical_lower, 0) + total_count
-                existing = canonical_data[label].get(canonical_lower, {})
-                existing_aliases = set(existing.get("aliases", []))
-                existing_aliases.update(matched_texts.keys())
-                existing_aliases.update(canonical_aliases_map.get(canonical, []))
-                existing["aliases"] = list(existing_aliases)
-
-    for label, ents in grouped.items():
-        add_canonical_ents(ents, label)
-
+    for out_label, buckets in merged.items():
+        entities[out_label] = []
+        count_map[out_label] = {}
+        canonical_data[out_label] = {}
+        for canon_lower, bucket in sorted(
+            buckets.items(), key=lambda kv: -kv[1]["count"]
+        ):
+            entities[out_label].append(bucket["canonical"])
+            count_map[out_label][canon_lower] = bucket["count"]
+            canonical_data[out_label][canon_lower] = {
+                "canonical": bucket["canonical"],
+                "display_text": bucket["canonical"],
+                "aliases": sorted(bucket["aliases"]),
+            }
     return entities, count_map, canonical_data
 
 
@@ -242,7 +243,7 @@ async def upload_pdf_for_ner(
 
     1. Extracts metadata (title, DOI)
     2. Extracts full text
-    3. Runs NER on text
+    3. Runs the full NER pipeline (dictionary + LLM, same as the paper viewer)
     4. Returns metadata + entities + stored PDF URL
     """
     original_filename = file.filename or "paper.pdf"
@@ -270,7 +271,7 @@ async def upload_pdf_for_ner(
         doc = pymupdf.open(file_path)
         metadata = await extract_metadata_from_pdf(doc)
         text = await extract_text_from_pdf(doc)
-        entities_by_type, entity_counts, canonical_data = extract_entities_fast(text)
+        entities_by_type, entity_counts, canonical_data = await extract_entities_full(text)
 
         total_entities = sum(sum(counts.values()) for counts in entity_counts.values())
         entities_with_counts: Dict[str, List[Dict[str, Any]]] = {}

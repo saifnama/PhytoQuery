@@ -159,6 +159,10 @@ NER_LLAMACPP_MODEL = env("NER_LLAMACPP_MODEL", "default")
 NER_CONFIDENCE_THRESHOLD = env_float("NER_CONFIDENCE_THRESHOLD", 0.7)
 NER_CHUNK_SIZE_WORDS = env_int("NER_CHUNK_SIZE_WORDS", 250)
 NER_MAX_CHUNKS = env_int("NER_MAX_CHUNKS", 3)
+# Word-chunk size for Analyse PDF uploads, which run the full
+# dictionary+LLM pipeline (NERService.process_sections) over the whole
+# document. Larger chunks mean fewer LLM calls per paper.
+NER_UPLOAD_CHUNK_WORDS = env_int("NER_UPLOAD_CHUNK_WORDS", 600)
 
 # Validation-retry repetition per section before falling back to
 # dictionary-only entities for that section.

@@ -28,10 +28,10 @@ const PdfIcon = ({ size = 24, className = "" }: { size?: number, className?: str
 const ENTITY_GROUP_ORDER = [
   'CHEMICAL',
   'SPECIES',
-  'PLANT_PART',
-  'DEVELOPMENT_STAGE',
-  'EXTRACTION_METHOD',
-  'ANALYTICAL_TECHNIQUE',
+  'PLANT PART',
+  'DEVELOPMENT STAGE',
+  'EXTRACTION METHOD',
+  'ANALYTICAL TECHNIQUE',
   'BIOACTIVITY',
   'DISEASE',
   'SEASON',
@@ -41,17 +41,17 @@ const ENTITY_GROUP_ORDER = [
 const LABEL_NAMES: Record<string, string> = {
   CHEMICAL: 'Chemical',
   SPECIES: 'Species',
-  PLANT_PART: 'Plant Part',
-  ANALYTICAL_TECHNIQUE: 'Analytical Technique',
-  EXTRACTION_METHOD: 'Extraction Method',
+  'PLANT PART': 'Plant Part',
+  'ANALYTICAL TECHNIQUE': 'Analytical Technique',
+  'EXTRACTION METHOD': 'Extraction Method',
   BIOACTIVITY: 'Bioactivity',
-  DEVELOPMENT_STAGE: 'Development Stage',
+  'DEVELOPMENT STAGE': 'Development Stage',
   SEASON: 'Season',
   DISEASE: 'Disease',
   LOCATION: 'Location',
 };
 
-const getEntityAccentVar = (label: string) => `--entity-${label.toLowerCase().replace(/_/g, '-')}`;
+const getEntityAccentVar = (label: string) => `--entity-${label.toLowerCase().replace(/[\s_]+/g, '-')}`;
 const getEntityAccentColor = (label: string) => `var(${getEntityAccentVar(label)})`;
 
 const AnalysePage = () => {
