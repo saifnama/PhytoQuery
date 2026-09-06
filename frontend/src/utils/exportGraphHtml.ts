@@ -31,8 +31,11 @@ export interface ExportNodeInfo {
 }
 
 const safeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+// Pretty variant for the human-editable GRAPH_DATA block in the export.
+const prettyJson = (value: unknown) =>
+  JSON.stringify(value, null, 2).replace(/</g, '\\u003c');
 
-const findNetworkCtor = (bundle: string): string => {
+const findLocal = (bundle: string, exported: string): string => {
   const matches = [...bundle.matchAll(/export\s*\{([^}]*)\}/g)];
   const last = matches.length > 0 ? matches[matches.length - 1] : null;
   if (last) {
@@ -40,10 +43,10 @@ const findNetworkCtor = (bundle: string): string => {
       const seg = part.trim().split(/\s+as\s+/);
       const local = seg[0].trim();
       const alias = (seg[1] ?? seg[0]).trim();
-      if (alias === 'Network' && local) return local;
+      if (alias === exported && local) return local;
     }
   }
-  return 'Network';
+  return exported;
 };
 
 export async function downloadGraphHtml(opts: {
@@ -54,17 +57,64 @@ export async function downloadGraphHtml(opts: {
   subtitle?: string;
   legend?: GraphLegendItem[];
   nodeInfo?: Record<string, ExportNodeInfo>;
+  /** Types filtered out in the app at export time (legend renders dimmed). */
+  inactiveTypes?: string[];
+  /** Live layout snapshot: starting coords — the graph opens here, physics stays live. */
+  positions?: Record<string, { x: number; y: number }>;
+  /** Live camera snapshot paired with positions. */
+  view?: { scale: number; position: { x: number; y: number } };
 }): Promise<void> {
   const { default: visBundle } = await import(
     'vis-network/standalone/esm/vis-network.min.js?raw'
   );
   const safeBundle = (visBundle as string).replace(/<\/script>/g, '<\\/script>');
-  const networkCtor = findNetworkCtor(visBundle as string);
+  const networkCtor = findLocal(visBundle as string, 'Network');
+  const dataSetCtor = findLocal(visBundle as string, 'DataSet');
+  const dataSetDecl = dataSetCtor !== 'DataSet' ? `const DataSet=${dataSetCtor};\n` : '';
+
+  const nodesWithPos =
+    opts.positions
+      ? (opts.nodes as Record<string, unknown>[]).map((n) => {
+          const p = n.id != null ? opts.positions![String(n.id)] : undefined;
+          return p ? { ...n, x: p.x, y: p.y } : n;
+        })
+      : opts.nodes;
+  // Exact camera when snapshotted, so the file opens on the same view.
+  const postInit = opts.view
+    ? `net.moveTo({ position: ${safeJson(opts.view.position)}, scale: ${opts.view.scale} });`
+    : `net.on('stabilizationIterationsDone', () => {
+  const scale = net.getScale();
+  net.moveTo({ scale: scale * 0.8 });
+});`;
 
   const legendItems = opts.legend || [];
   const nodeInfoMap = opts.nodeInfo || {};
+  const inactive = new Set(opts.inactiveTypes || []);
+  const typeKeyOf = (l: GraphLegendItem) =>
+    l.typeKey || l.name.toUpperCase().replace(/\s+/g, '_');
+  const activeTypeKeys = legendItems.map(typeKeyOf).filter((k) => !inactive.has(k));
+  const escHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const legendHtml = legendItems
+    .map((item) => {
+      const key = typeKeyOf(item);
+      const dimmed = inactive.has(key);
+      return `<div class="legend-item" data-type="${key}" style="opacity: ${dimmed ? '0.3' : '1'};">` +
+        `<div class="legend-dot" style="background-color: ${item.color};"></div>` +
+        `<span class="legend-name">${escHtml(item.name)}</span>` +
+        `<span class="legend-count">${item.count ?? ''}</span></div>`;
+    })
+    .join('');
 
   const html = `<!DOCTYPE html>
+<!--
+  LIVE OFFLINE GRAPH - no install, no internet needed. Double-click to open.
+  HOW TO MEND IT (any text editor, e.g. Notepad):
+  1. Scroll down to GRAPH_DATA below.
+  2. Edit node "label" text, "size", or "color" values; edit edge "from"/"to".
+  3. Delete a whole { ... } row to remove that node or edge.
+  4. Save and reopen - everything else keeps working.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -286,16 +336,7 @@ body {
 <div class="legend-panel">
   <div class="legend-title">Entities</div>
   <div class="legend-list" id="legendList">
-    \${legendItems
-      .map((item) => {
-        const key = item.typeKey || item.name.toUpperCase().replace(/\\s+/g, '_');
-        return \`<div class="legend-item" data-type="\${key}" id="legend-item-\${key}" style="opacity: 1;">
-          <div class="legend-dot" style="background-color: \${item.color};"></div>
-          <span class="legend-name">\${item.name}</span>
-          <span class="legend-count">\${item.count ?? ''}</span>
-        </div>\`;
-      })
-      .join('')}
+${legendHtml}
   </div>
 </div>
 
@@ -320,12 +361,33 @@ body {
 <script type="module">
 ${safeBundle}
 
-const initialNodes = ${safeJson(opts.nodes)};
-const initialEdges = ${safeJson(opts.edges)};
+const GRAPH_DATA = {
+  // NODES - edit label / size / color freely. "from"/"to" below refer to these ids.
+  nodes: ${prettyJson(nodesWithPos)},
+  // EDGES - { from: "<node id>", to: "<node id>" }.
+  edges: ${prettyJson(opts.edges)}
+};
+const initialNodes = GRAPH_DATA.nodes;
+const initialEdges = GRAPH_DATA.edges;
 const nodeInfoMap = ${safeJson(nodeInfoMap)};
 
-const nodesDS = new DataSet(initialNodes);
+${dataSetDecl}const nodesDS = new DataSet(initialNodes);
 const edgesDS = new DataSet(initialEdges);
+
+const livePhysics = {
+  enabled: true,
+  solver: 'forceAtlas2Based',
+  forceAtlas2Based: {
+    gravitationalConstant: -100,
+    centralGravity: 0.015,
+    springLength: 130,
+    springConstant: 0.04,
+    damping: 0.85,
+    avoidOverlap: 0.6
+  },
+  stabilization: { enabled: true, iterations: 300 },
+  minVelocity: 0.3
+};
 
 const options = {
   nodes: {
@@ -354,33 +416,17 @@ const options = {
     dragView: true
   },
   layout: { randomSeed: 42 },
-  physics: {
-    enabled: true,
-    solver: 'forceAtlas2Based',
-    forceAtlas2Based: {
-      gravitationalConstant: -100,
-      centralGravity: 0.015,
-      springLength: 130,
-      springConstant: 0.04,
-      damping: 0.85,
-      avoidOverlap: 0.6
-    },
-    stabilization: { enabled: true, iterations: 300 },
-    minVelocity: 0.3
-  }
+  physics: livePhysics
 };
 
 const container = document.getElementById('mynetwork');
 const net = new ${networkCtor}(container, { nodes: nodesDS, edges: edgesDS }, options);
 
-net.on('stabilizationIterationsDone', () => {
-  const scale = net.getScale();
-  net.moveTo({ scale: scale * 0.8 });
-});
+${postInit}
 
 let showLabels = true;
 let selectedId = null;
-const activeTypes = new Set(${safeJson(legendItems.map((l) => l.typeKey || l.name.toUpperCase().replace(/\s+/g, '_')))});
+const activeTypes = new Set(${safeJson(activeTypeKeys)});
 
 const lightConnectedEdges = (nodeId) => {
   edgesDS.get().forEach((e) => {
@@ -541,11 +587,12 @@ labelsBtn.addEventListener('click', () => {
 // Reset Layout
 const resetBtn = document.getElementById('resetBtn');
 resetBtn.addEventListener('click', () => {
+  net.setOptions({ physics: livePhysics });
   net.stabilize(150);
   document.getElementById('searchInput').value = '';
   selectedId = null;
   activeTypes.clear();
-  ${safeJson(legendItems.map((l) => l.typeKey || l.name.toUpperCase().replace(/\s+/g, '_')))}.forEach((k) => activeTypes.add(k));
+  ${safeJson(activeTypeKeys)}.forEach((k) => activeTypes.add(k));
   document.querySelectorAll('.legend-item').forEach((el) => {
     el.style.opacity = '1';
   });

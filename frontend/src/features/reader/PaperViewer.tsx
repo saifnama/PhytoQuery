@@ -5,7 +5,7 @@ import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap, X } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
-import { KnowledgeGraph } from './KnowledgeGraph';
+import { KnowledgeGraph, type KnowledgeGraphHandle } from './KnowledgeGraph';
 
 const SPECIES_SELECTOR = '.ent-species, mark.ner-species';
 const CHEMICAL_SELECTOR = '.ent-chemical, mark.ner-chemical';
@@ -411,6 +411,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const clickScrollTimeoutRef = useRef<number | null>(null);
   const speciesPopupRef = useRef<HTMLDivElement>(null);
   const chemicalPopupRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<KnowledgeGraphHandle | null>(null);
   const chemicalStructureSvgRef = useRef<SVGSVGElement | null>(null);
   const chemicalStructureRenderIdRef = useRef(0);
   const activeSpeciesAnchorRef = useRef<HTMLElement | null>(null);
@@ -1090,6 +1091,10 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   }, [groupedEntityMap, paperIdentifier, identifierValue]);
 
   const triggerExportGraph = useCallback(() => {
+    // Exact copy when the live graph is mounted; plain fallback otherwise.
+    if (graphRef.current?.exportSnapshot()) {
+      return;
+    }
     const nodes = graphEntities.map((e) => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
@@ -2292,7 +2297,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
               {/* Accordion + Graph share one anchored scroll region, so switching
                   tabs or expanding groups never moves surrounding content */}
               <div className="overflow-y-auto scrollbar-hide min-h-[380px] h-[min(560px,calc(100vh-260px))]">
-              {tab === 'entity' ? (
+              {tab === 'entity' && (
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   {visibleGroupedEntities.map((group) => {
                     const isExpanded = expandedGroups[group.label];
@@ -2425,15 +2430,17 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     );
                   })}
                 </div>
-              ) : (
-                <div className="flex flex-col">
-                  <KnowledgeGraph 
-                    entities={graphEntities} 
-                    paperIdentifier={paperIdentifier}
-                    entityConfig={ENTITY_GROUP_CONFIG}
-                  />
-                </div>
               )}
+              {/* Always mounted (hidden when inactive) so Export Graph snapshots the live view from any tab */}
+              <div className="flex flex-col" style={{ display: tab === 'graph' ? undefined : 'none' }}>
+                <KnowledgeGraph
+                  ref={graphRef}
+                  active={tab === 'graph'}
+                  entities={graphEntities}
+                  paperIdentifier={paperIdentifier}
+                  entityConfig={ENTITY_GROUP_CONFIG}
+                />
+              </div>
               </div>
             </div>
           )}

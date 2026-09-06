@@ -5,7 +5,15 @@
  * collapse, auto-disable physics after stabilization.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { CornersOut, CornersIn, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import type { Entity } from '../../types';
@@ -27,6 +35,8 @@ interface KnowledgeGraphProps {
   entityConfig: Record<string, { accentVar: string }>;
   /** Map of entity key -> array of paper values this entity appears in (for compare mode) */
   entityPaperMap?: Record<string, string[]>;
+  /** False when hidden (e.g. other sidebar tab): pauses physics, refits on show. */
+  active?: boolean;
 }
 
 // ─── vis-network options (single force layout, physics stays alive) ──────
@@ -89,13 +99,23 @@ function prettyType(label: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
-  entities,
-  paperIdentifier,
-  paperIdentifiers,
-  entityConfig,
-  entityPaperMap,
-}) => {
+export interface KnowledgeGraphHandle {
+  /** Snapshot the live styled graph into HTML. Returns false when nothing to export. */
+  exportSnapshot: () => boolean;
+}
+
+export const KnowledgeGraph = forwardRef<KnowledgeGraphHandle, KnowledgeGraphProps>(
+  function KnowledgeGraph(
+    {
+      entities,
+      paperIdentifier,
+      paperIdentifiers,
+      entityConfig,
+      entityPaperMap,
+      active = true,
+    },
+    ref,
+  ) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const networkRef = useRef<any>(null);
@@ -522,6 +542,25 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     };
   }, [vis, nodesData, edgesData, isFullscreen]);
 
+  // ── Visibility: pause physics while hidden (display:none), refit on show ─
+  // Lets parents keep the graph mounted for instant tab switches + snapshots.
+  useEffect(() => {
+    const net = networkRef.current;
+    if (!net) return;
+    if (!active) {
+      net.setOptions({ physics: { enabled: false } });
+      return;
+    }
+    net.setOptions({ physics: { enabled: true } });
+    net.redraw();
+    net.fit({ animation: false });
+    const scale = net.getScale();
+    net.moveTo({
+      scale: scale * 0.85,
+      animation: { duration: 300, easingFunction: 'easeInOutQuad' },
+    });
+  }, [active]);
+
   // ── Sync labels toggle ────────────────────────────────────────────────
   useEffect(() => {
     if (!nodesDS.current) return;
@@ -657,9 +696,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     });
   }, [typeColors]);
 
-  // ── HTML export (standalone, offline — no CDN) ─────────────────────────
+  // ── HTML export: live styled snapshot, frozen layout = exact copy ──────
   const downloadHTML = useCallback(() => {
-    if (!nodesDS.current || !edgesDS.current) return;
+    if (!nodesDS.current || !edgesDS.current || !networkRef.current) return false;
     const paperLabel =
       papers.length > 1 ? `${papers.length} Papers` : (paperIdentifier?.value || 'Document');
     const safeLabel =
@@ -674,6 +713,12 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     void downloadGraphHtml({
       nodes: nodesDS.current.get(),
       edges: edgesDS.current.get(),
+      positions: networkRef.current.getPositions(),
+      view: {
+        scale: networkRef.current.getScale(),
+        position: networkRef.current.getViewPosition(),
+      },
+      inactiveTypes: [...typeColors.keys()].filter((k) => !activeTypes.has(k)),
       filename: `GraphView-${safeLabel}.html`,
       title: `Knowledge Graph - ${paperLabel}`,
       subtitle: `Entities linked to ${paperLabel}`,
@@ -685,7 +730,11 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
       })),
       nodeInfo: nodeInfoObj,
     });
-  }, [typeColors, papers, paperIdentifier, nodeInfo]);
+    return true;
+  }, [typeColors, papers, paperIdentifier, nodeInfo, activeTypes]);
+
+  // Menu "Export Graph" buttons delegate here so every export is the same snapshot.
+  useImperativeHandle(ref, () => ({ exportSnapshot: () => downloadHTML() }), [downloadHTML]);
 
   // ── Prevent background scroll when fullscreen overlay is active ─────────
   useEffect(() => {
@@ -891,4 +940,5 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
       )}
     </div>
   );
-};
+  }
+);

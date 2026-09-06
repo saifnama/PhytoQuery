@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
-import { KnowledgeGraph } from '../reader/KnowledgeGraph';
+import { KnowledgeGraph, type KnowledgeGraphHandle } from '../reader/KnowledgeGraph';
 import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 import { CompareMatrix } from './CompareMatrix';
 import type { Entity } from '../../types';
@@ -99,6 +99,7 @@ const AnalysePage = () => {
   
   const exportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const graphRef = useRef<KnowledgeGraphHandle | null>(null);
 
   // close the export menu on outside click
   useEffect(() => {
@@ -388,6 +389,10 @@ const AnalysePage = () => {
 
   const exportGraph = () => {
     if (activePapers.length === 0) return;
+    // Exact copy when the live graph is mounted; plain fallback otherwise.
+    if (graphRef.current?.exportSnapshot()) {
+      return;
+    }
     const nodes: any[] = graphEntities.map(e => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
@@ -850,7 +855,7 @@ const AnalysePage = () => {
               {/* Entity Index + Graph share one anchored scroll region, so switching
                   tabs or expanding groups never moves surrounding content */}
               <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
-              {(!isCompareMode && rightSidebarMode === 'entities') ? (
+              {(!isCompareMode && rightSidebarMode === 'entities') && (
                 <>
                   <div className="px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
                     {groupedEntities.map((group) => {
@@ -968,17 +973,22 @@ const AnalysePage = () => {
                     })}
                   </div>
                 </>
-              ) : (
-                <div className="flex flex-col">
-                  <KnowledgeGraph
-                    entities={graphEntities}
+              )}
+              {/* Always mounted (hidden when inactive) so Export Graph snapshots the live view from any tab */}
+              <div
+                className="flex flex-col"
+                style={{ display: !isCompareMode && rightSidebarMode === 'entities' ? 'none' : undefined }}
+              >
+                <KnowledgeGraph
+                  ref={graphRef}
+                  active={isCompareMode || rightSidebarMode === 'graph'}
+                  entities={graphEntities}
                     paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
                     paperIdentifiers={isComparing ? paperIdentifiers : undefined}
                     entityConfig={entityConfig}
                     entityPaperMap={isComparing ? entityPaperMap : undefined}
                   />
                 </div>
-              )}
               </div>
             </div>
           </aside>
