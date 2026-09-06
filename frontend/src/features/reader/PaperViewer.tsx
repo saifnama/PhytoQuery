@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
+import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap, X } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
@@ -213,38 +214,99 @@ const buildSpeciesPopupData = (entity: Entity): SpeciesPopupData => {
   };
 };
 
-const getSpeciesPopupPosition = (anchor: HTMLElement) => {
-  const rect = anchor.getBoundingClientRect();
+const getAnchorRect = (
+  anchor: HTMLElement,
+  fallbackPoint?: { x: number; y: number }
+): { top: number; bottom: number; left: number; right: number; width: number; height: number } => {
+  if (anchor && typeof anchor.getBoundingClientRect === 'function') {
+    const r = anchor.getBoundingClientRect();
+    if (r.width > 0 || r.height > 0) {
+      return r;
+    }
+    const clientRects = anchor.getClientRects();
+    if (clientRects && clientRects.length > 0) {
+      for (let i = 0; i < clientRects.length; i++) {
+        const cr = clientRects[i];
+        if (cr.width > 0 || cr.height > 0) {
+          return cr;
+        }
+      }
+    }
+    if (anchor.parentElement) {
+      const pr = anchor.parentElement.getBoundingClientRect();
+      if (pr.width > 0 || pr.height > 0) {
+        return pr;
+      }
+    }
+  }
+  if (fallbackPoint && fallbackPoint.x > 0 && fallbackPoint.y > 0) {
+    return {
+      top: fallbackPoint.y - 10,
+      bottom: fallbackPoint.y + 10,
+      left: fallbackPoint.x - 20,
+      right: fallbackPoint.x + 20,
+      width: 40,
+      height: 20,
+    };
+  }
+  return { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
+};
+
+const getSpeciesPopupPosition = (
+  anchor: HTMLElement,
+  fallbackPoint?: { x: number; y: number },
+  previousPos?: { top: number; left: number }
+): { top: number; left: number } => {
+  const rect = getAnchorRect(anchor, fallbackPoint);
   const margin = 12;
-  const fitsBelow = rect.bottom + SPECIES_POPUP_ESTIMATED_HEIGHT + margin <= window.innerHeight;
-  const top = fitsBelow
-    ? rect.bottom + 8
-    : Math.max(margin, rect.top - SPECIES_POPUP_ESTIMATED_HEIGHT - 8);
-  const centeredLeft = rect.left + rect.width / 2 - SPECIES_POPUP_WIDTH / 2;
+  const popupWidth = SPECIES_POPUP_WIDTH;
+
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0) {
+    if (previousPos) return previousPos;
+  }
+
+  // Always prefer placing directly BELOW the clicked entity word
+  let top = rect.bottom + 8;
+
+  // Only flip above if there is very little space below AND ample space above
+  const spaceBelow = window.innerHeight - rect.bottom - margin;
+  if (spaceBelow < 140 && rect.top - margin > 180) {
+    top = Math.max(margin, rect.top - SPECIES_POPUP_ESTIMATED_HEIGHT - 8);
+  } else if (top > window.innerHeight - 80) {
+    top = Math.max(margin, window.innerHeight - 80);
+  }
+
+  const centeredLeft = rect.left + rect.width / 2 - popupWidth / 2;
   const left = Math.max(
     margin,
-    Math.min(centeredLeft, window.innerWidth - SPECIES_POPUP_WIDTH - margin)
+    Math.min(centeredLeft, window.innerWidth - popupWidth - margin)
   );
 
   return { top, left };
 };
 
-const getChemicalPopupPosition = (anchor: HTMLElement) => {
-  const rect = anchor.getBoundingClientRect();
+const getChemicalPopupPosition = (
+  anchor: HTMLElement,
+  fallbackPoint?: { x: number; y: number },
+  previousPos?: { top: number; left: number }
+): { top: number; left: number } => {
+  const rect = getAnchorRect(anchor, fallbackPoint);
   const margin = 12;
   const popupWidth = 320;
 
-  // Prefer placing below the clicked word, matching species popup
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0) {
+    if (previousPos) return previousPos;
+  }
+
+  // Always prefer placing directly BELOW the clicked entity word
+  let top = rect.bottom + 8;
+
+  // Only flip above if there is very little space below AND ample space above
   const spaceBelow = window.innerHeight - rect.bottom - margin;
-  const spaceAbove = rect.top - margin;
-
-  // Place below unless there is very little room below (< 140px) AND significantly more room above
-  const placeBelow = spaceBelow >= 140 || spaceBelow >= spaceAbove;
-  let top = placeBelow ? rect.bottom + 8 : Math.max(margin, rect.top - 330);
-
-  // Guard against bottom of viewport
-  if (placeBelow && top + 320 > window.innerHeight - margin) {
-    top = Math.max(margin, Math.min(top, window.innerHeight - margin - 330));
+  if (spaceBelow < 160 && rect.top - margin > 300) {
+    top = Math.max(margin, rect.top - 330);
+  } else if (top > window.innerHeight - 80) {
+    top = Math.max(margin, window.innerHeight - 80);
   }
 
   const centeredLeft = rect.left + rect.width / 2 - popupWidth / 2;
@@ -363,9 +425,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   const exportRef = useRef<HTMLDivElement>(null);
   const [showHL, setShowHL] = useState(true);
 
-  const [nav, setNav] = useState<{ name: string; idx: number; total: number; aliases?: string[] } | null>(null);
-  const mentionsRef = useRef<HTMLElement[]>([]);
-
   // A map of lowercase entity name/aliases to its uppercase category group
   const entityToGroupMap = useMemo(() => {
     const map = new Map<string, EntityGroupLabel>();
@@ -480,7 +539,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     return lookup;
   }, [entities]);
 
-  const openSpeciesPopup = useCallback((target: HTMLElement) => {
+  const openSpeciesPopup = useCallback((target: HTMLElement, event?: MouseEvent) => {
     const text = stripHtml(target.textContent);
     if (!text) return;
     
@@ -508,11 +567,12 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       };
     }
 
+    const fallbackPoint = event ? { x: event.clientX, y: event.clientY } : undefined;
     activeSpeciesAnchorRef.current = target;
     setActiveSpeciesPopup({
       species,
       anchorText: text,
-      position: getSpeciesPopupPosition(target),
+      position: getSpeciesPopupPosition(target, fallbackPoint),
     });
   }, [speciesLookup]);
 
@@ -667,82 +727,6 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     });
   }, [getInteractiveRoots, speciesLookup, chemicalLookup]);
 
-  const scrollToMention = useCallback((el: HTMLElement) => {
-    if (!el || !el.isConnected) return;
-
-    if (!showHL) {
-      setShowHL(true);
-    }
-
-    isClickScrollingRef.current = true;
-    if (clickScrollTimeoutRef.current) window.clearTimeout(clickScrollTimeoutRef.current);
-    clickScrollTimeoutRef.current = window.setTimeout(() => {
-      isClickScrollingRef.current = false;
-    }, 800);
-
-    const scrollContainer = document.getElementById('main-content-display');
-    if (scrollContainer) {
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const elRect = el.getBoundingClientRect();
-      const relativeTop = elRect.top - containerRect.top;
-      // Center the element nicely in the visible container viewport
-      const targetScrollTop = scrollContainer.scrollTop + relativeTop - (scrollContainer.clientHeight / 2) + (elRect.height / 2);
-      scrollContainer.scrollTo({
-        top: Math.max(0, targetScrollTop),
-        behavior: 'smooth',
-      });
-    } else {
-      const yOffset = -160;
-      const y = el.getBoundingClientRect().top + window.scrollY + yOffset;
-      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
-    }
-
-    document.querySelectorAll('.entity-mention-active, .entity-flash').forEach((e) => {
-      e.classList.remove('entity-mention-active', 'entity-flash');
-    });
-    void el.offsetWidth;
-    el.classList.add('entity-mention-active', 'entity-flash');
-    setTimeout(() => {
-      el.classList.remove('entity-flash');
-    }, 1600);
-  }, [showHL]);
-
-  const activateEntity = useCallback((name: string, aliases?: string[]) => {
-    const key = name.toLowerCase().replace(/\s+/g, ' ');
-    const group = entityToGroupMap.get(key);
-    if (group) {
-      setExpandedGroups((prev) => ({ ...prev, [group]: true }));
-    }
-
-    // If clicking the currently active entity, cycle to its next mention
-    if (nav && nav.name.toLowerCase() === name.toLowerCase()) {
-      let els = mentionsRef.current;
-      if (!els || els.length === 0 || !els.some((n) => n.isConnected)) {
-        els = findMentionsForEntity(name, aliases);
-        mentionsRef.current = els;
-      }
-      els = (els || []).filter((n) => n.isConnected);
-      if (els.length > 0) {
-        const total = els.length;
-        const nextIdx = (nav.idx + 1) % total;
-        setNav({ name, idx: nextIdx, total, aliases });
-        scrollToMention(els[nextIdx]);
-        return;
-      }
-    }
-
-    // First click or switching entities: jump to first mention (idx = 0)
-    const els = findMentionsForEntity(name, aliases);
-    mentionsRef.current = els;
-
-    if (els.length > 0) {
-      setNav({ name, idx: 0, total: els.length, aliases });
-      scrollToMention(els[0]);
-    } else {
-      setNav(null);
-    }
-  }, [nav, entityToGroupMap, findMentionsForEntity, scrollToMention]);
-
   const pulseEntity = useCallback((name: string, aliases?: string[]) => {
     const key = name.toLowerCase().replace(/\s+/g, ' ');
     const group = entityToGroupMap.get(key);
@@ -761,7 +745,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     });
   }, []);
 
-  const openChemicalPopup = useCallback((target: HTMLElement) => {
+  const openChemicalPopup = useCallback((target: HTMLElement, event?: MouseEvent) => {
     const requestId = chemicalPopupRequestIdRef.current + 1;
     chemicalPopupRequestIdRef.current = requestId;
     activeChemicalAnchorRef.current = target;
@@ -791,16 +775,14 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         primaryName: text,
       };
     }
-    if (requestId !== chemicalPopupRequestIdRef.current || !target.isConnected) {
-      return;
-    }
 
+    const fallbackPoint = event ? { x: event.clientX, y: event.clientY } : undefined;
     setIsRenderingChemicalStructure(!!chemical.smiles);
     setChemicalStructureError(false);
     setActiveChemicalPopup({
       chemical,
-      anchorText: stripHtml(target.textContent),
-      position: getChemicalPopupPosition(target),
+      anchorText: text,
+      position: getChemicalPopupPosition(target, fallbackPoint),
     });
   }, [chemicalLookup]);
 
@@ -873,7 +855,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         chemicalStructureRenderIdRef.current += 1;
       }
     };
-  }, [activeChemicalPopup]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChemicalPopup?.chemical.smiles, activeChemicalPopup?.chemical.primaryName]);
 
   // Group entities by label and calculate true frequency from frontend HTML
   const groupedEntityMap = useMemo(() => {
@@ -1093,13 +1076,16 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         );
       }
     }
-    const csv = `# ${paperIdentifier?.type?.toUpperCase() || 'PAPER'}: ${identifierValue}\nType,Name,Count,Variants\n${rows.join('\n')}`;
+    const doiCell = escape(`${paperIdentifier?.type?.toUpperCase() || 'PAPER'}:${identifierValue}`);
+    const csv = `DOI,Type,Name,Count,Variants\n${rows.map((row) => `${doiCell},${row}`).join('\n')}`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `entities-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.csv`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   }, [groupedEntityMap, paperIdentifier, identifierValue]);
 
@@ -1107,30 +1093,20 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
     const nodes = graphEntities.map((e) => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
-      type: e.label,
-      count: e.count || 1
+      group: e.label,
     }));
     const edges = graphEntities.map((e) => ({
       from: `paper-${identifierValue}`,
       to: `${e.label}-${e.text.toLowerCase()}`
     }));
-    const graphData = {
-      paper: {
-        type: paperIdentifier?.type,
-        value: identifierValue,
-        title: title
-      },
-      nodes,
-      edges
-    };
-    const blob = new Blob([JSON.stringify(graphData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `graph-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [graphEntities, paperIdentifier, identifierValue, title]);
+    void downloadGraphHtml({
+      nodes: [{ id: `paper-${identifierValue}`, label: identifierValue, group: 'PAPER' }, ...nodes],
+      edges,
+      filename: `graph-${identifierValue.replace(/[^a-zA-Z0-9.-]/g, '_')}.html`,
+      title: `Knowledge Graph - ${identifierValue}`,
+      subtitle: `Entities linked to ${identifierValue}`,
+    });
+  }, [graphEntities, identifierValue]);
 
   useEffect(() => {
     const roots = getInteractiveRoots();
@@ -1178,7 +1154,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       if (!showHL) return;
       const clickedEl = event.target as HTMLElement;
       
-      const targetEl = clickedEl.closest(SPECIES_SELECTOR) as HTMLElement | null;
+      const targetEl = (clickedEl.closest(SPECIES_SELECTOR) || clickedEl.closest('.ent-species')) as HTMLElement | null;
       if (!targetEl) {
         return;
       }
@@ -1194,11 +1170,15 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         return;
       }
 
-      openSpeciesPopup(targetEl);
+      if (activeChemicalPopup) {
+        closeChemicalPopup();
+      }
+
+      openSpeciesPopup(targetEl, event);
     };
 
     const handleSpeciesKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest(SPECIES_SELECTOR) as HTMLElement | null;
+      const target = ((event.target as HTMLElement).closest(SPECIES_SELECTOR) || (event.target as HTMLElement).closest('.ent-species')) as HTMLElement | null;
       if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
@@ -1224,53 +1204,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         container.removeEventListener('keydown', handleSpeciesKeyDown);
       });
     };
-  }, [activeSpeciesPopup, closeSpeciesPopup, getInteractiveRoots, openSpeciesPopup, speciesLookup, showHL]);
-
-  useEffect(() => {
-    if (!activeSpeciesPopup) return;
-
-    const repositionPopup = () => {
-      const anchor = activeSpeciesAnchorRef.current;
-      if (!anchor) return;
-
-      const nextPosition = getSpeciesPopupPosition(anchor);
-      setActiveSpeciesPopup((current) => {
-        if (!current) return current;
-        if (current.position.top === nextPosition.top && current.position.left === nextPosition.left) {
-          return current;
-        }
-        return { ...current, position: nextPosition };
-      });
-    };
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (speciesPopupRef.current?.contains(target)) return;
-      if (activeSpeciesAnchorRef.current?.contains(target)) return;
-      closeSpeciesPopup();
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeSpeciesPopup();
-      }
-    };
-
-    const scrollContainer = document.getElementById('main-content-display');
-    window.addEventListener('resize', repositionPopup);
-    window.addEventListener('scroll', repositionPopup, true);
-    scrollContainer?.addEventListener('scroll', repositionPopup, { passive: true });
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleEscape);
-
-    return () => {
-      window.removeEventListener('resize', repositionPopup);
-      window.removeEventListener('scroll', repositionPopup, true);
-      scrollContainer?.removeEventListener('scroll', repositionPopup);
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [activeSpeciesPopup, closeSpeciesPopup]);
+  }, [activeSpeciesPopup, activeChemicalPopup, closeSpeciesPopup, closeChemicalPopup, getInteractiveRoots, openSpeciesPopup, speciesLookup, showHL]);
 
   // Chemical popup - add data attributes to highlighted chemicals
   useEffect(() => {
@@ -1320,7 +1254,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       if (!showHL) return;
       const clickedEl = event.target as HTMLElement;
       
-      const targetEl = clickedEl.closest(CHEMICAL_SELECTOR) as HTMLElement | null;
+      const targetEl = (clickedEl.closest(CHEMICAL_SELECTOR) || clickedEl.closest('.ent-chemical')) as HTMLElement | null;
       if (!targetEl) {
         return;
       }
@@ -1336,11 +1270,15 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         return;
       }
 
-      openChemicalPopup(targetEl);
+      if (activeSpeciesPopup) {
+        closeSpeciesPopup();
+      }
+
+      openChemicalPopup(targetEl, event);
     };
 
     const handleChemicalKeyDown = (event: KeyboardEvent) => {
-      const target = (event.target as HTMLElement).closest(CHEMICAL_SELECTOR) as HTMLElement | null;
+      const target = ((event.target as HTMLElement).closest(CHEMICAL_SELECTOR) || (event.target as HTMLElement).closest('.ent-chemical')) as HTMLElement | null;
       if (!target || !roots.some((root) => root.contains(target))) return;
 
       if (event.key === 'Enter' || event.key === ' ') {
@@ -1366,57 +1304,97 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
         container.removeEventListener('keydown', handleChemicalKeyDown);
       });
     };
-  }, [activeChemicalPopup, closeChemicalPopup, getInteractiveRoots, openChemicalPopup, chemicalLookup, showHL]);
+  }, [activeChemicalPopup, activeSpeciesPopup, closeChemicalPopup, closeSpeciesPopup, getInteractiveRoots, openChemicalPopup, chemicalLookup, showHL]);
 
+  // Reposition active popups on scroll/resize and handle outside click / Escape
   useEffect(() => {
-    const repositionPopup = () => {
-      const anchor = activeChemicalAnchorRef.current;
-      if (!anchor || !activeChemicalPopup) return;
+    if (!activeSpeciesPopup && !activeChemicalPopup) return;
 
-      const nextPosition = getChemicalPopupPosition(anchor);
-      setActiveChemicalPopup((current) => {
-        if (!current) return current;
-        return { ...current, position: nextPosition };
-      });
+    const repositionPopups = () => {
+      if (activeSpeciesPopup && activeSpeciesAnchorRef.current) {
+        const anchor = activeSpeciesAnchorRef.current;
+        if (!anchor.isConnected) {
+          closeSpeciesPopup();
+          return;
+        }
+        const rect = anchor.getBoundingClientRect();
+        // If scrolled past top header (y < 48) or completely below window, close popup
+        if (rect.bottom < 48 || rect.top > window.innerHeight) {
+          closeSpeciesPopup();
+          return;
+        }
+        const nextPos = getSpeciesPopupPosition(anchor, undefined, activeSpeciesPopup.position);
+        setActiveSpeciesPopup((cur) => {
+          if (!cur) return cur;
+          if (cur.position.top === nextPos.top && cur.position.left === nextPos.left) return cur;
+          return { ...cur, position: nextPos };
+        });
+      }
+      if (activeChemicalPopup && activeChemicalAnchorRef.current) {
+        const anchor = activeChemicalAnchorRef.current;
+        if (!anchor.isConnected) {
+          closeChemicalPopup();
+          return;
+        }
+        const rect = anchor.getBoundingClientRect();
+        // If scrolled past top header (y < 48) or completely below window, close popup
+        if (rect.bottom < 48 || rect.top > window.innerHeight) {
+          closeChemicalPopup();
+          return;
+        }
+        const nextPos = getChemicalPopupPosition(anchor, undefined, activeChemicalPopup.position);
+        setActiveChemicalPopup((cur) => {
+          if (!cur) return cur;
+          if (cur.position.top === nextPos.top && cur.position.left === nextPos.left) return cur;
+          return { ...cur, position: nextPos };
+        });
+      }
     };
 
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      const activeAnchor = activeChemicalAnchorRef.current;
-      if (!activeAnchor) return;
-      if (chemicalPopupRef.current?.contains(target)) return;
-      if (activeAnchor.contains(target)) return;
-      closeChemicalPopup();
+      if (activeSpeciesPopup) {
+        if (!speciesPopupRef.current?.contains(target) && !activeSpeciesAnchorRef.current?.contains(target)) {
+          closeSpeciesPopup();
+        }
+      }
+      if (activeChemicalPopup) {
+        if (!chemicalPopupRef.current?.contains(target) && !activeChemicalAnchorRef.current?.contains(target)) {
+          closeChemicalPopup();
+        }
+      }
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        closeChemicalPopup();
+        if (activeSpeciesPopup) closeSpeciesPopup();
+        if (activeChemicalPopup) closeChemicalPopup();
       }
     };
 
     const scrollContainer = document.getElementById('main-content-display');
-    window.addEventListener('resize', repositionPopup);
-    window.addEventListener('scroll', repositionPopup, true);
-    scrollContainer?.addEventListener('scroll', repositionPopup, { passive: true });
+    window.addEventListener('resize', repositionPopups);
+    window.addEventListener('scroll', repositionPopups, true);
+    scrollContainer?.addEventListener('scroll', repositionPopups, { passive: true });
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
 
     return () => {
-      window.removeEventListener('resize', repositionPopup);
-      window.removeEventListener('scroll', repositionPopup, true);
-      scrollContainer?.removeEventListener('scroll', repositionPopup);
+      window.removeEventListener('resize', repositionPopups);
+      window.removeEventListener('scroll', repositionPopups, true);
+      scrollContainer?.removeEventListener('scroll', repositionPopups);
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [activeChemicalPopup, closeChemicalPopup]);
+  }, [activeSpeciesPopup, activeChemicalPopup, closeSpeciesPopup, closeChemicalPopup]);
 
-  // Unified effect to dynamically label and bind click events to all inline highlight tags
+  // Unified effect to label inline highlight tags — only chemical + species
+  // are clickable in the paper (popups); everything else is hover-only.
   useEffect(() => {
     const container = htmlContainerRef.current;
     const titleContainer = titleContainerRef.current;
 
-    if (!isExtracted) return;
+    if (!isExtracted && (!entities || entities.length === 0)) return;
 
     const selector = [
       '.ent-species, mark.ner-species',
@@ -1439,47 +1417,21 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
       nodes.push(...Array.from(titleContainer.querySelectorAll<HTMLElement>(selector)));
     }
 
-    const clickHandlers: { node: HTMLElement; handler: (e: MouseEvent) => void }[] = [];
-
     nodes.forEach((node) => {
       node.removeAttribute('title');
       const name = node.textContent?.trim();
       if (!name) return;
-      
+
       const lowerName = name.toLowerCase().replace(/\s+/g, ' ');
       node.setAttribute('data-entity', lowerName);
-      node.style.cursor = 'pointer';
-
-      const handler = () => {
-        if (!showHL) return;
-        if (node.closest(SPECIES_SELECTOR) || node.closest(CHEMICAL_SELECTOR)) {
-          return;
-        }
-        activateEntity(name);
-      };
-      
-      node.addEventListener('click', handler);
-      clickHandlers.push({ node, handler });
+      const interactive = node.closest(SPECIES_SELECTOR) || node.closest(CHEMICAL_SELECTOR);
+      node.style.cursor = interactive ? 'pointer' : 'default';
     });
-
-    return () => {
-      clickHandlers.forEach(({ node, handler }) => {
-        if (node.isConnected) {
-          node.removeEventListener('click', handler);
-        }
-      });
-    };
   }, [
     html,
     isExtracted,
     entities,
-    activateEntity,
     tab,
-    showHL,
-    nav,
-    expandedGroups,
-    activeSpeciesPopup,
-    activeChemicalPopup
   ]);
 
   // Helper to reliably find any section heading element by ID or text content
@@ -2291,7 +2243,9 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                 </div>
               </div>
 
-              {/* Accordion or KnowledgeGraph */}
+              {/* Accordion + Graph share one anchored scroll region, so switching
+                  tabs or expanding groups never moves surrounding content */}
+              <div className="overflow-y-auto scrollbar-hide min-h-[380px] h-[min(560px,calc(100vh-260px))]">
               {tab === 'entity' ? (
                 <div style={{ display: "flex", flexDirection: "column" }}>
                   {visibleGroupedEntities.map((group) => {
@@ -2348,7 +2302,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                             ) : (
                               <span className="relative flex items-center justify-center min-w-[24px] h-[20px]">
                                 {/* Entity Count: visible without cursor, fades out on hover */}
-                                <span className="transition-all duration-200 text-[13px] font-semibold text-on-surface-variant group-hover:opacity-0 group-hover:scale-75" style={{ fontFamily: "var(--font-google-sans)" }}>
+                                <span className="transition-all duration-200 text-[13px] font-semibold group-hover:opacity-0 group-hover:scale-75" style={{ color: "var(--on-surface)", fontFamily: "var(--font-google-sans)" }}>
                                   {group.termCount}
                                 </span>
                                 
@@ -2361,31 +2315,37 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                           </span>
                         </button>
 
-                        {/* Values expanded container */}
-                        {isExpanded && !empty && (
+                        {/* Values expanded container — animated open/close */}
+                        {!empty && (
+                          <div
+                            className="grid transition-[grid-template-rows,opacity] duration-300 ease-out"
+                            style={{
+                              gridTemplateRows: isExpanded ? '1fr' : '0fr',
+                              opacity: isExpanded ? 1 : 0,
+                            }}
+                          >
+                          <div className="min-h-0 overflow-hidden">
                           <div style={{ padding: "0 4px 12px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
                             {group.visibleItems.map((ent, eIdx) => {
                               const name = ent.text;
-                              const isNavigated = nav && nav.name.toLowerCase() === name.toLowerCase();
 
                               return (
                                 <div 
                                   key={eIdx}
-                                  onClick={() => activateEntity(name, ent.aliases)}
                                   className="ent-row group/item"
                                   style={{
                                     display: "flex", alignItems: "center", gap: 10,
-                                    padding: "7px 10px", borderRadius: 7, cursor: "pointer",
-                                    transition: "all .12s ease",
-                                    background: isNavigated ? "var(--surface-c)" : "transparent",
+                                    padding: "7px 10px", borderRadius: 7, cursor: "default",
+                                    transition: "background .12s ease",
+                                    background: "transparent",
                                     fontFamily: "var(--font-google-sans)"
                                   }}
                                   onMouseEnter={(e) => {
-                                    if (!isNavigated) e.currentTarget.style.background = "var(--surface-low)";
+                                    e.currentTarget.style.background = "var(--surface-low)";
                                     pulseEntity(name, ent.aliases);
                                   }}
                                   onMouseLeave={(e) => {
-                                    if (!isNavigated) e.currentTarget.style.background = "transparent";
+                                    e.currentTarget.style.background = "transparent";
                                     clearPulse();
                                   }}
                                 >
@@ -2399,32 +2359,20 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                                     color: "var(--on-surface)",
                                     fontStyle: group.label === "SPECIES" ? "italic" : "normal",
                                     fontFamily: "var(--font-google-sans)",
-                                    fontWeight: isNavigated ? 600 : 400,
+                                    fontWeight: 400,
                                   }}>
                                     {name}
                                   </span>
 
-                                  {/* Clean active indicator or item count */}
-                                  {isNavigated ? (
-                                    <span
-                                      className="select-none font-semibold"
-                                      style={{
-                                        fontSize: 12,
-                                        color: accentColor,
-                                        fontFamily: "var(--font-google-sans)",
-                                        letterSpacing: "0.02em"
-                                      }}
-                                    >
-                                      {nav.idx + 1}/{nav.total}
-                                    </span>
-                                  ) : (
-                                    <span style={{ fontSize: 12.5, color: "var(--on-surface-variant)", fontFamily: "var(--font-google-sans)", fontWeight: 500 }}>
-                                      {ent.count}
-                                    </span>
-                                  )}
+                                  {/* Total count in default black color */}
+                                  <span style={{ fontSize: 12.5, color: "var(--on-surface)", fontFamily: "var(--font-google-sans)", fontWeight: 500 }}>
+                                    {ent.count}
+                                  </span>
                                 </div>
                               );
                             })}
+                          </div>
+                          </div>
                           </div>
                         )}
                       </div>
@@ -2432,7 +2380,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   })}
                 </div>
               ) : (
-                <div className="flex-1 min-h-[400px]">
+                <div className="flex flex-col">
                   <KnowledgeGraph 
                     entities={graphEntities} 
                     paperIdentifier={paperIdentifier}
@@ -2440,6 +2388,7 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                   />
                 </div>
               )}
+              </div>
             </div>
           )}
 

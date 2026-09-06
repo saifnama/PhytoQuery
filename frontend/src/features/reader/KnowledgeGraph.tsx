@@ -6,8 +6,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
+import { CornersOut, CornersIn, DownloadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import type { Entity } from '../../types';
+import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 
 // vis-network's TS surface is overly strict for our loose option objects.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,6 +93,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
   entityPaperMap,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const networkRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -570,21 +572,44 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     }
   }, [search, nodesData]);
 
-  // ── Resize on fullscreen toggle ───────────────────────────────────────
+  // ── Refit after entering/exiting fullscreen (post-paint sizing) ───────
   useEffect(() => {
     if (!networkRef.current) return;
-    setTimeout(() => {
-      networkRef.current.redraw();
-      networkRef.current.fit({ animation: false });
-      setTimeout(() => {
-        const scale = networkRef.current.getScale();
-        networkRef.current.moveTo({
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const net = networkRef.current;
+        if (!net) return;
+        net.redraw();
+        net.fit({ animation: false });
+        const scale = net.getScale();
+        net.moveTo({
           scale: scale * 0.85,
           animation: { duration: 300, easingFunction: 'easeInOutQuad' },
         });
-      }, 10);
-    }, 50);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
   }, [isFullscreen]);
+
+  // ── True fullscreen via the Fullscreen API (Esc handled by browser) ───
+  // ponytail: native API — no z-index fights, no portal, no remount.
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+    } else {
+      void wrapperRef.current?.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   // ── Helpers ───────────────────────────────────────────────────────────
   const toggleType = useCallback((type: string) => {
@@ -609,59 +634,26 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     });
   }, [typeColors]);
 
-  // ── HTML export (standalone, vis-network from CDN inside the file) ────
+  // ── HTML export (standalone, offline — no CDN) ─────────────────────────
   const downloadHTML = useCallback(() => {
     if (!nodesDS.current || !edgesDS.current) return;
-    const nodesJSON = JSON.stringify(nodesDS.current.get());
-    const edgesJSON = JSON.stringify(edgesDS.current.get());
-    const legendItemsHTML = [...typeColors.entries()]
-      .map(
-        ([, info]) =>
-          `<div class="legend-item"><div class="legend-color" style="background-color:${info.color}"></div><div class="legend-label">${info.name}</div></div>`,
-      )
-      .join('');
     const paperLabel =
       papers.length > 1 ? `${papers.length} Papers` : (paperIdentifier?.value || 'Document');
-
-    const htmlContent = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Knowledge Graph - ${paperLabel}</title>
-<link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
-<style>
-  body{margin:0;padding:0;overflow:hidden;font-family:'Google Sans',sans-serif;background:#f8fafc}
-  #mynetwork{width:100vw;height:100vh}
-  .header{position:absolute;top:16px;left:16px;background:white;padding:12px 16px;border-radius:8px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);border:1px solid #e2e8f0;pointer-events:none;font-family:'Google Sans',sans-serif}
-  .title{font-size:14px;font-weight:bold;color:#1e293b;margin:0}
-  .subtitle{font-size:11px;color:#64748b;margin-top:4px}
-  .legend{position:absolute;top:80px;left:16px;background:rgba(255,255,255,0.9);padding:10px;border-radius:8px;border:1px solid #e2e8f0;pointer-events:none;max-width:200px;font-family:'Google Sans',sans-serif}
-  .legend-item{display:flex;align-items:center;gap:8px;margin-bottom:4px}
-  .legend-color{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-  .legend-label{font-size:11px;font-weight:500;color:#334155}
-</style></head><body>
-<div class="header"><h1 class="title">Graph View</h1><div class="subtitle">Entities linked to ${paperLabel}</div></div>
-${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
-<div id="mynetwork"></div>
-<script>
-  const data = { nodes: ${nodesJSON}, edges: ${edgesJSON} };
-  const options = {
-    physics: { solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -100, centralGravity: 0.015, springLength: 200, springConstant: 0.04, damping: 0.85, avoidOverlap: 0.6 }, minVelocity: 0.75 },
-    interaction: { hover: true, tooltipDelay: 100 }
-  };
-  const net = new vis.Network(document.getElementById('mynetwork'), data, options);
-  net.once("stabilizationIterationsDone", () => net.moveTo({ scale: net.getScale() * 0.8 }));
-</script></body></html>`;
-
-    const blob = new Blob([htmlContent], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const safeLabel =
       papers.length > 1
         ? `compare-${papers.length}-papers`
         : paperIdentifier?.value?.replace(/[/\\?%*:|"<>]/g, '-') || 'export';
-    a.download = `GraphView-${safeLabel}.html`;
-    a.click();
-    URL.revokeObjectURL(url);
+    void downloadGraphHtml({
+      nodes: nodesDS.current.get(),
+      edges: edgesDS.current.get(),
+      filename: `GraphView-${safeLabel}.html`,
+      title: `Knowledge Graph - ${paperLabel}`,
+      subtitle: `Entities linked to ${paperLabel}`,
+      legend: [...typeColors.entries()].map(([, info]) => ({
+        color: info.color,
+        name: info.name,
+      })),
+    });
   }, [typeColors, papers, paperIdentifier]);
 
   const hasPaper = paperIdentifier || (paperIdentifiers && paperIdentifiers.length > 0);
@@ -674,27 +666,20 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
     <div className="flex flex-col">
 
       <div
+        ref={wrapperRef}
         className={
           isFullscreen
-            ? 'fixed inset-0 z-[100] bg-on-surface/30 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8 transition-all duration-200'
+            ? 'bg-background w-screen h-[100dvh] flex flex-col overflow-hidden'
             : 'relative bg-background border border-border rounded-xl overflow-hidden shadow-sm flex flex-col transition-all duration-200'
         }
       >
-        {isFullscreen && (
-          <div
-            className="absolute inset-0 cursor-pointer"
-            onClick={() => setIsFullscreen(false)}
-          />
-        )}
-
         <div
           className={
             isFullscreen
-              ? 'relative bg-background w-full max-w-5xl h-[85vh] rounded-2xl shadow-2xl border border-border flex flex-col overflow-hidden z-10'
+              ? 'relative w-full h-full flex flex-col overflow-hidden'
               : 'relative w-full flex flex-col'
           }
         >
-          {/* Top control bar */}
           {/* Top control bar */}
           <div className="absolute top-3 right-3 z-20 flex gap-2 items-center">
             {isFullscreen && (
@@ -739,45 +724,45 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
             </button>
             <button
               type="button"
-              onClick={() => setIsFullscreen(!isFullscreen)}
+              onClick={toggleFullscreen}
               className="p-2 text-on-surface-muted hover:text-on-surface-variant hover:bg-surface-c rounded-lg transition-colors cursor-pointer focus:outline-none flex items-center justify-center"
-              aria-label={isFullscreen ? 'Minimize' : 'Expand'}
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
             >
               {isFullscreen ? (
-                <ArrowDownLeft weight="bold" size={20} />
+                <CornersIn weight="bold" size={20} />
               ) : (
-                <ArrowUpRight weight="bold" size={20} />
+                <CornersOut weight="bold" size={20} />
               )}
             </button>
           </div>
 
-          {/* Legend with counts — top-left, fullscreen only */}
+          {/* Legend with counts — borderless, fullscreen only */}
           {isFullscreen && presentTypes.length > 0 && (
             <div
-              className="absolute top-4 left-4 z-10 bg-background/95 backdrop-blur-md border border-border rounded-xl p-4 shadow-lg min-w-[210px]"
+              className="absolute top-4 left-4 z-10 min-w-[240px] p-2"
               style={{ fontFamily: 'var(--font-google-sans)' }}
             >
-              <div className="text-[11.5px] font-bold uppercase tracking-[0.12em] text-on-surface-variant mb-2.5 px-1">
+              <div className="text-[12px] font-bold uppercase tracking-[0.12em] text-on-surface-variant mb-2 px-2">
                 Entities
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {presentTypes.map(([type, info]) => {
                   const on = activeTypes.has(type);
                   return (
                     <div
                       key={type}
                       onClick={() => toggleType(type)}
-                      className="flex items-center gap-2.5 px-1.5 py-1 rounded-md cursor-pointer transition-all hover:bg-surface-c/70"
+                      className="flex items-center gap-3 px-2 py-2 rounded-md cursor-pointer transition-all hover:bg-surface-c/70"
                       style={{ opacity: on ? 1 : 0.3 }}
                     >
                       <div
-                        className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                        className="w-3 h-3 rounded-full flex-shrink-0"
                         style={{ background: info.color }}
                       />
-                      <span className="text-[13px] font-medium text-on-surface flex-1 truncate">
+                      <span className="text-[14px] font-medium text-on-surface flex-1 truncate">
                         {info.name}
                       </span>
-                      <span className="text-[12px] font-semibold text-on-surface-variant">
+                      <span className="text-[13px] font-semibold text-on-surface-variant tabular-nums">
                         {info.count}
                       </span>
                     </div>
@@ -841,7 +826,7 @@ ${typeColors.size > 0 ? `<div class="legend">${legendItemsHTML}</div>` : ''}
           {/* Graph container */}
           <div
             ref={containerRef}
-            className={`w-full ${isFullscreen ? 'h-full flex-1' : 'h-[300px]'} cursor-grab active:cursor-grabbing bg-transparent`}
+            className={`w-full ${isFullscreen ? 'flex-1 min-h-0' : 'h-[300px]'} cursor-grab active:cursor-grabbing bg-transparent`}
           />
         </div>
       </div>

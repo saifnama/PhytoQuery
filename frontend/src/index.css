@@ -815,10 +815,15 @@ input, textarea {
 /* â”€â”€ Export option (paper-page modal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .export-opt {
     display: flex;
+    width: 100%;
+    box-sizing: border-box;
     align-items: center;
     gap: 12px;
     padding: 10px 12px;
+    border: none;
     border-radius: var(--radius-md);
+    background: transparent;
+    text-align: left;
     cursor: pointer;
     font-family: var(--font-google-sans);
     font-size: 13px;
@@ -826,6 +831,11 @@ input, textarea {
     transition: background 140ms ease;
 }
 .export-opt:hover { background: var(--surface-c); }
+@media (hover: none) {
+    /* Touch: tap must not leave a stuck hover pill behind */
+    .export-opt:hover { background: transparent; }
+    .export-opt:active { background: var(--surface-c); }
+}
 
 /* ── Entity flash / pulse (search results hover & navigation) ────────────── */
 .entity-flash {

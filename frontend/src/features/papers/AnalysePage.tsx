@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { Plus, X, TrashSimple, FileArrowUp, ListNumbers, Graph, SidebarSimple, DotsThreeVertical, ChartBar, CaretDown, CaretUp, SpinnerGap } from '@phosphor-icons/react';
 import { KnowledgeGraph } from '../reader/KnowledgeGraph';
+import { downloadGraphHtml } from '../../utils/exportGraphHtml';
 import { CompareMatrix } from './CompareMatrix';
 import type { Entity } from '../../types';
 import { useShallow } from 'zustand/react/shallow';
@@ -379,7 +380,9 @@ const AnalysePage = () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${filename}.csv`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   };
 
@@ -388,13 +391,12 @@ const AnalysePage = () => {
     const nodes: any[] = graphEntities.map(e => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
-      type: e.label,
-      count: (e as any).count || 1
+      group: e.label,
     }));
     const edges: { from: string, to: string }[] = [];
     activePapers.forEach(paper => {
       const pid = `paper-${paper.doi || paper.id}`;
-      nodes.push({ id: pid, label: paper.name, type: 'PAPER', count: 1 });
+      nodes.push({ id: pid, label: paper.name, group: 'PAPER' });
       Object.entries(paper.entity_counts).forEach(([label, items]) => {
         items.forEach(item => {
           edges.push({
@@ -405,14 +407,15 @@ const AnalysePage = () => {
       });
     });
 
-    const json = JSON.stringify({ nodes, edges }, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `graph_export.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // ponytail: standalone offline HTML export (no CDN), shared helper.
+    const title = isCompareMode ? `${activePapers.length} Papers` : activePapers[0]?.name || 'Graph';
+    void downloadGraphHtml({
+      nodes,
+      edges,
+      filename: `graph_export.html`,
+      title: `Knowledge Graph - ${title}`,
+      subtitle: `Entities linked to ${title}`,
+    });
   };
 
   const entityConfig: Record<string, { accentVar: string }> = {};
@@ -844,10 +847,12 @@ const AnalysePage = () => {
                 </div>
               </div>
 
-              {/* Entity Index Content */}
+              {/* Entity Index + Graph share one anchored scroll region, so switching
+                  tabs or expanding groups never moves surrounding content */}
+              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
               {(!isCompareMode && rightSidebarMode === 'entities') ? (
                 <>
-                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
+                  <div className="px-4 pb-8" style={{ display: "flex", flexDirection: "column" }}>
                     {groupedEntities.map((group) => {
                       const isExpanded = expandedGroups[group.label] !== false;
                       const accentColor = getEntityAccentColor(group.label);
@@ -913,8 +918,16 @@ const AnalysePage = () => {
                             </span>
                           </button>
 
-                          {/* Values expanded container */}
-                          {isExpanded && !empty && (
+                          {/* Values expanded container — animated open/close */}
+                          {!empty && (
+                            <div
+                              className="grid transition-[grid-template-rows,opacity] duration-300 ease-out"
+                              style={{
+                                gridTemplateRows: isExpanded ? '1fr' : '0fr',
+                                opacity: isExpanded ? 1 : 0,
+                              }}
+                            >
+                            <div className="min-h-0 overflow-hidden">
                             <div style={{ padding: "0 4px 12px 16px", display: "flex", flexDirection: "column", gap: 2 }}>
                               {group.items.map((ent, eIdx) => {
                                 const name = ent.text;
@@ -924,14 +937,8 @@ const AnalysePage = () => {
                                     className="ent-row"
                                     style={{
                                       display: "flex", alignItems: "center", gap: 10,
-                                      padding: "6px 10px", borderRadius: 7, cursor: "pointer",
-                                      transition: "background .12s"
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      e.currentTarget.style.background = "var(--surface-low)";
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      e.currentTarget.style.background = "transparent";
+                                      padding: "6px 10px", borderRadius: 7, cursor: "default",
+                                      background: "transparent"
                                     }}
                                   >
                                     {/* Item dot */}
@@ -953,6 +960,8 @@ const AnalysePage = () => {
                                 );
                               })}
                             </div>
+                            </div>
+                            </div>
                           )}
                         </div>
                       );
@@ -960,7 +969,7 @@ const AnalysePage = () => {
                   </div>
                 </>
               ) : (
-                <div className="flex-1 flex flex-col overflow-hidden p-2">
+                <div className="flex flex-col">
                   <KnowledgeGraph
                     entities={graphEntities}
                     paperIdentifier={isComparing ? undefined : { type: 'doi', value: activePapers[0]?.doi || '' }}
@@ -970,6 +979,7 @@ const AnalysePage = () => {
                   />
                 </div>
               )}
+              </div>
             </div>
           </aside>
         )}
