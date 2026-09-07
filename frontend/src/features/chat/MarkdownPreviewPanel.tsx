@@ -20,7 +20,6 @@ import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import { X } from '@phosphor-icons/react';
-import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Citation, RagSource } from './assistant/runtime';
@@ -341,11 +340,11 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
   }, [highlighted, chunkAnchorId]);
 
   return (
-    <aside className="w-[min(36rem,46vw)] min-w-[24rem] border-l border-base-200 bg-base-100 flex flex-col">
-      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-base-200">
+    <aside className="w-[min(32rem,42vw)] min-w-[22rem] border-l border-surface-c bg-background flex flex-col">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-surface-c">
         <div className="min-w-0">
           <h3
-            className="text-sm font-semibold text-base-content truncate"
+            className="text-sm font-semibold text-on-surface truncate"
             title={source.source}
           >
             {source.source}
@@ -358,15 +357,15 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
             </p>
           )}
         </div>
-        <TooltipIconButton
+        <button
           type="button"
-          variant="ghost"
-          size="icon-sm"
           onClick={onClose}
-          tooltip="Close preview"
+          className="p-1 text-black hover:text-black hover:opacity-75 transition-opacity outline-none border-0 bg-transparent flex items-center justify-center cursor-pointer"
+          title="Close preview"
+          aria-label="Close preview"
         >
-          <X size={16} weight="bold" />
-        </TooltipIconButton>
+          <X size={18} weight="bold" className="text-black" />
+        </button>
       </div>
 
       <div

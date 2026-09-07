@@ -21,6 +21,8 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useState,
+  useEffect,
 } from 'react';
 import {
   ActionBarPrimitive,
@@ -35,18 +37,17 @@ import {
   MarkdownTextPrimitive,
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
 } from '@assistant-ui/react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   ArrowUp,
   ArrowDown,
-  CopySimple,
+  Copy,
   Check,
-  Stop,
   ArrowClockwise,
   PencilSimple,
   CaretLeft,
   CaretRight,
-  Export,
-  SpinnerGap,
+  FilePdf,
 } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
@@ -72,38 +73,37 @@ const CitationClickContext = createContext<
   ((chunkId: string) => void) | undefined
 >(undefined);
 
+const ThreadCitationClickContext = createContext<
+  ((payload: CitationClickPayload) => void) | undefined
+>(undefined);
+
 export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
   return (
-    <ThreadPrimitive.Root
-      className="flex h-full flex-col bg-card"
-      style={{
-        fontFamily: 'var(--font-google-sans)',
-        ['--thread-max-width' as string]: '50rem',
-        ['--turn-gap-prompt-to-answer' as string]: '36px',
-        ['--turn-gap-answer-to-prompt' as string]: '50px',
-      }}
-    >
-      <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 py-8 flex flex-col chat-scrollbar">
-        <ThreadPrimitive.Empty>
-          <div className="flex h-full items-center justify-center text-muted-foreground">
-            {emptyContent ?? <DefaultEmpty />}
-          </div>
-        </ThreadPrimitive.Empty>
+    <ThreadCitationClickContext.Provider value={onCitationClick}>
+      <ThreadPrimitive.Root
+        className="flex h-full flex-col bg-card"
+        style={{
+          fontFamily: 'var(--font-google-sans)',
+          ['--thread-max-width' as string]: '54rem',
+          ['--turn-gap-prompt-to-answer' as string]: '48px',
+          ['--turn-gap-answer-to-prompt' as string]: '80px',
+        }}
+      >
+        <ThreadPrimitive.Viewport className="relative flex-1 overflow-y-auto px-4 pt-8 pb-12 flex flex-col chat-scrollbar">
+          <ThreadPrimitive.Empty>
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              {emptyContent ?? <DefaultEmpty />}
+            </div>
+          </ThreadPrimitive.Empty>
 
-        <ThreadPrimitive.Messages
-          components={{
-            UserMessage: UserMessage,
-            AssistantMessage: () => (
-              <AssistantMessage onCitationClick={onCitationClick} />
-            ),
-          }}
-        />
+          <ThreadPrimitive.Messages components={threadComponents} />
 
-        <ScrollToBottomButton />
-      </ThreadPrimitive.Viewport>
+          <ScrollToBottomButton />
+        </ThreadPrimitive.Viewport>
 
-      <Composer />
-    </ThreadPrimitive.Root>
+        <Composer />
+      </ThreadPrimitive.Root>
+    </ThreadCitationClickContext.Provider>
   );
 };
 
@@ -138,32 +138,51 @@ const ExportAnswerPdfButton: FC = () => {
     <TooltipIconButton
       type="button"
       variant="ghost"
-      size="icon-xs"
+      size="icon-sm"
       onClick={handleExport}
-      tooltip="Export"
-      className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
+      tooltip="Export to PDF"
+      className="text-black hover:text-black hover:bg-slate-100 rounded-lg h-8.5 w-8.5 flex items-center justify-center p-0 shadow-none border-0 transition-all active:scale-95"
     >
-      <Export size={14} weight="regular" />
+      <FilePdf className="size-[18px] text-black shrink-0" weight="regular" />
     </TooltipIconButton>
   );
 };
 
 
 
-const ScrollToBottomButton: FC = () => (
-  <ThreadPrimitive.ScrollToBottom asChild>
-    <TooltipIconButton
-      type="button"
-      variant="outline"
-      size="icon-sm"
-      side="left"
-      tooltip="Scroll to latest"
-      className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-none flex items-center justify-center p-0 disabled:hidden transition-transform active:scale-95"
-    >
-      <ArrowDown size={16} weight="bold" />
-    </TooltipIconButton>
-  </ThreadPrimitive.ScrollToBottom>
-);
+const ScrollToBottomButton: FC = () => {
+  const [showButton, setShowButton] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.classList.contains('chat-scrollbar')) return;
+      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      // Only show button if user has scrolled up by more than 160px
+      setShowButton(distanceFromBottom > 160);
+    };
+
+    window.addEventListener('scroll', handleScroll, true);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, []);
+
+  if (!showButton) return null;
+
+  return (
+    <ThreadPrimitive.ScrollToBottom asChild>
+      <TooltipIconButton
+        type="button"
+        variant="outline"
+        size="icon-sm"
+        side="left"
+        tooltip="Scroll to latest"
+        className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-none flex items-center justify-center p-0 disabled:hidden transition-all duration-200 active:scale-95 animate-in fade-in"
+      >
+        <ArrowDown size={16} weight="bold" />
+      </TooltipIconButton>
+    </ThreadPrimitive.ScrollToBottom>
+  );
+};
 
 const DefaultEmpty: FC = () => (
   <div 
@@ -197,7 +216,8 @@ const CitationLink: FC<{
           e.preventDefault();
           onCitationClick?.(chunkId);
         }}
-        className="citation-badge"
+        className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 mx-0.5 -translate-y-0.5 text-[11px] font-semibold rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-middle shadow-none outline-none"
+        style={{ fontFamily: 'var(--font-google-sans)' }}
         title="View source passage"
         aria-label="View source for citation"
       >
@@ -206,7 +226,14 @@ const CitationLink: FC<{
     );
   }
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 hover:underline font-medium" {...rest}>
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+      {...rest}
+    >
       {children}
     </a>
   );
@@ -215,14 +242,101 @@ const CitationLink: FC<{
 const markdownComponents = memoizeMarkdownComponents({
   a: CitationLink,
   hr: () => <hr className="my-4 border-0 border-t border-slate-200" />,
-  p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed text-[16.5px] text-slate-800">{children}</p>,
-  h1: ({ children }) => <h1 className="text-[19px] font-bold text-slate-900 mt-3.5 mb-2 first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-[17px] font-bold text-slate-900 mt-3 mb-1.5 first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-[15.5px] font-bold text-slate-900 mt-2.5 mb-1 first:mt-0">{children}</h3>,
-  ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1.5 text-[16.5px] text-slate-800">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1.5 text-[16.5px] text-slate-800">{children}</ol>,
-  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  p: ({ children }) => (
+    <p
+      className="mb-3.5 last:mb-0 leading-[1.7] text-[17px] text-slate-800 font-normal"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </p>
+  ),
+  h1: ({ children }) => (
+    <h1
+      className="text-[22px] font-bold text-slate-900 mt-4 mb-2 first:mt-0 tracking-tight"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2
+      className="text-[19.5px] font-bold text-slate-900 mt-3.5 mb-1.5 first:mt-0 tracking-tight"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3
+      className="text-[17.5px] font-semibold text-slate-900 mt-3 mb-1 first:mt-0 tracking-tight"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </h3>
+  ),
+  ul: ({ children }) => (
+    <ul
+      className="list-disc pl-5 mb-3.5 space-y-1.5 text-[17px] leading-[1.7] text-slate-800"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </ul>
+  ),
+  ol: ({ children }) => (
+    <ol
+      className="list-decimal pl-5 mb-3.5 space-y-1.5 text-[17px] leading-[1.7] text-slate-800"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </ol>
+  ),
+  li: ({ children }) => <li className="leading-[1.7]">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
+  code: ({ children }) => (
+    <code className="font-mono text-[14px] bg-slate-100/90 text-slate-800 px-1.5 py-0.5 rounded border border-slate-200/60">
+      {children}
+    </code>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote
+      className="border-l-2 border-[#ff6dba] pl-3.5 italic text-slate-600 my-3 text-[16.5px]"
+      style={{ fontFamily: 'var(--font-google-sans)' }}
+    >
+      {children}
+    </blockquote>
+  ),
+  table: ({ children }) => (
+    <div className="my-4 w-full overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full border-collapse text-[15px] text-left text-slate-800">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="bg-slate-50 border-b border-slate-200 text-slate-900 font-semibold">
+      {children}
+    </thead>
+  ),
+  tbody: ({ children }) => (
+    <tbody className="divide-y divide-slate-200/70 bg-white">
+      {children}
+    </tbody>
+  ),
+  tr: ({ children }) => (
+    <tr className="transition-colors hover:bg-slate-50/50">
+      {children}
+    </tr>
+  ),
+  th: ({ children }) => (
+    <th className="px-4 py-3 font-semibold text-slate-900 border-r border-slate-200 last:border-r-0">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="px-4 py-3 text-slate-800 border-r border-slate-200/70 last:border-r-0 align-top leading-relaxed">
+      {children}
+    </td>
+  ),
 });
 
 const MarkdownText: FC = () => {
@@ -257,9 +371,10 @@ const MarkdownText: FC = () => {
   return (
     <MarkdownTextPrimitive
       smooth
+      remarkPlugins={[remarkGfm]}
       components={markdownComponents}
       preprocess={preprocess}
-      className="w-full text-slate-800 text-[16.5px] leading-relaxed"
+      className="w-full text-slate-800 text-[17px] leading-[1.7]"
     />
   );
 };
@@ -269,7 +384,7 @@ const UserMessage: FC = () => {
   const text = readMessageText(message);
 
   return (
-    <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group animate-in fade-in slide-in-from-bottom-1 duration-150 pt-[var(--turn-gap-answer-to-prompt)] first:pt-0 pb-[var(--turn-gap-prompt-to-answer)]">
+    <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group pt-[var(--turn-gap-answer-to-prompt)] first:pt-0 pb-[var(--turn-gap-prompt-to-answer)]">
       <ComposerPrimitive.If editing>
         <UserEditComposer />
       </ComposerPrimitive.If>
@@ -279,7 +394,7 @@ const UserMessage: FC = () => {
           <UserActionBar />
 
           <div
-            className="max-w-[85%] rounded-[22px] px-5 py-3 text-[16px] leading-normal text-slate-800 break-words whitespace-pre-wrap select-text shadow-none"
+            className="max-w-[85%] rounded-[22px] px-5 py-3.5 text-[17px] leading-relaxed text-slate-900 break-words whitespace-pre-wrap select-text shadow-none"
             style={{ backgroundColor: PINK_USER_BG, fontFamily: 'var(--font-google-sans)' }}
           >
             {text}
@@ -294,17 +409,23 @@ const UserMessage: FC = () => {
 
 const UserEditComposer: FC = () => (
   <ComposerPrimitive.Root className="w-full max-w-2xl">
-    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-3 shadow-none">
+    <div className="flex flex-col gap-2.5 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-none">
       <ComposerPrimitive.Input asChild>
         <Textarea
-          className="min-h-[60px] max-h-[200px] resize-none border-0 bg-transparent text-[16px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 chat-scrollbar pr-1.5"
+          className="min-h-[60px] max-h-[200px] resize-none border-0 bg-transparent py-2 pl-1 pr-2 !text-[18px] md:!text-[18px] text-slate-900 leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 chat-scrollbar outline-none overflow-x-hidden [overflow-wrap:anywhere] break-words [field-sizing:normal]"
           style={{ fontFamily: 'var(--font-google-sans)' }}
           autoFocus
         />
       </ComposerPrimitive.Input>
       <div className="flex justify-end gap-2">
         <ComposerPrimitive.Cancel asChild>
-          <Button type="button" variant="ghost" size="sm" className="rounded-full px-3 text-xs font-medium">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="rounded-full px-4 text-[14px] font-medium text-slate-600 hover:bg-slate-100"
+            style={{ fontFamily: 'var(--font-google-sans)' }}
+          >
             Cancel
           </Button>
         </ComposerPrimitive.Cancel>
@@ -312,10 +433,10 @@ const UserEditComposer: FC = () => (
           <Button
             type="submit"
             size="sm"
-            className="rounded-full px-4 text-xs font-medium text-white hover:opacity-90 transition-opacity"
-            style={{ backgroundColor: PINK_ACCENT }}
+            className="rounded-full px-4 text-[14px] font-medium text-white hover:opacity-90 transition-opacity"
+            style={{ backgroundColor: PINK_ACCENT, fontFamily: 'var(--font-google-sans)' }}
           >
-            Done
+            Send
           </Button>
         </ComposerPrimitive.Send>
       </div>
@@ -325,25 +446,21 @@ const UserEditComposer: FC = () => (
 
 const UserActionBar: FC = () => (
   <ActionBarPrimitive.Root
-    className="flex items-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 data-[floating=true]:opacity-100"
+    className="flex items-center self-end mb-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 data-[floating=true]:opacity-100"
   >
     <ActionBarPrimitive.Edit asChild>
       <TooltipIconButton
         type="button"
         variant="ghost"
-        size="icon-xs"
+        size="icon-sm"
         tooltip="Edit"
-        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
+        className="text-black hover:text-black hover:bg-slate-100 rounded-lg h-8.5 w-8.5 flex items-center justify-center p-0 shadow-none border-0 transition-all active:scale-95"
       >
-        <PencilSimple size={14} weight="regular" />
+        <PencilSimple className="size-[18px] text-black shrink-0" weight="regular" />
       </TooltipIconButton>
     </ActionBarPrimitive.Edit>
   </ActionBarPrimitive.Root>
 );
-
-interface AssistantMessageProps {
-  onCitationClick?: (payload: CitationClickPayload) => void;
-}
 
 function readMessageText(message: { content: readonly { type: string; text?: string }[] | undefined }): string {
   if (!message?.content) return '';
@@ -353,7 +470,8 @@ function readMessageText(message: { content: readonly { type: string; text?: str
     .trim();
 }
 
-const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
+const AssistantMessage: FC = () => {
+  const onCitationClick = useContext(ThreadCitationClickContext);
   const message = useMessage();
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
   const sources = customData.sources ?? [];
@@ -372,14 +490,20 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
 
   return (
     <CitationClickContext.Provider value={handleCitationClick}>
-      <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group animate-in fade-in slide-in-from-bottom-1 duration-150">
+      <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group">
         {isPending ? (
-          <div className="py-2.5 px-1 flex items-center text-slate-900">
-            <SpinnerGap size={20} className="animate-spin text-slate-900" />
+          <div className="py-2.5 px-1 flex items-center">
+            <span
+              className="h-3.5 w-3.5 rounded-full animate-typing-dot"
+              style={{ backgroundColor: PINK_ACCENT }}
+            />
           </div>
         ) : (
           <>
-            <div className="w-full text-foreground leading-relaxed text-[15px] pt-0">
+            <div
+              className="w-full text-slate-800 leading-relaxed text-[17px] pt-0"
+              style={{ fontFamily: 'var(--font-google-sans)' }}
+            >
               <MessagePrimitive.Content components={{ Text: MarkdownText }} />
             </div>
 
@@ -393,26 +517,30 @@ const AssistantMessage: FC<AssistantMessageProps> = ({ onCitationClick }) => {
   );
 };
 
+const threadComponents = {
+  UserMessage,
+  AssistantMessage,
+};
+
 const AssistantActionBar: FC = () => (
   <ActionBarPrimitive.Root
     hideWhenRunning
-    autohide="not-last"
-    autohideFloat="single-branch"
-    className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 data-[floating=true]:opacity-100 data-[autohide=never]:opacity-100"
+    autohide="never"
+    className="mt-3.5 mb-4 flex items-center gap-1.5 opacity-100"
   >
     <ActionBarPrimitive.Copy asChild>
       <TooltipIconButton
         type="button"
         variant="ghost"
-        size="icon-xs"
+        size="icon-sm"
         tooltip="Copy"
-        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
+        className="text-black hover:text-black hover:bg-slate-100 rounded-lg h-8.5 w-8.5 flex items-center justify-center p-0 shadow-none border-0 transition-all active:scale-95"
       >
         <MessagePrimitive.If copied>
-          <Check size={14} weight="bold" className="text-teal-600" />
+          <Check className="size-[18px] text-slate-700 shrink-0" weight="bold" />
         </MessagePrimitive.If>
         <MessagePrimitive.If copied={false}>
-          <CopySimple size={14} weight="regular" />
+          <Copy className="size-[18px] text-black shrink-0" weight="regular" />
         </MessagePrimitive.If>
       </TooltipIconButton>
     </ActionBarPrimitive.Copy>
@@ -421,11 +549,11 @@ const AssistantActionBar: FC = () => (
       <TooltipIconButton
         type="button"
         variant="ghost"
-        size="icon-xs"
+        size="icon-sm"
         tooltip="Regenerate"
-        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md h-7 w-7 flex items-center justify-center p-0 shadow-none border-0 transition-colors"
+        className="text-black hover:text-black hover:bg-slate-100 rounded-lg h-8.5 w-8.5 flex items-center justify-center p-0 shadow-none border-0 transition-all active:scale-95"
       >
-        <ArrowClockwise size={14} weight="regular" />
+        <ArrowClockwise className="size-[18px] text-black shrink-0" weight="regular" />
       </TooltipIconButton>
     </ActionBarPrimitive.Reload>
 
@@ -437,31 +565,31 @@ const BranchPicker: FC = () => (
   <MessagePrimitive.If hasBranches>
     <BranchPickerPrimitive.Root
       hideWhenSingleBranch
-      className="mt-1 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+      className="mt-3.5 mr-1 inline-flex items-center gap-1 text-[13px] font-medium text-black"
     >
       <BranchPickerPrimitive.Previous asChild>
         <TooltipIconButton
           type="button"
           variant="ghost"
-          size="icon-xs"
-          className="px-1"
+          size="icon-sm"
+          className="h-7 w-7 rounded-full text-black hover:text-black hover:bg-slate-100 p-0 shadow-none border-0 transition-all active:scale-95"
           tooltip="Previous branch"
         >
-          <CaretLeft size={12} weight="bold" />
+          <CaretLeft className="size-4 text-black shrink-0" weight="bold" />
         </TooltipIconButton>
       </BranchPickerPrimitive.Previous>
-      <span className="tabular-nums px-1">
+      <span className="tabular-nums px-1.5 text-black select-none">
         <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
       </span>
       <BranchPickerPrimitive.Next asChild>
         <TooltipIconButton
           type="button"
           variant="ghost"
-          size="icon-xs"
-          className="px-1"
+          size="icon-sm"
+          className="h-7 w-7 rounded-full text-black hover:text-black hover:bg-slate-100 p-0 shadow-none border-0 transition-all active:scale-95"
           tooltip="Next branch"
         >
-          <CaretRight size={12} weight="bold" />
+          <CaretRight className="size-4 text-black shrink-0" weight="bold" />
         </TooltipIconButton>
       </BranchPickerPrimitive.Next>
     </BranchPickerPrimitive.Root>
@@ -469,29 +597,30 @@ const BranchPicker: FC = () => (
 );
 
 const Composer: FC = () => (
-  <ComposerPrimitive.Root className="bg-transparent px-4 pb-6 pt-2">
-    <div className="mx-auto flex max-w-4xl items-center gap-2.5 rounded-[26px] border border-border/80 bg-background py-1.5 pl-5 pr-2 shadow-none focus-within:border-border transition-all">
+  <ComposerPrimitive.Root className="bg-transparent px-4 pb-6 pt-4">
+    <div className="mx-auto flex max-w-[var(--thread-max-width)] items-end gap-3 rounded-[28px] border border-slate-200/90 bg-white py-2 pl-5 pr-2 shadow-none focus-within:border-slate-400/90 transition-all">
       <ComposerPrimitive.Input asChild>
         <Textarea
           rows={1}
           autoFocus
           placeholder="Ask anything..."
-          className="min-h-[40px] max-h-[200px] flex-1 resize-none border-0 bg-transparent py-1.5 pl-0 pr-1.5 text-[16px] leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/70 chat-scrollbar"
+          className="min-h-[36px] max-h-[190px] flex-1 resize-none rounded-none border-0 bg-transparent py-1.5 pl-0 pr-2 !text-[18px] md:!text-[18px] text-slate-900 leading-normal shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-slate-400 placeholder:!text-[18px] md:placeholder:!text-[18px] chat-scrollbar outline-none overflow-x-hidden [overflow-wrap:anywhere] break-words [field-sizing:normal]"
           style={{ fontFamily: 'var(--font-google-sans)' }}
         />
       </ComposerPrimitive.Input>
-      <div className="flex items-center shrink-0">
+      <div className="flex items-center shrink-0 pb-0.5">
         <ThreadPrimitive.If running>
           <ComposerPrimitive.Cancel asChild>
             <TooltipIconButton
               type="button"
-              variant="secondary"
+              variant="default"
               size="icon"
               side="top"
               tooltip="Stop"
-              className="h-9 w-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 shadow-none active:scale-95 flex items-center justify-center p-0 shrink-0 border-0"
+              className="h-10 w-10 rounded-full text-white shadow-none active:scale-95 hover:opacity-90 flex items-center justify-center p-0 shrink-0 border-0 transition-all cursor-pointer"
+              style={{ backgroundColor: PINK_ACCENT }}
             >
-              <Stop size={14} weight="fill" className="size-3.5" />
+              <span className="h-3.5 w-3.5 rounded-[3px] bg-white" />
             </TooltipIconButton>
           </ComposerPrimitive.Cancel>
         </ThreadPrimitive.If>
@@ -502,10 +631,10 @@ const Composer: FC = () => (
               size="icon"
               side="top"
               tooltip="Send"
-              className="h-9 w-9 rounded-full text-white shadow-none active:scale-95 disabled:opacity-35 flex items-center justify-center p-0 shrink-0 border-0"
+              className="h-10 w-10 rounded-full text-white shadow-none active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed hover:opacity-90 flex items-center justify-center p-0 shrink-0 border-0 transition-all cursor-pointer"
               style={{ backgroundColor: PINK_ACCENT }}
             >
-              <ArrowUp size={18} weight="bold" className="size-4.5" />
+              <ArrowUp className="size-5.5 text-white" weight="bold" />
             </TooltipIconButton>
           </ComposerPrimitive.Send>
         </ThreadPrimitive.If>

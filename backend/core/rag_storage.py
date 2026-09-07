@@ -50,3 +50,38 @@ def delete_user_upload_file(user_id: str, filename: str) -> None:
     file_path = get_user_upload_file_path(user_id, filename)
     if file_path.exists():
         file_path.unlink()
+
+
+def extract_paper_markdown(pdf_path) -> str:
+    """Fast PDF → markdown using plain PyMuPDF (no OCR, no layout model).
+
+    Per page: ``page.get_text("text")`` plus vector tables
+    (``page.find_tables()``) appended as GFM pipe tables. Pages are
+    joined with ``<!-- Page N -->`` markers that the citation pipeline
+    relies on for page attribution and highlight offsets.
+
+    Single shared helper for both ingest (services/rag_engine) and the
+    legacy preview regen (api/rag) — parent-chunk offsets are byte
+    offsets into exactly this text, so the two paths must never drift.
+    """
+    import pymupdf
+
+    text_parts = []
+    with pymupdf.open(pdf_path) as doc:
+        for idx, page in enumerate(doc):
+            parts = [(page.get_text("text") or "").strip()]
+            try:
+                for table in page.find_tables():
+                    rows = table.extract() or []
+                    cells = [c for r in rows if r for c in r]
+                    if not any((c or "").strip() for c in cells):
+                        continue  # border-only artifact, no content
+                    md = (table.to_markdown() or "").strip()
+                    if md:
+                        parts.append(md)
+            except Exception:
+                pass  # tables are best-effort; page text is captured above
+            text = "\n\n".join(p for p in parts if p).strip()
+            if text:
+                text_parts.append(f"<!-- Page {idx + 1} -->\n\n{text}")
+    return "\n\n".join(text_parts)

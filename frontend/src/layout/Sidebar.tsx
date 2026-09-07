@@ -1,6 +1,7 @@
 import React, { useRef, useCallback } from 'react';
 import { Plus, SidebarSimple, FileText, SpinnerGap } from '@phosphor-icons/react';
 import { ragApi } from '../lib/api';
+import { useChatStore } from '../stores/chatStore';
 import { useUploadStore } from '../stores/uploadStore';
 
 interface SidebarProps {
@@ -19,6 +20,9 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
   const setIsUploading = useUploadStore((s) => s.setIsUploading);
   const setCurrentJobId = useUploadStore((s) => s.setCurrentJobId);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Same Fast/Detailed toggle RagPage uses — sidebar uploads must
+  // follow it, not hardcode a parser.
+  const parserType = useChatStore((s) => s.parserType);
 
   // Trigger app-level polling by writing the job id into the store —
   // the App-mounted ``UploadStatusListener`` watches and handles
@@ -55,7 +59,7 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
         // broke ``tsc -b``).
         const lastResult = await ragApi.uploadFilesChunked(
           fileArr,
-          'docling',
+          parserType,
           CHUNK_THRESHOLD,
           (idx, total, batchResult) => {
             setUploadStatus(
@@ -74,7 +78,7 @@ const Sidebar: React.FC<SidebarProps> = ({ expanded, onCollapse }) => {
           setIsUploading(false);
         }
       } else {
-        const result = await ragApi.uploadFiles(fileArr);
+        const result = await ragApi.uploadFiles(fileArr, parserType);
         if (result.status === 'processing' && result.job_id) {
           beginPollingJob(result.job_id);
         } else {

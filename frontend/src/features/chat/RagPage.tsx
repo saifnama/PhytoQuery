@@ -4,18 +4,15 @@ import { AssistantRuntimeProvider } from '@assistant-ui/react';
 import {
   Plus,
   FileText,
-  FileDoc,
-  File as FileIcon,
   Check,
   TrashSimple,
   SidebarSimple,
   Fire,
   X,
-  ArrowsOutSimple,
   SpinnerGap,
 } from '@phosphor-icons/react';
 import { buildChatFileContentUrl, paperApi, ragApi } from '../../lib/api';
-import { Thread } from './assistant/Thread';
+import { Thread, type CitationClickPayload } from './assistant/Thread';
 import {
   clearPersistedChatHistory,
   usePhytoQueryRuntime,
@@ -25,7 +22,10 @@ import {
 import { MarkdownPreviewPanel } from './MarkdownPreviewPanel';
 import { useUploadStore } from '../../stores/uploadStore';
 import { useChatStore, type UploadedFile } from '../../stores/chatStore';
-import { useIndexedFiles } from '../../hooks/useIndexedFiles';
+import { useIndexedFiles, indexedFilesKey } from '../../hooks/useIndexedFiles';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import type { IndexedFileInfo, UploadJobStatus } from '../../types';
 
 interface RagLocationState {
   importPaperPdf?: {
@@ -52,23 +52,6 @@ const PdfIcon = ({ size = 24, className = "" }: { size?: number, className?: str
   </svg>
 );
 
-/** Return the correct icon for a given file extension. */
-function FileTypeIcon({ ext, size = 24, className = "" }: { ext: string; size?: number; className?: string }) {
-  const defaultClass = 'text-primary flex-shrink-0';
-  switch (ext) {
-    case '.pdf':
-      return <PdfIcon size={size} className={className || 'shrink-0'} />;
-    case '.doc':
-    case '.docx':
-      return <FileDoc size={size} weight="duotone" className={className || defaultClass} />;
-    case '.txt':
-    case '.md':
-      return <FileText size={size} weight="duotone" className={className || defaultClass} />;
-    default:
-      return <FileIcon size={size} weight="duotone" className={className || defaultClass} />;
-  }
-}
-
 /** Custom styled checkbox matching the reference design. */
 function CustomCheckbox({
   checked,
@@ -82,17 +65,16 @@ function CustomCheckbox({
       type="button"
       onClick={onChange}
       className={`
-        w-5 h-5 rounded flex-shrink-0 flex items-center justify-center
-        transition-all duration-150 border
+        w-5 h-5 rounded-[5px] flex-shrink-0 flex items-center justify-center
+        transition-all duration-150 border cursor-pointer
         ${
           checked
-            ? 'text-white'
-            : 'bg-background border-outline hover:border-on-surface-muted'
+            ? 'bg-slate-900 border-slate-900 text-white hover:bg-black hover:border-black'
+            : 'bg-background border-slate-300 hover:border-slate-500'
         }
       `}
-      style={checked ? { backgroundColor: '#ff6dba', borderColor: '#ff6dba' } : undefined}
     >
-      {checked && <Check size={14} weight="bold" />}
+      {checked && <Check size={13} weight="bold" className="text-white" />}
     </button>
   );
 }
@@ -112,6 +94,42 @@ function SimplePdfViewer({
   );
 }
 
+interface ChatThreadAreaProps {
+  getSelectedFiles: () => string[];
+  onCitationClick: (payload: CitationClickPayload) => void;
+}
+
+const ChatThreadArea: React.FC<ChatThreadAreaProps> = React.memo(({
+  getSelectedFiles,
+  onCitationClick,
+}) => {
+  const runtime = usePhytoQueryRuntime(
+    useMemo(
+      () => ({ getSelectedFiles, enableSessionPersistence: true }),
+      [getSelectedFiles],
+    ),
+  );
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread onCitationClick={onCitationClick} />
+    </AssistantRuntimeProvider>
+  );
+});
+ChatThreadArea.displayName = 'ChatThreadArea';
+
+async function pollJobUntilDone(jobId: string, timeoutMs = 180000): Promise<UploadJobStatus> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const status = await ragApi.getUploadStatus(jobId);
+    if (status.status === 'completed' || status.status === 'failed') {
+      return status;
+    }
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  throw new Error('Processing timed out');
+}
+
 // Chat history is persisted by the assistant-ui runtime under
 // `pq_chat_history` (see ./assistant/runtime.ts). Page UI state
 // (parserType / uploadedFiles / sidebarCollapsed) lives in the Zustand
@@ -120,11 +138,14 @@ const RagPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const locationState = location.state as RagLocationState | undefined;
+  const queryClient = useQueryClient();
+  const [chatSessionKey, setChatSessionKey] = useState(0);
   // Upload status + isUploading live in the shared Zustand store so
   // RagPage and the layout Sidebar always agree on whether an upload
   // is in flight (see frontend/src/stores/uploadStore.ts). The store
   // selectors use individual getters so re-renders only fire when
   // the slice the component reads actually changes.
+  const uploadStatus = useUploadStore((s) => s.status);
   const setUploadStatus = useUploadStore((s) => s.setStatus);
   const isUploading = useUploadStore((s) => s.isUploading);
   const setIsUploading = useUploadStore((s) => s.setIsUploading);
@@ -153,7 +174,7 @@ const RagPage: React.FC = () => {
   const [activePdfUrl, setActivePdfUrl] = useState<string | null>(null);
   const importedPaperRef = useRef<string | null>(null);
 
-  // Build the assistant-ui runtime. The selected-file getter is read on
+  // Build the assistant-ui runtime getter. The selected-file getter is read on
   // every send so the user's checkbox state always reflects in the
   // outgoing /api/chat/query/json request.
   const uploadedFilesRef = useRef(uploadedFiles);
@@ -164,12 +185,6 @@ const RagPage: React.FC = () => {
         .filter((f) => f.selected)
         .map((f) => f.name),
     [],
-  );
-  const runtime = usePhytoQueryRuntime(
-    useMemo(
-      () => ({ getSelectedFiles, enableSessionPersistence: true }),
-      [getSelectedFiles],
-    ),
   );
 
   // (No manual interval cleanup needed — TanStack Query stops the
@@ -186,7 +201,7 @@ const RagPage: React.FC = () => {
   // empty list while we have files locally (e.g., during the eventual-
   // consistency window right after upload), we preserve the locals so
   // the UI doesn't flash empty.
-  const { data: indexedFilesData, refetch: refetchIndexedFiles } = useIndexedFiles();
+  const { data: indexedFilesData } = useIndexedFiles();
 
   // Merge server payload into the local ``uploadedFiles`` whenever the
   // query data changes. ``setUploadedFiles`` is a stable React setter
@@ -216,13 +231,6 @@ const RagPage: React.FC = () => {
       }));
     });
   }, [indexedFilesData]);
-
-  // Compatibility shim — call sites still use ``loadIndexedFiles()``;
-  // forward to the query's refetch so behavior is unchanged. Awaiting
-  // the refetch resolves once data has been refreshed.
-  const loadIndexedFiles = useCallback(async () => {
-    await refetchIndexedFiles();
-  }, [refetchIndexedFiles]);
 
   const closePdfViewer = useCallback(() => {
     setActivePdfFile(null);
@@ -258,17 +266,9 @@ const RagPage: React.FC = () => {
   // ``setCurrentJobId(jobId)`` after the multipart POST returns. The
   // listener handles status text, completion side-effects, and cache
   // invalidation centrally — no per-component refs to manage.
-  const setCurrentJobId = useUploadStore((s) => s.setCurrentJobId);
-  const beginPollingJob = useCallback(
-    (jobId: string) => {
-      setIsUploading(true);
-      setUploadStatus('Processing upload…');
-      setCurrentJobId(jobId);
-    },
-    [setIsUploading, setUploadStatus, setCurrentJobId],
-  );
-
   const openPdfViewer = useCallback((file: UploadedFile) => {
+    // Automatically close sources/citation preview when opening PDF viewer
+    setActiveCitation(null);
     setActivePdfFile(file);
     setActivePdfUrl(buildChatFileContentUrl(file.name));
   }, []);
@@ -306,7 +306,7 @@ const RagPage: React.FC = () => {
 
     const importPaperPdf = async () => {
       setIsUploading(true);
-      setUploadStatus(`Importing PDF into RAG (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'})...`);
+      setUploadStatus('Processing 1/1');
 
       try {
         const { blob, filename } = await paperApi.fetchPdf(pendingImport.identifier);
@@ -319,93 +319,63 @@ const RagPage: React.FC = () => {
         const file = new File([blob], finalName, { type: 'application/pdf' });
         const result = await ragApi.uploadFiles([file], parserType);
         if (result.status === 'processing' && result.job_id) {
-          beginPollingJob(result.job_id);
+          const finalJob = await pollJobUntilDone(result.job_id);
+          if (finalJob.status === 'failed') {
+            throw new Error(finalJob.error || 'Paper PDF processing failed');
+          }
+          // Appear instantly in sidebar ONLY AFTER processing completes
+          applyUploadResult({ files: finalJob.files || [finalName] }, parserType);
+          await queryClient.refetchQueries({ queryKey: indexedFilesKey });
         } else {
           applyUploadResult(result, parserType);
-          await loadIndexedFiles();
-          setUploadStatus(
-            `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`
-          );
+          await queryClient.refetchQueries({ queryKey: indexedFilesKey });
         }
       } catch (error) {
         console.error('Paper PDF import failed:', error);
-        setUploadStatus('Paper PDF import failed. Please try downloading it manually.');
-        setIsUploading(false);
+        toast.error('Paper PDF import failed. Please try downloading it manually.');
       } finally {
+        setIsUploading(false);
+        setUploadStatus('');
         navigate({ to: '/chat', replace: true, state: {} });
       }
     };
 
     importPaperPdf();
-  }, [applyUploadResult, loadIndexedFiles, locationState, navigate, parserType]);
+  }, [applyUploadResult, locationState, navigate, parserType, queryClient, setIsUploading, setUploadStatus]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    setIsUploading(true);
-    setUploadStatus('');
-
-    // For large multi-file uploads, slice into batches of 20 PDFs
-    // each so we stay well under reverse-proxy body-size limits
-    // (nginx and Cloudflare commonly cap at 100 MB) and the browser
-    // does not have to hold a 5+ GB multipart payload in memory.
-    // Each batch becomes its own background job on the server; we
-    // poll the LAST batch's job_id for the completion summary.
     const fileArr = Array.from(files);
-    const CHUNK_THRESHOLD = 20;
+    const total = fileArr.length;
+    setIsUploading(true);
 
     try {
-      if (fileArr.length > CHUNK_THRESHOLD) {
-        // ``uploadFilesChunked`` already returns the LAST batch's
-        // UploadResponse, so we don't need a ``let`` + callback-capture
-        // pattern. The previous shape (``let lastResult = null;`` mutated
-        // inside ``onBatch``) tripped TypeScript's flow analysis — TS
-        // doesn't track writes inside callbacks, so post-await the type
-        // narrowed to ``never`` and broke ``tsc -b``. Using the awaited
-        // return value sidesteps the issue entirely.
-        const lastResult = await ragApi.uploadFilesChunked(
-          fileArr,
-          parserType,
-          CHUNK_THRESHOLD,
-          (idx, total, batchResult) => {
-            setUploadStatus(
-              `Queued batch ${idx + 1} of ${total} (${batchResult.files.length} file${
-                batchResult.files.length > 1 ? 's' : ''
-              })…`,
-            );
-          },
-        );
-        if (lastResult.status === 'processing' && lastResult.job_id) {
-          beginPollingJob(lastResult.job_id);
-        } else {
-          applyUploadResult(lastResult, parserType);
-          await loadIndexedFiles();
-          setUploadStatus(
-            `Indexed ${lastResult.files.length} file${lastResult.files.length > 1 ? 's' : ''} (${parserType === 'pymupdf' ? 'Fast' : 'Detailed'}).`,
-          );
-        }
-      } else {
-        const result = await ragApi.uploadFiles(fileArr, parserType);
+      for (let i = 0; i < total; i++) {
+        const file = fileArr[i];
+        setUploadStatus(`Processing ${i + 1}/${total}`);
+
+        const result = await ragApi.uploadFiles([file], parserType);
         if (result.status === 'processing' && result.job_id) {
-          beginPollingJob(result.job_id);
+          const finalJob = await pollJobUntilDone(result.job_id);
+          if (finalJob.status === 'failed') {
+            throw new Error(finalJob.error || 'Processing failed');
+          }
+          // Only add to sidebar AFTER pymupdf or docling processing completes!
+          applyUploadResult({ files: finalJob.files || [file.name] }, parserType);
+          await queryClient.refetchQueries({ queryKey: indexedFilesKey });
         } else {
-          setUploadStatus(
-            `Indexed ${result.files.length} file${result.files.length > 1 ? 's' : ''} (${
-              parserType === 'pymupdf' ? 'Fast' : 'Detailed'
-            }).`,
-          );
           applyUploadResult(result, parserType);
-          // Refresh from backend to get accurate chunk counts
-          await loadIndexedFiles();
+          await queryClient.refetchQueries({ queryKey: indexedFilesKey });
         }
       }
     } catch (error) {
       console.error('Upload failed:', error);
-      setUploadStatus('Upload failed. Please try again.');
-      setIsUploading(false);
+      toast.error('Upload failed. Please try again.');
     } finally {
-      // Reset file input so the same file can be re-uploaded
+      setIsUploading(false);
+      setUploadStatus('');
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -416,14 +386,18 @@ const RagPage: React.FC = () => {
 
   const handleDeleteFile = async (filename: string, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't toggle checkbox
+    if (activePdfFile?.name === filename) {
+      closePdfViewer();
+    }
+    setUploadedFiles((prev) => prev.filter((f) => f.name !== filename));
+    queryClient.setQueryData<IndexedFileInfo[]>(indexedFilesKey, (prev) =>
+      prev ? prev.filter((f) => f.name !== filename) : []
+    );
     try {
       await ragApi.deleteFile(filename);
-      if (activePdfFile?.name === filename) {
-        closePdfViewer();
-      }
-      setUploadedFiles((prev) => prev.filter((f) => f.name !== filename));
     } catch (error) {
       console.error('Delete failed:', error);
+      queryClient.invalidateQueries({ queryKey: indexedFilesKey });
     }
   };
 
@@ -436,22 +410,30 @@ const RagPage: React.FC = () => {
   const handleResetAll = async () => {
     const confirmMessage =
       "Delete all chats and source files? This cannot be undone.";
-    if (window.confirm(confirmMessage)) {
-      try {
-        await ragApi.resetChat();
-        closePdfViewer();
-        // Clear chat history (runtime-owned) + uploaded-files slice in
-        // the chat store. The store action writes through the persist
-        // middleware so sessionStorage is cleared atomically. Hard
-        // reload afterwards so the runtime reinitializes with a fresh
-        // empty thread.
-        resetUploadedFiles();
-        clearPersistedChatHistory();
-        window.location.reload();
-      } catch (error) {
-        console.error('Reset failed:', error);
-        alert('Failed to reset chat. Please try again.');
-      }
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    // 1. Immediately close any open preview & active citations
+    closePdfViewer();
+    setActiveCitation(null);
+
+    // 2. Immediately clear sources in Zustand store and TanStack Query cache
+    resetUploadedFiles();
+    queryClient.setQueryData(indexedFilesKey, []);
+
+    // 3. Immediately clear persisted chat messages from sessionStorage
+    clearPersistedChatHistory();
+
+    // 4. Immediately remount the thread with fresh empty state (0 delay, no page reload)
+    setChatSessionKey((prev) => prev + 1);
+
+    // 5. Fire backend reset in background
+    try {
+      await ragApi.resetChat();
+      queryClient.invalidateQueries({ queryKey: indexedFilesKey });
+    } catch (error) {
+      console.error('Reset failed on backend:', error);
     }
   };
 
@@ -460,6 +442,21 @@ const RagPage: React.FC = () => {
     const dotIdx = name.lastIndexOf('.');
     return dotIdx > 0 ? name.slice(0, dotIdx) : name;
   };
+
+  const handleCitationClick = useCallback((payload: CitationClickPayload) => {
+    // Ignore clicks where the chunk_id no longer resolves
+    // to a known source (rare; can happen if a stored
+    // assistant message references a chunk we've since
+    // wiped via "Reset all").
+    if (!payload.source) return;
+    // Automatically close PDF viewer when opening citation preview
+    closePdfViewer();
+    setActiveCitation({
+      source: payload.source,
+      citation: payload.citation,
+      triggerKey: Date.now(),
+    });
+  }, [closePdfViewer]);
 
   return (
     <div
@@ -494,11 +491,9 @@ const RagPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Mini View Icons */}
-            <div className="flex flex-col items-center pt-3 gap-2.5 flex-1 w-full overflow-y-auto chat-scrollbar pb-6">
-              {/* Mini Add Sources button */}
+            {/* Mini upload icon */}
+            <div className="p-2 flex flex-col items-center gap-2">
               <button
-                type="button"
                 onClick={handleUploadClick}
                 disabled={isUploading}
                 style={{
@@ -507,61 +502,23 @@ const RagPage: React.FC = () => {
                   borderColor: '#fbcfe8',
                   boxShadow: 'none',
                 }}
-                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#d63384] text-[#d63384] shadow-none outline-none disabled:opacity-50"
-                title="Add Sources"
+                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 text-[#d63384] shadow-none outline-none disabled:cursor-wait"
+                title={isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
               >
                 {isUploading ? (
-                  <SpinnerGap size={20} className="animate-spin text-[#d63384]" />
+                  <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
                 ) : (
-                  <Plus size={20} weight="bold" className="text-[#d63384]" />
+                  <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
                 )}
-              </button>
-
-              {/* Divider before file stack */}
-              <div className="w-6 h-[1.5px] bg-[#e0e0e0] rounded-full mx-auto my-1.5" />
-
-              {/* File icons */}
-              {uploadedFiles.map((file) => {
-                const isActive = activePdfFile?.name === file.name;
-                return (
-                  <button
-                    key={file.name}
-                    onClick={() => openPdfViewer(file)}
-                    className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all shrink-0 border-0 outline-none shadow-none ${
-                      isActive
-                        ? 'bg-[#f4f4f4] opacity-100'
-                        : file.selected
-                          ? 'hover:bg-[#fafafa] opacity-100'
-                          : 'hover:bg-[#fafafa] opacity-70 hover:opacity-100'
-                    }`}
-                    title={file.name}
-                  >
-                    <FileTypeIcon ext={file.fileType} size={26} />
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Collapsed Sidebar Footer: Delete Chats Fire Icon */}
-            <div className="pb-4 flex items-center justify-center mt-auto shrink-0">
-              <button
-                type="button"
-                onClick={handleResetAll}
-                className="w-10 h-10 rounded-full border border-red-200 bg-background hover:bg-red-50 hover:border-red-300 text-red-600 flex items-center justify-center transition-all active:scale-90 shadow-none outline-none"
-                title="Delete Chats"
-              >
-                <Fire size={20} weight="regular" />
               </button>
             </div>
           </div>
         ) : (
-          /* ── Expanded: full panel ── */
+          /* ── Expanded sidebar ── */
           <>
-            {/* Header */}
-            <div className="px-3.5 h-14 border-b border-surface-c flex items-center justify-between shrink-0">
-              <span className="!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap">
-                Sources
-              </span>
+            {/* Top Header Bar */}
+            <div className="h-14 border-b border-surface-c px-4 flex items-center justify-between shrink-0">
+              <h2 className="text-base font-bold text-on-surface">Sources</h2>
               <button
                 onClick={() => setSidebarCollapsed(true)}
                 className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none"
@@ -618,14 +575,16 @@ const RagPage: React.FC = () => {
                   fontFamily: 'var(--font-google-sans)',
                   boxShadow: 'none',
                 }}
-                className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#d63384] shadow-none outline-none disabled:opacity-50"
+                className="w-full py-2.5 px-4 rounded-full border border-[#fbcfe8] flex items-center justify-center gap-2 text-[14.5px] font-bold transition-all hover:opacity-95 active:scale-[0.99] text-[#d63384] shadow-none outline-none disabled:cursor-wait"
               >
                 {isUploading ? (
-                  <SpinnerGap size={18} className="animate-spin text-[#d63384]" />
+                  <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
                 ) : (
-                  <Plus size={18} weight="bold" className="text-[#d63384]" />
+                  <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
                 )}
-                <span>{isUploading ? 'Uploading...' : 'Add Sources'}</span>
+                <span className="font-bold text-[#d63384]">
+                  {isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
+                </span>
               </button>
             </div>
 
@@ -648,7 +607,7 @@ const RagPage: React.FC = () => {
                             : 'bg-transparent hover:bg-[#fafafa] opacity-70 hover:opacity-100'
                       }`}
                     >
-                      <FileTypeIcon ext={file.fileType} size={24} />
+                      <PdfIcon size={24} className="shrink-0" />
                       <div className="flex-1 min-w-0 text-left">
                         <p className={`text-[14px] truncate leading-tight ${activePdfFile?.name === file.name ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
                           {displayName(file.name)}
@@ -708,55 +667,31 @@ const RagPage: React.FC = () => {
       </aside>
 
       {/* ─── Chat Area (assistant-ui Thread) ─── */}
-      <div className="flex-1 flex flex-col relative">
-        <AssistantRuntimeProvider runtime={runtime}>
-          <Thread
-            onCitationClick={(payload) => {
-              // Ignore clicks where the chunk_id no longer resolves
-              // to a known source (rare; can happen if a stored
-              // assistant message references a chunk we've since
-              // wiped via "Reset all").
-              if (!payload.source) return;
-              setActiveCitation({
-                source: payload.source,
-                citation: payload.citation,
-                // Date.now() is monotonic enough for animation
-                // restart purposes; using a counter would also work
-                // but adds a useRef for no extra value.
-                triggerKey: Date.now(),
-              });
-            }}
-          />
-        </AssistantRuntimeProvider>
+      <div className="flex-1 min-w-0 flex flex-col relative">
+        <ChatThreadArea
+          key={chatSessionKey}
+          getSelectedFiles={getSelectedFiles}
+          onCitationClick={handleCitationClick}
+        />
       </div>
 
       {activePdfFile && (
         <aside className="w-[min(32rem,42vw)] min-w-[22rem] border-l border-surface-c bg-background flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-surface-c">
-            <div className="min-w-0">
-              <h3 className="mt-1 text-sm font-semibold text-on-surface truncate" title={activePdfFile.name}>
+            <div className="min-w-0 flex items-center gap-2.5">
+              <PdfIcon size={20} className="shrink-0" />
+              <h3 className="text-sm font-semibold text-on-surface truncate" title={activePdfFile.name}>
                 {displayName(activePdfFile.name)}
               </h3>
             </div>
             <div className="flex items-center gap-2">
-              {activePdfUrl && (
-                <a
-                  href={activePdfUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-1.5 rounded-lg hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
-                  title="Open PDF in new tab"
-                >
-                  <ArrowsOutSimple size={18} />
-                </a>
-              )}
               <button
                 type="button"
                 onClick={closePdfViewer}
-                className="p-1.5 rounded-lg hover:bg-surface-c text-on-surface-muted hover:text-on-surface transition-colors"
+                className="p-1 text-black hover:text-black hover:opacity-75 transition-opacity outline-none border-0 bg-transparent flex items-center justify-center cursor-pointer"
                 title="Close PDF viewer"
               >
-                <X size={18} />
+                <X size={18} weight="bold" className="text-black" />
               </button>
             </div>
           </div>

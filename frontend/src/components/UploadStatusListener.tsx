@@ -23,6 +23,8 @@ import { useUploadStore } from '../stores/uploadStore';
 import { useUploadJobStatus } from '../hooks/useUploadJobStatus';
 import { indexedFilesKey } from '../hooks/useIndexedFiles';
 
+import { useChatStore, type UploadedFile } from '../stores/chatStore';
+
 export function UploadStatusListener() {
   const currentJobId = useUploadStore((s) => s.currentJobId);
   const setCurrentJobId = useUploadStore((s) => s.setCurrentJobId);
@@ -39,17 +41,28 @@ export function UploadStatusListener() {
       const count = jobStatus.files.length;
       setStatus(`Indexed ${count} file${count === 1 ? '' : 's'}.`);
       setIsUploading(false);
-      toast.success(
-        `Indexed ${count} paper${count === 1 ? '' : 's'}`,
-        { description: 'Ready to query in chat.' },
-      );
-      // Tell the indexed-files cache it's stale so any active
-      // observer (RagPage, AnalysePage) refetches and shows the new
-      // chunk counts.
-      void queryClient.invalidateQueries({ queryKey: indexedFilesKey });
-      // Stop polling. The terminal data stays in the upload-status
-      // cache under its old key but ``enabled: !!jobId`` halts
-      // re-fetches.
+
+      // Instantly add completed files into chatStore sidebar state
+      const chatStore = useChatStore.getState();
+      chatStore.setUploadedFiles((prev) => {
+        const existing = new Set(prev.map((f) => f.name));
+        const newEntries: UploadedFile[] = (jobStatus.files || [])
+          .filter((name) => !existing.has(name))
+          .map((name) => ({
+            name,
+            fileType: '.pdf',
+            chunkCount: 0,
+            selected: true,
+            parserType: (jobStatus.parser_type as 'pymupdf' | 'docling') || 'pymupdf',
+            summary: '',
+          }));
+        return [...prev, ...newEntries];
+      });
+
+      // Refetch indexed files immediately so metadata/chunk counts populate
+      void queryClient.refetchQueries({ queryKey: indexedFilesKey });
+
+      // Stop polling.
       setCurrentJobId(null);
     } else if (jobStatus.status === 'failed') {
       const reason = jobStatus.error || 'Unknown error';

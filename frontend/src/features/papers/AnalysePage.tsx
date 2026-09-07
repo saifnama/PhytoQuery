@@ -479,10 +479,10 @@ const AnalysePage = () => {
                   boxShadow: 'none',
                 }}
                 className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 hover:border-[#d63384] text-[#d63384] shadow-none outline-none"
-                title="Add Sources"
+                title={isUploading ? `Extracting ${uploadProgress.current}/${uploadProgress.total}` : "Add Sources"}
               >
                 {isUploading ? (
-                  <SpinnerGap size={20} className="animate-spin text-[#d63384]" />
+                  <SpinnerGap size={20} weight="bold" className="animate-spin text-[#d63384]" />
                 ) : (
                   <Plus size={20} weight="bold" className="text-[#d63384]" />
                 )}
@@ -561,14 +561,14 @@ const AnalysePage = () => {
                       fontFamily: 'var(--font-google-sans)',
                       boxShadow: 'none',
                     }}
-                    className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-semibold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#d63384] shadow-none outline-none"
+                    className="w-full py-2.5 px-4 rounded-full border flex items-center justify-center gap-2 text-[14.5px] font-bold transition-all hover:opacity-90 active:scale-[0.99] cursor-pointer text-[#d63384] shadow-none outline-none"
                   >
                     {isUploading ? (
-                      <SpinnerGap size={18} className="animate-spin text-[#d63384]" />
+                      <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384]" />
                     ) : (
                       <Plus size={18} weight="bold" className="text-[#d63384]" />
                     )}
-                    <span className="text-[#d63384]">{isUploading ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Add Sources'}</span>
+                    <span className="font-bold text-[#d63384]">{isUploading ? `Extracting ${uploadProgress.current}/${uploadProgress.total}` : 'Add Sources'}</span>
                   </div>
                 </label>
                 

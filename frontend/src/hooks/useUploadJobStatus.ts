@@ -19,7 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ragApi } from '../lib/api';
 import type { UploadJobStatus } from '../types';
 
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 1000;
 
 export function useUploadJobStatus(jobId: string | null) {
   return useQuery<UploadJobStatus>({

@@ -18,6 +18,7 @@ from backend.schemas.schemas import (
 )
 from backend.core.session import attach_session_cookie, get_or_set_session_id
 from backend.core.rag_storage import (
+    extract_paper_markdown,
     get_user_upload_file_path,
     get_user_markdown_file_path,
 )
@@ -87,7 +88,7 @@ async def upload_pdfs_json(
 
     # Validate parser_type
     if parser_type not in ("pymupdf", "docling"):
-        parser_type = "docling"
+        parser_type = "pymupdf"
 
     saved_paths = []
     async with user_lock_manager.lock(user_id):
@@ -195,7 +196,7 @@ async def get_uploaded_file_markdown(
     The citation preview panel calls this to render the paper with the
     cited chunk highlighted. The markdown is normally written to disk
     at ingest time. For papers ingested before this feature shipped,
-    we lazy-regenerate via ``pymupdf4llm`` on first request — pure
+    we lazy-regenerate via plain PyMuPDF on first request — pure
     side-effect; the next request hits the cached file.
 
     Response shape: ``{"markdown": "<utf-8 text>"}``.
@@ -209,31 +210,18 @@ async def get_uploaded_file_markdown(
     pdf_path = get_user_upload_file_path(user_id, safe_filename)
 
     # Lazy regen for legacy uploads. Done in a thread so the event loop
-    # stays responsive on large papers — pymupdf4llm is CPU-bound.
+    # stays responsive on large papers — PyMuPDF text extraction is CPU-bound.
+    # NOTE: must use the same shared extractor as ingest
+    # (``extract_paper_markdown``) — parent-chunk highlight offsets are
+    # byte offsets into exactly that text.
     if not md_path.is_file():
         if not pdf_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
 
-        def _regen() -> str:
-            import pymupdf4llm
-
-            chunks = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True)
-            text_parts = []
-            for idx, chunk in enumerate(chunks):
-                meta = chunk.get("metadata", {}) or {}
-                if "page" in meta and meta["page"] is not None:
-                    page_num = meta["page"]
-                elif "page_number" in meta and meta["page_number"] is not None:
-                    page_num = meta["page_number"] + 1
-                else:
-                    page_num = idx + 1
-                text = (chunk.get("text") or "").strip()
-                if text:
-                    text_parts.append(f"<!-- Page {page_num} -->\n\n{text}")
-            return "\n\n".join(text_parts)
-
         try:
-            full_text = await asyncio.to_thread(_regen)
+            full_text = await asyncio.to_thread(
+                extract_paper_markdown, str(pdf_path)
+            )
         except Exception as e:
             logger.warning(f"Lazy markdown regen failed for {safe_filename}: {e}")
             raise HTTPException(

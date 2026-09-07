@@ -165,9 +165,9 @@ export const ragApi = {
   /**
    * Upload PDF files for indexing
    * @param files - List of PDF files to upload
-   * @param parserType - "pymupdf" for fast extraction, "docling" for detailed (default: "docling")
+   * @param parserType - "pymupdf" for fast extraction, "docling" for detailed (default: "pymupdf")
    */
-  async uploadFiles(files: File[], parserType: 'pymupdf' | 'docling' = 'docling'): Promise<UploadResponse> {
+  async uploadFiles(files: File[], parserType: 'pymupdf' | 'docling' = 'pymupdf'): Promise<UploadResponse> {
     const formData = new FormData();
     files.forEach((file) => {
       formData.append('files', file);
@@ -199,7 +199,7 @@ export const ragApi = {
    */
   async uploadFilesChunked(
     files: File[],
-    parserType: 'pymupdf' | 'docling' = 'docling',
+    parserType: 'pymupdf' | 'docling' = 'pymupdf',
     chunkSize = 20,
     onBatch?: (
       batchIndex: number,

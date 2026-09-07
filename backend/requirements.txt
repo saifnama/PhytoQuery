@@ -70,8 +70,9 @@ transformers==4.57.1
 json-repair==0.59.6
 
 # === PDF + document parsing =================================================
-pymupdf==1.28.0
-pymupdf4llm==1.28.0
+# Plain PyMuPDF only — no pymupdf4llm (its 1.28.x layout rewrite brings
+# automatic RapidOCR + an ONNX layout model we don't want in the fast path).
+pymupdf==1.28.2
 # docling 2.93.0 is tagged on GitHub but not on PyPI yet — stay on 2.92.0
 # until the wheel lands. Docling pulls in docling-core + huggingface
 # tokenizer chunker transitively.

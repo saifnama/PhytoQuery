@@ -213,12 +213,12 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
                   activeOptions={item.to === '/' ? { exact: true } : undefined}
                   style={{ fontFamily: 'var(--font-google-sans)' }}
                   className={[
-                    'relative z-[1] inline-flex items-center gap-[8px] h-[40px] px-[18px] rounded-full',
-                    'text-[14px] cursor-pointer no-underline transition-colors duration-200',
+                    'relative z-[1] inline-flex items-center gap-[9px] h-[44px] px-[20px] rounded-full',
+                    'text-[16px] cursor-pointer no-underline transition-colors duration-200',
                     isActive ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium hover:text-on-surface',
                   ].join(' ')}
                 >
-                  <Icon size={18} weight={isActive ? 'bold' : 'regular'} />
+                  <Icon size={20} weight={isActive ? 'bold' : 'regular'} />
                   <span>{item.label}</span>
                 </Link>
               );

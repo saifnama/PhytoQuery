@@ -18,6 +18,7 @@ from backend.core.http_client import HttpClientManager
 from backend.core.rag_storage import (
     delete_user_upload_file,
     delete_user_uploads,
+    extract_paper_markdown,
     get_user_markdown_file_path,
 )
 
@@ -2018,7 +2019,7 @@ class RAGService:
     def _find_page_for_offset(full_text: str, offset: int) -> Optional[int]:
         """Recover the 1-based page number for a char offset inside
         ``full_text`` by scanning ``<!-- Page N -->`` markers (the
-        per-page boundaries pymupdf4llm emits at extraction time).
+        per-page boundaries the pymupdf extractor emits).
 
         Returns the page of the LAST marker preceding ``offset``, or
         ``None`` if the offset precedes any marker / no markers exist
@@ -4478,131 +4479,22 @@ Summary:"""
             logger.error(f"Docling extraction failed for {pdf_path}: {str(e)}", exc_info=True)
             return None, []
 
-    @staticmethod
-    def _ensure_pymupdf_layout_int64_patch() -> None:
-        """Workaround for pymupdf 1.27.2.3's layout ONNX model.
-
-        The bundled BoxRFDGNN model declares its `edge_index` input as
-        ``tensor(int64)``, but the calling code in
-        ``pymupdf.layout.onnx.BoxRFDGNN.predict`` sometimes constructs it
-        as int32. ONNX Runtime is strict about input types, so on real-world
-        multi-page PDFs this raises::
-
-            InvalidArgument: Unexpected input data type.
-                Actual: tensor(int32), expected: tensor(int64)
-
-        We wrap ``self.session.run`` inside ``predict`` to coerce any int
-        input narrower than int64 up to int64 before the model sees it.
-        Idempotent — runs at most once per process.
-        """
-        try:
-            from pymupdf.layout.onnx import BoxRFDGNN as _BRG
-        except ImportError as e:
-            # Could be: pymupdf_layout uninstalled, OR pymupdf upstream
-            # restructured the layout submodule. We log so the no-op is
-            # visible rather than mysterious if extractions start failing.
-            logger.info(
-                "pymupdf.layout.onnx not importable (%s); skipping int64 patch. "
-                "If the upstream ONNX dtype bug is unfixed, layout extraction "
-                "may crash on multi-page PDFs.", e
-            )
-            return
-
-        if getattr(_BRG.BoxRFDGNN, "_phytoquery_int64_patch", False):
-            return
-
-        if not hasattr(_BRG, "BoxRFDGNN") or not hasattr(_BRG.BoxRFDGNN, "predict"):
-            logger.warning(
-                "pymupdf.layout.onnx.BoxRFDGNN.predict not found; "
-                "upstream may have renamed the layout class. Patch skipped."
-            )
-            return
-
-        import numpy as _np
-
-        _orig_predict = _BRG.BoxRFDGNN.predict
-
-        def _patched_predict(self, *args, **kwargs):
-            _orig_run = self.session.run
-
-            def _cast_run(output_names, input_feed, run_options=None):
-                coerced = {}
-                for k, v in input_feed.items():
-                    if (
-                        hasattr(v, "dtype")
-                        and v.dtype.kind == "i"
-                        and v.dtype.itemsize < 8
-                    ):
-                        coerced[k] = v.astype(_np.int64)
-                    else:
-                        coerced[k] = v
-                return _orig_run(output_names, coerced, run_options)
-
-            self.session.run = _cast_run
-            try:
-                return _orig_predict(self, *args, **kwargs)
-            finally:
-                self.session.run = _orig_run
-
-        _BRG.BoxRFDGNN.predict = _patched_predict
-        _BRG.BoxRFDGNN._phytoquery_int64_patch = True
-        logger.info(
-            "Installed pymupdf_layout int32→int64 coercion patch (one-time)."
-        )
-
     def _extract_with_pymupdf(self, pdf_path):
-        """Layout-aware PDF extraction using pymupdf4llm.
+        """Fast PDF extraction using plain PyMuPDF (no OCR, no layout model).
 
-        Built on top of PyMuPDF, pymupdf4llm.to_markdown() adds:
-          • Multi-column reading order detection
-          • Heading hierarchy preserved as Markdown headers (#, ##, …)
-          • Tables emitted inline as GFM pipe tables
-          • Image positions preserved (text reflows around them)
-
-        Returns (full_text, tables) where ``tables`` is always an empty list:
-        tables are now embedded inside ``full_text`` as Markdown so the
-        downstream MarkdownTextSplitter handles them naturally without a
-        separate index path. The empty list is kept for API compatibility
-        with the docling branch which still returns tables separately.
+        Thin wrapper over ``backend.core.rag_storage.extract_paper_markdown``
+        (shared with the preview regen in api/rag so highlight offsets
+        always agree). Returns (full_text, tables); ``tables`` stays []
+        for API compat — tables are embedded inline in ``full_text``.
         """
         try:
-            import pymupdf4llm
-
-            # One-time runtime fix for pymupdf_layout's ONNX int dtype mismatch.
-            self._ensure_pymupdf_layout_int64_patch()
-
-            # page_chunks=True returns per-page dicts so we can preserve the
-            # "<!-- Page N -->" markers that the rest of the pipeline relies
-            # on for citations and section attribution.
-            chunks = pymupdf4llm.to_markdown(pdf_path, page_chunks=True)
-
-            text_parts = []
-            for idx, chunk in enumerate(chunks):
-                meta = chunk.get("metadata", {}) or {}
-                # pymupdf4llm 0.0.27 uses 1-based "page". Newer versions
-                # use 0-based "page_number". Handle both, fall back to the
-                # enumeration index if neither is present.
-                if "page" in meta and meta["page"] is not None:
-                    page_num = meta["page"]
-                elif "page_number" in meta and meta["page_number"] is not None:
-                    page_num = meta["page_number"] + 1
-                else:
-                    page_num = idx + 1
-                text = (chunk.get("text") or "").strip()
-                if text:
-                    text_parts.append(f"<!-- Page {page_num} -->\n\n{text}")
-
-            full_text = "\n\n".join(text_parts)
+            full_text = extract_paper_markdown(pdf_path)
             if not full_text.strip():
-                logger.warning(
-                    f"pymupdf4llm extracted empty text from {pdf_path}"
-                )
+                logger.warning(f"pymupdf extracted empty text from {pdf_path}")
                 return None, []
             return full_text, []
         except Exception as e:
-            logger.warning(
-                f"pymupdf4llm extraction failed for {pdf_path}: {e}"
-            )
+            logger.warning(f"pymupdf extraction failed for {pdf_path}: {e}")
             return None, []
 
     def _detect_sections(self, text):

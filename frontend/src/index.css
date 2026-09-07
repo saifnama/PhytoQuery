@@ -411,80 +411,69 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 .nice-scroll::-webkit-scrollbar-thumb:hover { background: var(--on-surface-muted); background-clip: padding-box; border: 2px solid transparent; }
 
-.thin-scrollbar,
-.chat-scrollbar,
-.custom-scrollbar {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
-}
+/* WebKit / Chromium (Chrome, Edge, Safari, Opera) */
 .thin-scrollbar::-webkit-scrollbar,
 .chat-scrollbar::-webkit-scrollbar,
-.custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-.thin-scrollbar::-webkit-scrollbar-track,
-.chat-scrollbar::-webkit-scrollbar-track,
-.custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-}
-.thin-scrollbar::-webkit-scrollbar-thumb,
-.chat-scrollbar::-webkit-scrollbar-thumb,
-.custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.18);
-    border-radius: 9999px;
-}
-.thin-scrollbar::-webkit-scrollbar-thumb:hover,
-.chat-scrollbar::-webkit-scrollbar-thumb:hover,
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.35);
-}
-.thin-scrollbar::-webkit-scrollbar-button,
-.chat-scrollbar::-webkit-scrollbar-button,
-.custom-scrollbar::-webkit-scrollbar-button {
-    display: none;
-    width: 0;
-    height: 0;
-}
-.thin-scrollbar::-webkit-scrollbar-corner,
-.chat-scrollbar::-webkit-scrollbar-corner,
-.custom-scrollbar::-webkit-scrollbar-corner {
-    background: transparent;
-}
-
-/* All textareas and scrollable containers in chat section */
-textarea,
-.chat-section * {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
-}
+.custom-scrollbar::-webkit-scrollbar,
 textarea::-webkit-scrollbar,
 .chat-section *::-webkit-scrollbar {
     width: 6px;
     height: 6px;
 }
+
+.thin-scrollbar::-webkit-scrollbar-track,
+.chat-scrollbar::-webkit-scrollbar-track,
+.custom-scrollbar::-webkit-scrollbar-track,
 textarea::-webkit-scrollbar-track,
 .chat-section *::-webkit-scrollbar-track {
     background: transparent;
 }
+
+.thin-scrollbar::-webkit-scrollbar-thumb,
+.chat-scrollbar::-webkit-scrollbar-thumb,
+.custom-scrollbar::-webkit-scrollbar-thumb,
 textarea::-webkit-scrollbar-thumb,
 .chat-section *::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.18);
     border-radius: 9999px;
 }
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover,
+.chat-scrollbar::-webkit-scrollbar-thumb:hover,
+.custom-scrollbar::-webkit-scrollbar-thumb:hover,
 textarea::-webkit-scrollbar-thumb:hover,
 .chat-section *::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.35);
 }
+
+.thin-scrollbar::-webkit-scrollbar-button,
+.chat-scrollbar::-webkit-scrollbar-button,
+.custom-scrollbar::-webkit-scrollbar-button,
 textarea::-webkit-scrollbar-button,
 .chat-section *::-webkit-scrollbar-button {
-    display: none;
-    width: 0;
-    height: 0;
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
 }
+
+.thin-scrollbar::-webkit-scrollbar-corner,
+.chat-scrollbar::-webkit-scrollbar-corner,
+.custom-scrollbar::-webkit-scrollbar-corner,
 textarea::-webkit-scrollbar-corner,
 .chat-section *::-webkit-scrollbar-corner {
     background: transparent;
+}
+
+/* Firefox only — standard scrollbar-width (Chromium ignores ::-webkit-scrollbar if scrollbar-width is set, showing OS arrow buttons on Windows) */
+@supports not selector(::-webkit-scrollbar) {
+    .thin-scrollbar,
+    .chat-scrollbar,
+    .custom-scrollbar,
+    textarea,
+    .chat-section * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+    }
 }
 
 /* =============================================================================
@@ -1620,4 +1609,13 @@ mark.ner-default {
 @keyframes pulse-slow {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+@keyframes typingDot {
+  0%, 100% { transform: scale(0.8); opacity: 0.45; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+
+.animate-typing-dot {
+  animation: typingDot 1.2s ease-in-out infinite;
 }
