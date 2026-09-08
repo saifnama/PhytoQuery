@@ -357,8 +357,8 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
           type="button"
           onClick={onClose}
           className="p-1 text-black hover:text-black hover:opacity-75 transition-opacity outline-none border-0 bg-transparent flex items-center justify-center cursor-pointer"
-          title="Close preview"
-          aria-label="Close preview"
+          title="Close"
+          aria-label="Close"
         >
           <X size={18} weight="bold" className="text-black" />
         </button>
@@ -369,7 +369,7 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
         className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed chat-scrollbar"
       >
         {loading && (
-          <div className="space-y-3" aria-label="Loading paper">
+          <div className="space-y-3" aria-label="Loading">
             <Skeleton className="h-6 w-3/4" />
             <Skeleton className="h-4 w-full" />
             <Skeleton className="h-4 w-full" />

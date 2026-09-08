@@ -252,7 +252,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
         {/* Close panel button */}
         <button
           onClick={onClose}
-          aria-label="Close panel"
+          aria-label="Close"
           style={{
             position: 'absolute', top: 16, right: 14,
             background: 'none', border: 'none', cursor: 'pointer',
@@ -361,7 +361,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
             <button
               type="button"
               onClick={() => setActiveFilter(null)}
-              aria-label="Remove filter"
+              aria-label="Remove"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -416,7 +416,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
         <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
           <DropdownMenuTrigger asChild>
             <button
-              aria-label="Switch view"
+              aria-label="Switch"
               style={{
                 background: dropdownOpen ? 'var(--surface-c, #F4F4F5)' : 'none',
                 border: 'none',
@@ -505,7 +505,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
           <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 8px' }}>
             <button
               onClick={loadMore}
-              aria-label="Load more papers"
+              aria-label="Load more"
               title="Load more"
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -577,7 +577,7 @@ function PapersList({ papers, error, onOpen }: PapersListProps) {
   }
   if (papers === null) {
     return (
-      <div className="space-y-3 py-2" aria-label="Loading papers">
+      <div className="space-y-3 py-2" aria-label="Loading">
         {Array.from({ length: 5 }).map((_, i) => (
           <div key={i} className="flex gap-3 items-center">
             <Skeleton className="h-10 w-10 shrink-0 rounded-full" />

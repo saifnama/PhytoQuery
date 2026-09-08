@@ -84,10 +84,13 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function safeFilenameTimestamp(iso: string): string {
+function suggestedFilename(iso: string): string {
   const d = new Date(iso);
   const stamp = Number.isNaN(d.getTime()) ? new Date() : d;
-  return stamp.toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const date = `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())}`;
+  const time = `${pad(stamp.getHours())}-${pad(stamp.getMinutes())}`;
+  return `${date},${time},bloomindex`;
 }
 
 // ─── HTML document for the print engine ────────────────────────────────────
@@ -293,7 +296,7 @@ export interface AnswerExportPayload {
 }
 
 export function exportAnswerAsPdf(payload: AnswerExportPayload): void {
-  const ts = safeFilenameTimestamp(payload.timestamp ?? new Date().toISOString());
+  const ts = suggestedFilename(payload.timestamp ?? new Date().toISOString());
   const html = renderHtml(
     [{ q: payload.question, a: payload.answer }],
     ts,
@@ -313,7 +316,7 @@ export interface ThreadExportPayload {
 }
 
 export function exportThreadAsPdf(payload: ThreadExportPayload): void {
-  const ts = safeFilenameTimestamp(payload.timestamp ?? new Date().toISOString());
+  const ts = suggestedFilename(payload.timestamp ?? new Date().toISOString());
 
   // Pair consecutive user → assistant turns. A user turn without a
   // following assistant turn still emits (question with empty answer)

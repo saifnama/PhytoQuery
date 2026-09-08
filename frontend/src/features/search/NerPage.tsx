@@ -911,8 +911,8 @@ const NerPage: React.FC = () => {
                             type="button"
                             onClick={handlePrevPage}
                             disabled={isLoading}
-                            aria-label="Previous page"
-                            title="Previous page"
+                            aria-label="Previous"
+                            title="Previous"
                             className="
                               grid h-10 w-10 place-items-center rounded-full
                               bg-transparent text-on-surface border-0 cursor-pointer
@@ -928,8 +928,8 @@ const NerPage: React.FC = () => {
                             type="button"
                             onClick={handleNextPage}
                             disabled={isLoading}
-                            aria-label="Next page"
-                            title="Next page"
+                            aria-label="Next"
+                            title="Next"
                             className="
                               grid h-10 w-10 place-items-center rounded-full
                               bg-transparent text-on-surface border-0 cursor-pointer

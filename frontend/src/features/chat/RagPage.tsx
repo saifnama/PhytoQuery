@@ -485,7 +485,6 @@ const RagPage: React.FC = () => {
               <button
                 onClick={() => setSidebarCollapsed(false)}
                 className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
-                title="Expand sidebar"
               >
                 <SidebarSimple size={20} />
               </button>
@@ -562,7 +561,6 @@ const RagPage: React.FC = () => {
               <button
                 onClick={() => setSidebarCollapsed(true)}
                 className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
-                title="Collapse sidebar"
               >
                 <SidebarSimple size={20} />
               </button>
@@ -729,7 +727,7 @@ const RagPage: React.FC = () => {
                 type="button"
                 onClick={closePdfViewer}
                 className="p-1 text-black hover:text-black hover:opacity-75 transition-opacity outline-none border-0 bg-transparent flex items-center justify-center cursor-pointer"
-                title="Close PDF viewer"
+                title="Close"
               >
                 <X size={18} weight="bold" className="text-black" />
               </button>

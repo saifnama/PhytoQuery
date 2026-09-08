@@ -171,16 +171,15 @@ const ScrollToBottomButton: FC = () => {
 
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
-      <TooltipIconButton
+      <Button
         type="button"
         variant="outline"
         size="icon-sm"
-        side="left"
-        tooltip="Scroll to latest"
+        aria-label="Scroll to latest"
         className="absolute bottom-4 right-4 h-9 w-9 rounded-full bg-background hover:bg-muted text-foreground border border-border/80 shadow-none flex items-center justify-center p-0 disabled:hidden transition-all duration-200 active:scale-95 animate-in fade-in"
       >
         <ArrowDown size={16} weight="bold" />
-      </TooltipIconButton>
+      </Button>
     </ThreadPrimitive.ScrollToBottom>
   );
 };
@@ -219,7 +218,7 @@ const CitationLink: FC<{
         }}
         className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 mx-0.5 -translate-y-0.5 text-[11px] font-semibold rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-middle shadow-none outline-none"
         style={{ fontFamily: 'var(--font-google-sans)' }}
-        title="View source passage"
+        title="View source"
         aria-label="View source for citation"
       >
         {children}
