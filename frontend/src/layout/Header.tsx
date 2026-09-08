@@ -152,10 +152,17 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
           to="/"
           search={{}}
           onClick={() => useSearchStore.getState().resetSearch()}
-          className="flex items-center gap-[2px] hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
         >
-          <img src="/BloomIndex.svg" alt="BloomIndex logo" className="h-[30px] w-auto" />
-          <span className="text-[23px] font-bold" style={{ fontFamily: 'var(--font-google-sans, sans-serif)' }}>
+          <img
+            src="/logo.gif?v=30s"
+            alt="BloomIndex logo"
+            className="h-[36px] w-[36px] object-contain shrink-0 select-none -translate-y-[1px]"
+          />
+          <span
+            className="text-[23px] font-bold leading-none select-none"
+            style={{ fontFamily: 'var(--font-google-sans, sans-serif)' }}
+          >
             BloomIndex
           </span>
         </Link>
