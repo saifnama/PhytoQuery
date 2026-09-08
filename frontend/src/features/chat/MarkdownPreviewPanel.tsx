@@ -18,18 +18,14 @@
 
 import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { X } from '@phosphor-icons/react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Citation, RagSource } from './assistant/runtime';
 
-// react-markdown@10 ignores inline HTML in the source by default. We
-// splice our highlights in as ``<mark>`` tags, so we need rehype-raw
-// to walk the AST and turn those raw HTML nodes back into real
-// elements that React renders. Without this, the literal text
-// ``<mark class="...">`` appears in the rendered output (the bug
-// the user reported).
+const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeRaw];
 
 interface MarkdownPreviewPanelProps {
@@ -400,6 +396,7 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
           >
             <ReactMarkdown
               skipHtml={false}
+              remarkPlugins={remarkPlugins}
               rehypePlugins={rehypePlugins}
               components={{
                 mark: ({ children, className, id }) => (
@@ -407,6 +404,40 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
                     {children}
                   </mark>
                 ),
+                table: ({ children }) => (
+                  <div className="my-3 w-full overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full border-collapse text-xs text-left text-slate-800">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-900 font-semibold">
+                    {children}
+                  </thead>
+                ),
+                tbody: ({ children }) => (
+                  <tbody className="divide-y divide-slate-200/70 bg-white">
+                    {children}
+                  </tbody>
+                ),
+                tr: ({ children }) => (
+                  <tr className="transition-colors hover:bg-slate-50/50">
+                    {children}
+                  </tr>
+                ),
+                th: ({ children }) => (
+                  <th className="px-2.5 py-1.5 font-semibold text-slate-900 border-r border-slate-200 last:border-r-0">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-2.5 py-1.5 text-slate-800 border-r border-slate-200/70 last:border-r-0 align-top leading-relaxed">
+                    {children}
+                  </td>
+                ),
+                sub: ({ children }) => <sub className="text-[75%] leading-none align-sub">{children}</sub>,
+                sup: ({ children }) => <sup className="text-[75%] leading-none align-super">{children}</sup>,
               }}
             >
               {highlighted}

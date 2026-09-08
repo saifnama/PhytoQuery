@@ -52,6 +52,7 @@ function stripCitations(text: string): string {
 const ALLOWED_TAGS = [
   'p', 'br', 'span',
   'strong', 'b', 'em', 'i', 'del', 's', 'u',
+  'sub', 'sup', 'mark',
   'code', 'pre',
   'ul', 'ol', 'li',
   'blockquote', 'hr',
@@ -148,7 +149,11 @@ h1 {
 .answer p:last-child { margin-bottom: 0; }
 .answer strong, .answer b { font-weight: 700; }
 .answer em, .answer i { font-style: italic; }
+.answer u { text-decoration: underline; }
 .answer del, .answer s { text-decoration: line-through; }
+.answer sub { vertical-align: sub; font-size: 75%; line-height: 0; }
+.answer sup { vertical-align: super; font-size: 75%; line-height: 0; }
+.answer mark { background: #fef08a; padding: 1pt 3pt; border-radius: 2pt; }
 .answer h1, .answer h2, .answer h3, .answer h4, .answer h5, .answer h6 {
   font-weight: 700;
   margin: 12pt 0 6pt 0;

@@ -38,6 +38,7 @@ import {
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
 } from '@assistant-ui/react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import {
   ArrowUp,
   ArrowDown,
@@ -292,6 +293,19 @@ const markdownComponents = memoizeMarkdownComponents({
   ),
   li: ({ children }) => <li className="leading-[1.7]">{children}</li>,
   strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
+  b: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  i: ({ children }) => <em className="italic">{children}</em>,
+  u: ({ children }) => <u className="underline underline-offset-2">{children}</u>,
+  del: ({ children }) => <del className="line-through text-slate-500">{children}</del>,
+  s: ({ children }) => <s className="line-through text-slate-500">{children}</s>,
+  sub: ({ children }) => <sub className="text-[75%] leading-none align-sub">{children}</sub>,
+  sup: ({ children }) => <sup className="text-[75%] leading-none align-super">{children}</sup>,
+  mark: ({ children, className, id }: { children?: ReactNode; className?: string; id?: string }) => (
+    <mark className={className ?? 'bg-yellow-100 text-slate-900 rounded px-1'} id={id}>
+      {children}
+    </mark>
+  ),
   code: ({ children }) => (
     <code className="font-mono text-[14px] bg-slate-100/90 text-slate-800 px-1.5 py-0.5 rounded border border-slate-200/60">
       {children}
@@ -339,6 +353,9 @@ const markdownComponents = memoizeMarkdownComponents({
   ),
 });
 
+const remarkPlugins = [remarkGfm];
+const rehypePlugins = [rehypeRaw];
+
 const MarkdownText: FC = () => {
   const message = useMessage();
   const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
@@ -371,7 +388,8 @@ const MarkdownText: FC = () => {
   return (
     <MarkdownTextPrimitive
       smooth
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
       components={markdownComponents}
       preprocess={preprocess}
       className="w-full text-slate-800 text-[17px] leading-[1.7]"
@@ -493,10 +511,7 @@ const AssistantMessage: FC = () => {
       <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-start group">
         {isPending ? (
           <div className="py-2.5 px-1 flex items-center">
-            <span
-              className="h-3.5 w-3.5 rounded-full animate-typing-dot"
-              style={{ backgroundColor: PINK_ACCENT }}
-            />
+            <span className="h-3.5 w-3.5 rounded-full bg-foreground animate-typing-dot" />
           </div>
         ) : (
           <>

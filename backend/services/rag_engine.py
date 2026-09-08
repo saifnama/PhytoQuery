@@ -3061,15 +3061,20 @@ class RAGService:
         this so retrieval logic stays in one place.
         """
         user_files = self.list_indexed_files(user_id)
-        is_kb_mode = not user_files
-        if user_files:
+        # KB mode is active if user has no uploaded files OR explicitly unchecked all files
+        is_kb_mode = (not user_files) or (filter_files is not None and len(filter_files) == 0)
+        if not is_kb_mode:
             vectorstore = self._get_user_collection(user_id)
             effective_filter = filter_files
             _resolve_parent = lambda pid: self._get_parent_data(pid, user_id)
         else:
             kb_store = self._get_kb_collection()
             if kb_store is None:
-                return {"answer": "", "sources": []}
+                return {
+                    "answer": "I couldn't find enough relevant context in the knowledge base to answer that question.",
+                    "sources": [],
+                    "is_kb_mode": True,
+                }
             vectorstore = kb_store
             effective_filter = None
             _resolve_parent = self._get_kb_parent_data
@@ -3216,7 +3221,7 @@ class RAGService:
 
         # Batch-fetch parent contexts for KB mode — one query instead of N+1.
         kb_parent_cache: Dict[str, Dict[str, Any]] = {}
-        if not user_files:
+        if is_kb_mode:
             import sys as _sys
             import sqlite3 as _sqlite3
             _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -3252,7 +3257,7 @@ class RAGService:
                 continue
 
             parent_ids_seen.add(parent_id)
-            if user_files:
+            if not is_kb_mode:
                 parent_data = _resolve_parent(parent_id)
             else:
                 parent_data = kb_parent_cache.get(parent_id, {})
@@ -3390,9 +3395,15 @@ class RAGService:
         context = "\n\n".join(context_parts)
 
         if not context_parts:
+            no_context_msg = (
+                "I couldn't find enough relevant context in the knowledge base to answer that question."
+                if is_kb_mode
+                else "I couldn't find enough relevant context in the selected sources to answer that question."
+            )
             return {
-                "answer": "I couldn't find enough relevant context in the selected sources to answer that question.",
+                "answer": no_context_msg,
                 "sources": [],
+                "is_kb_mode": is_kb_mode,
             }
 
         # Build multi-turn messages for conversation memory.

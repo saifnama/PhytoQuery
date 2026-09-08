@@ -113,7 +113,7 @@ async function postQuery(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query: question,
-      selected_files: selectedFiles.length > 0 ? selectedFiles : undefined,
+      selected_files: selectedFiles,
       chat_history: chatHistory.length > 0 ? chatHistory : undefined,
     }),
     credentials: 'include',
@@ -217,7 +217,7 @@ async function openStream(
     },
     body: JSON.stringify({
       query: question,
-      selected_files: selectedFiles.length > 0 ? selectedFiles : undefined,
+      selected_files: selectedFiles,
       chat_history: chatHistory.length > 0 ? chatHistory : undefined,
     }),
     credentials: 'include',

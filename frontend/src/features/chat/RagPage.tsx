@@ -481,18 +481,18 @@ const RagPage: React.FC = () => {
           /* ── Collapsed: icon strip matching Analyse mode ── */
           <div className="flex flex-col h-full w-full">
             {/* Top Header Bar matching expanded h-14 */}
-            <div className="h-14 border-b border-surface-c flex items-center justify-center shrink-0">
+            <div className="h-14 border-b border-surface-c px-3.5 flex items-center justify-center shrink-0">
               <button
                 onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none"
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
                 title="Expand sidebar"
               >
                 <SidebarSimple size={20} />
               </button>
             </div>
 
-            {/* Mini upload icon */}
-            <div className="p-2 flex flex-col items-center gap-2">
+            {/* Mini upload icon with breathing space */}
+            <div className="pt-3.5 pb-2 flex flex-col items-center shrink-0">
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
@@ -502,7 +502,7 @@ const RagPage: React.FC = () => {
                   borderColor: '#fbcfe8',
                   boxShadow: 'none',
                 }}
-                className="w-10 h-10 rounded-xl border flex items-center justify-center transition-all hover:opacity-90 text-[#d63384] shadow-none outline-none disabled:cursor-wait"
+                className="w-10 h-10 rounded-full border flex items-center justify-center transition-all hover:opacity-90 text-[#d63384] shadow-none outline-none disabled:cursor-wait cursor-pointer active:scale-95"
                 title={isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
               >
                 {isUploading ? (
@@ -512,16 +512,56 @@ const RagPage: React.FC = () => {
                 )}
               </button>
             </div>
+
+            {/* Subtle divider before PDF file stack (if files exist) */}
+            {uploadedFiles.length > 0 && (
+              <div className="w-5 h-[1.5px] bg-slate-200/80 rounded-full mx-auto my-2.5 shrink-0" />
+            )}
+
+            {/* Scrollable list of clickable PDF icons with comfortable spacing */}
+            <div className="flex-1 overflow-y-auto px-2 py-1 space-y-3 flex flex-col items-center chat-scrollbar">
+              {uploadedFiles.map((file) => {
+                const isActive = activePdfFile?.name === file.name;
+                return (
+                  <button
+                    key={file.name}
+                    type="button"
+                    title={displayName(file.name)}
+                    onClick={() => openPdfViewer(file)}
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer outline-none border-0 ${
+                      isActive
+                        ? 'bg-slate-200/90 text-slate-900 shadow-sm'
+                        : 'hover:bg-surface-c text-slate-700 opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <PdfIcon size={24} className="shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Sidebar Footer: Delete Chats icon button without divider line */}
+            <div className="pt-2 pb-4 mt-auto flex items-center justify-center bg-background shrink-0">
+              <button
+                type="button"
+                onClick={handleResetAll}
+                style={{ boxShadow: 'none' }}
+                className="w-10 h-10 rounded-full border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 flex items-center justify-center transition-all shadow-none outline-none cursor-pointer active:scale-95"
+                title="Delete Chats"
+              >
+                <Fire size={18} weight="regular" className="text-red-600 shrink-0" />
+              </button>
+            </div>
           </div>
         ) : (
           /* ── Expanded sidebar ── */
           <>
             {/* Top Header Bar */}
-            <div className="h-14 border-b border-surface-c px-4 flex items-center justify-between shrink-0">
-              <h2 className="text-base font-bold text-on-surface">Sources</h2>
+            <div className="h-14 border-b border-surface-c px-3.5 flex items-center justify-between shrink-0">
+              <span className="!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap">Sources</span>
               <button
                 onClick={() => setSidebarCollapsed(true)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none"
+                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
                 title="Collapse sidebar"
               >
                 <SidebarSimple size={20} />
