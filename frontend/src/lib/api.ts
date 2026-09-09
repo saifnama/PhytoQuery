@@ -18,6 +18,25 @@ export interface PaperPdfResponse {
   filename: string;
 }
 
+/**
+ * Pull a readable `detail` message out of an axios error.
+ * Blob responses (responseType: 'blob') arrive unparsed, so the raw Blob
+ * must be read as text first — otherwise callers only ever see the fallback.
+ */
+export async function extractErrorDetail(err: any, fallback: string): Promise<string> {
+  const data = err?.response?.data;
+  if (!data) return err?.message || fallback;
+  if (typeof data === 'object' && !(data instanceof Blob)) {
+    return (data as { detail?: string }).detail || fallback;
+  }
+  try {
+    const text = typeof data === 'string' ? data : await (data as Blob).text();
+    return (JSON.parse(text) as { detail?: string }).detail || text || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const API_BASE = ''; // Uses Vite proxy in dev, same origin in production
 
 const api = axios.create({
@@ -110,54 +129,6 @@ export const paperApi = {
       filename: extractFilenameFromDisposition(response.headers['content-disposition']),
     };
   },
-
-   /**
-    * Fetch PDF and upload it directly to RAG for indexing.
-    * Used for silent "Upload to RAG" from paper page without navigation.
-    */
-   async fetchAndUploadToRag(identifier: string): Promise<{ status: string; message: string; filename?: string }> {
-     const { blob, filename } = await paperApi.fetchPdf(identifier);
-     const file = new File([blob], filename || `${identifier}.pdf`, { type: 'application/pdf' });
-     
-     const result = await ragApi.uploadFiles([file], 'pymupdf');
-     // result.files is string[] - get first file
-     const fileList = result.files || [];
-     return {
-       status: result.status,
-       message: result.message,
-       filename: fileList[0],
-     };
-   },
-
-    /**
-     * Upload an already-fetched PDF File to RAG.
-     * Used when we have a direct PDF URL (OpenAlex/Semantic Scholar) and want to upload it.
-     */
-    async uploadPdfToRag(file: File): Promise<{ status: string; message: string; filename?: string }> {
-      const result = await ragApi.uploadFiles([file], 'pymupdf');
-      const fileList = result.files || [];
-      return {
-        status: result.status,
-        message: result.message,
-        filename: fileList[0],
-      };
-    },
-
-    /**
-     * Fetch PDF from an external URL via backend proxy (bypasses CORS).
-     * Used for OpenAlex/Semantic Scholar direct PDF URLs.
-     */
-    async fetchPdfFromUrl(pdfUrl: string): Promise<PaperPdfResponse> {
-      const response = await api.get('/paper/pdf-proxy', {
-        params: { url: pdfUrl },
-        responseType: 'blob',
-        timeout: 120000,
-      });
-      return {
-        blob: response.data,
-        filename: extractFilenameFromDisposition(response.headers['content-disposition']),
-      };
-    },
   };
 
 // RAG API

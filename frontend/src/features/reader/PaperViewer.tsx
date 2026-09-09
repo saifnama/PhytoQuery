@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import { sanitizeHtml, formatTextWithFormatting } from '../../utils/sanitize';
 import { downloadGraphHtml } from '../../utils/exportGraphHtml';
-import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, ListMagnifyingGlass, Chats, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap, X } from '@phosphor-icons/react';
+import { Sparkle, ListBullets, Graph, DotsThreeVertical, DownloadSimple, Eye, EyeSlash, LockSimpleOpen, Article, CaretDown, CaretUp, SpinnerGap, X, Check } from '@phosphor-icons/react';
 import type { Entity, TocItem } from '../../types';
 import SmilesDrawer from 'smiles-drawer';
 import { KnowledgeGraph, type KnowledgeGraphHandle } from './KnowledgeGraph';
@@ -342,13 +342,9 @@ interface PaperViewerProps {
   isOpenAccess?: boolean;
   canUsePdfActions?: boolean;
   isDownloadingPdf?: boolean;
-  isUploadingToRag?: boolean;
-  isAddingToAnalyse?: boolean;
+  downloadDone?: boolean;
   pdfActionError?: string | null;
-  analyseActionError?: string | null;
   onDownloadPdf?: () => void;
-  onSendPdfToRag?: () => void;
-  onAddToAnalyse?: () => void;
   onExtract?: () => void;
 
 }
@@ -387,12 +383,11 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
   paperJournal,
   paperDate,
   isOpenAccess = false,
+  canUsePdfActions = false,
   isDownloadingPdf = false,
-  isUploadingToRag = false,
-  isAddingToAnalyse = false,
+  downloadDone = false,
+  pdfActionError = null,
   onDownloadPdf,
-  onSendPdfToRag,
-  onAddToAnalyse,
   onExtract,
 }) => {
   const identifierValue = paperIdentifier?.value || 'paper';
@@ -1825,38 +1820,26 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
 
           {/* Action Row */}
           <div className="flex items-center gap-6 mb-7">
-            <button 
-              onClick={onDownloadPdf} 
-              disabled={isDownloadingPdf} 
-              style={{ fontFamily: 'var(--font-google-sans)' }}
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
-              title="Download"
-            >
-              <DownloadSimple size={17} weight="regular" />
-              Download
-            </button>
-
-            <button 
-              onClick={onAddToAnalyse} 
-              disabled={isAddingToAnalyse} 
-              style={{ fontFamily: 'var(--font-google-sans)' }}
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
-              title="Analyse"
-            >
-              <ListMagnifyingGlass size={17} weight="regular" />
-              Analyse
-            </button>
-
-            <button 
-              onClick={onSendPdfToRag} 
-              disabled={isUploadingToRag} 
-              style={{ fontFamily: 'var(--font-google-sans)' }}
-              className="result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
-              title="Chat"
-            >
-              <Chats size={17} weight="regular" />
-              Chat
-            </button>
+            {canUsePdfActions && (
+              <button 
+                onClick={onDownloadPdf} 
+                disabled={isDownloadingPdf || downloadDone} 
+                style={{ fontFamily: 'var(--font-google-sans)' }}
+                className={
+                  downloadDone
+                    ? "result-action flex items-center gap-1.5 bg-transparent text-emerald-600 text-[13.5px] font-medium transition-colors cursor-default"
+                    : "result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
+                }
+                title={downloadDone ? "Downloaded" : "Download PDF"}
+              >
+                {downloadDone ? (
+                  <Check size={16} weight="bold" className="text-emerald-600" />
+                ) : (
+                  <DownloadSimple size={17} weight="regular" />
+                )}
+                <span>{downloadDone ? 'Done' : 'Download'}</span>
+              </button>
+            )}
 
             {isExtracted && entities && entities.length > 0 && (
               <button 
@@ -1871,19 +1854,25 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     return next;
                   });
                 }} 
-                className="status-ic ml-auto text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0"
+                className="status-ic ml-auto text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0 flex items-center justify-center"
                 style={{ width: 28, height: 28 }}
-                title={showHL ? "Hide highlights" : "Show highlights"}
-                aria-label={showHL ? "Hide highlights" : "Show highlights"}
+                title={showHL ? "Highlights: On" : "Highlights: Off"}
+                aria-label={showHL ? "Highlights: On" : "Highlights: Off"}
               >
                 {showHL ? (
-                  <Eye size={17} weight="regular" />
+                  <Eye size={17} weight="regular" className="text-on-surface" />
                 ) : (
-                  <EyeSlash size={17} weight="regular" />
+                  <EyeSlash size={17} weight="regular" className="text-on-surface-muted" />
                 )}
               </button>
             )}
           </div>
+
+          {pdfActionError && (
+            <div className="mb-5 text-[13.5px] text-red-600" style={{ fontFamily: 'var(--font-google-sans)' }} role="alert">
+              <p className="m-0">{pdfActionError}</p>
+            </div>
+          )}
 
           <div style={{ height: 1, background: "var(--border)", margin: "0 0 32px" }} />
 

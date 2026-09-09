@@ -21,9 +21,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
-  DownloadSimple,
-  ListMagnifyingGlass,
-  Chats,
   Circle,
   LockSimpleOpen,
   Article,
@@ -260,12 +257,14 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="mono text-[13px] font-medium text-blue-600 hover:text-blue-800 no-underline hover:underline transition-colors"
+            className="mono text-[13px] font-medium text-blue-600 hover:text-blue-800 no-underline hover:underline transition-colors truncate max-w-[65%]"
           >
             {result.doi}
           </a>
         ) : <span />}
-        <span className="text-[13px] font-medium text-on-surface-variant" style={{ fontFamily: 'var(--font-google-sans)' }}>{year}</span>
+        <span className="text-[13px] font-medium text-on-surface-variant" style={{ fontFamily: 'var(--font-google-sans)' }}>
+          {year}
+        </span>
       </div>
 
       {/* Title — serif, bold */}
@@ -278,90 +277,52 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onOpen, delayMs }) => {
         dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.title || '') }}
       />
 
-      {/* Meta — authors • journal (italic) • Open Access (orange) • citations */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-on-surface-variant mb-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
-        {authors && (
-          <span
-            dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(authors) }}
-          />
-        )}
-        {journal && (
-          <>
-            <span className="text-on-surface-muted">•</span>
-            <span className="italic">{journal}</span>
-          </>
-        )}
-        {citationCount != null && citationCount > 0 && (
-          <>
-            <span className="text-on-surface-muted">•</span>
-            <span>{citationCount} citations</span>
-          </>
+      {/* Meta — authors • journal (italic) • citations (left) + Open Access & Full Text (right) */}
+      <div className="flex items-center justify-between gap-2 text-[13.5px] text-on-surface-variant mb-3.5" style={{ fontFamily: 'var(--font-google-sans)' }}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+          {authors && (
+            <span
+              dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(authors) }}
+            />
+          )}
+          {journal && (
+            <>
+              <span className="text-on-surface-muted">•</span>
+              <span className="italic">{journal}</span>
+            </>
+          )}
+          {citationCount != null && citationCount > 0 && (
+            <>
+              <span className="text-on-surface-muted">•</span>
+              <span>{citationCount} citations</span>
+            </>
+          )}
+        </div>
+
+        {(isOA || hasFT) && (
+          <span className="ml-auto flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+            {isOA && (
+              <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
+                <LockSimpleOpen size={17} weight="regular" />
+              </span>
+            )}
+            {hasFT && (
+              <span className="status-ic" title="Full Text">
+                <Article size={18} weight="regular" color="#1565C0" />
+              </span>
+            )}
+          </span>
         )}
       </div>
 
       {/* Excerpt (abstract) */}
       {result.abstract && (
         <div
-          className="text-sm text-on-surface-variant leading-relaxed mb-4 line-clamp-3"
+          className="text-sm text-on-surface-variant leading-relaxed line-clamp-3"
           style={{ fontFamily: 'var(--font-google-sans)' }}
           dangerouslySetInnerHTML={{ __html: formatTextWithFormatting(result.abstract) }}
         />
       )}
-
-      {/* Borderless action row — Download · Analyse · Chat | right: OA + FT indicators */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <button
-            type="button"
-            onClick={(e) => e.stopPropagation()}
-            title="Download"
-            className="result-action"
-            style={{ fontFamily: 'var(--font-google-sans)' }}
-          >
-            <DownloadSimple size={17} weight="regular" />
-            <span>Download</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => e.stopPropagation()}
-            title="Analyse"
-            className="result-action"
-            style={{ fontFamily: 'var(--font-google-sans)' }}
-          >
-            <ListMagnifyingGlass size={17} weight="regular" />
-            <span>Analyse</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => e.stopPropagation()}
-            title="Chat"
-            className="result-action"
-            style={{ fontFamily: 'var(--font-google-sans)' }}
-          >
-            <Chats size={17} weight="regular" />
-            <span>Chat</span>
-          </button>
-        </div>
-        {/* Access / full-text indicators — right side, matching mockup */}
-        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-          {isOA && (
-            <span
-              title="Open Access"
-              className="grid place-items-center w-7 h-7 rounded-lg text-orange-500"
-            >
-              <LockSimpleOpen size={16} weight="regular" />
-            </span>
-          )}
-          {hasFT && (
-            <span
-              title="Full Text"
-              className="grid place-items-center w-7 h-7 rounded-lg text-emerald-600"
-            >
-              <Article size={16} weight="regular" color="#1565C0" />
-            </span>
-          )}
-        </div>
-      </div>
     </article>
   );
 };

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react';
 import PaperViewer from './PaperViewer';
-import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api';
+import { doiApi, nerApi, paperApi, dbApi, extractErrorDetail } from '../../lib/api';
 import type { PaperData, Entity, TocItem } from '../../types';
 
 const route = getRouteApi('/paper/$doi');
@@ -23,9 +23,33 @@ const PaperPage: React.FC = () => {
   const [fallbackLoading, setFallbackLoading] = useState(false);
   const [pdfActionError, setPdfActionError] = useState<string | null>(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
-  const [isUploadingToRag, setIsUploadingToRag] = useState(false);
-  const [isAddingToAnalyse, setIsAddingToAnalyse] = useState(false);
-  const [analyseActionError, setAnalyseActionError] = useState<string | null>(null);
+  // "Done" confirmation — shown green for 20s after the download succeeds.
+  const [downloadDone, setDownloadDone] = useState(false);
+  const doiRef = useRef(doi);
+  doiRef.current = doi;
+  const doneTimer = useRef<number | undefined>(undefined);
+
+  const flashDownloadDone = () => {
+    setDownloadDone(true);
+    if (doneTimer.current !== undefined) window.clearTimeout(doneTimer.current);
+    doneTimer.current = window.setTimeout(() => setDownloadDone(false), 20000);
+  };
+
+  // Unmount: never leave a revert timer firing into a dead component.
+  useEffect(() => {
+    return () => {
+      if (doneTimer.current !== undefined) window.clearTimeout(doneTimer.current);
+    };
+  }, []);
+
+  // Paper switch: drop stale download state so paper B never shows
+  // paper A's leftovers. An in-flight download still finishes for its own
+  // paper (it closed over its identifier) but no longer touches the UI.
+  useEffect(() => {
+    setPdfActionError(null);
+    setIsDownloadingPdf(false);
+    setDownloadDone(false);
+  }, [doi]);
 
   const isExplicitDoi = (value: string) => {
     const trimmed = value.trim();
@@ -238,12 +262,14 @@ const PaperPage: React.FC = () => {
   const canUsePdfActions = (paperData?.mode === 'full_text' || Boolean(paperData?.pdfUrl)) && Boolean(pdfIdentifier);
 
   const handleDownloadPdf = async () => {
+    const startedDoi = doi;
     // OpenAlex has direct PDF URL - open in new tab
     if (paperData?.pdfUrl) {
       window.open(paperData.pdfUrl, '_blank');
+      flashDownloadDone();
       return;
     }
-    
+
     if (!pdfIdentifier || isDownloadingPdf) return;
     setPdfActionError(null);
     setIsDownloadingPdf(true);
@@ -258,80 +284,14 @@ const PaperPage: React.FC = () => {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      if (doiRef.current === startedDoi) flashDownloadDone();
     } catch (err: any) {
       console.error('PDF download failed:', err);
-      setPdfActionError(err?.response?.data?.detail || 'PDF download is not available for this paper.');
-    } finally {
-      setIsDownloadingPdf(false);
-    }
-  };
-
-  const handleSendPdfToRag = async () => {
-    if (!pdfIdentifier || isUploadingToRag) return;
-    setPdfActionError(null);
-    setIsUploadingToRag(true);
-
-    try {
-      const result = await paperApi.fetchAndUploadToRag(pdfIdentifier);
-      if (result.status === 'success') {
-        setPdfActionError(null); // Success - no error message
-      } else {
-        setPdfActionError(result.message || 'Failed to upload to RAG');
+      if (doiRef.current === startedDoi) {
+        setPdfActionError(await extractErrorDetail(err, 'PDF download is not available for this paper.'));
       }
-    } catch (err: any) {
-      console.error('PDF upload to RAG failed:', err);
-      setPdfActionError(err?.message || 'Failed to upload PDF to RAG');
     } finally {
-      setIsUploadingToRag(false);
-    }
-  };
-
-  const handleAddToAnalyse = async () => {
-    if (!pdfIdentifier || isAddingToAnalyse) return;
-    setAnalyseActionError(null);
-    setIsAddingToAnalyse(true);
-
-    try {
-      const { blob, filename } = paperData?.pdfUrl
-        ? await paperApi.fetchPdfFromUrl(paperData.pdfUrl)
-        : await paperApi.fetchPdf(pdfIdentifier);
-      const file = new File([blob], filename || `${pdfIdentifier}.pdf`, {
-        type: 'application/pdf',
-      });
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const res = await fetch('/ner/upload/json', {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Failed to save paper');
-      }
-
-      const data = await res.json();
-
-      // Save to localStorage queue so AnalysePage can pick it up
-      const queueKey = 'phytoquery_mypapers_queue';
-      const existing = JSON.parse(localStorage.getItem(queueKey) || '[]');
-      const paperEntry = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: data.metadata?.title || filename || pdfIdentifier,
-        doi: data.metadata?.doi || paperData?.doi,
-        pdfUrl: data.pdf_url || null,
-        entities: data.entities || {},
-        entity_counts: data.entity_counts || {},
-        entity_count: data.entity_count || 0,
-      };
-      localStorage.setItem(queueKey, JSON.stringify([paperEntry, ...existing]));
-    } catch (err: any) {
-      console.error('Save paper failed:', err);
-      setAnalyseActionError(err?.message || 'Failed to save paper');
-    } finally {
-      setIsAddingToAnalyse(false);
+      if (doiRef.current === startedDoi) setIsDownloadingPdf(false);
     }
   };
 
@@ -422,13 +382,9 @@ const PaperPage: React.FC = () => {
       isOpenAccess={paperData.isOpenAccess}
       canUsePdfActions={canUsePdfActions}
       isDownloadingPdf={isDownloadingPdf}
-      isUploadingToRag={isUploadingToRag}
-      isAddingToAnalyse={isAddingToAnalyse}
+      downloadDone={downloadDone}
       pdfActionError={pdfActionError}
-      analyseActionError={analyseActionError}
       onDownloadPdf={handleDownloadPdf}
-      onSendPdfToRag={handleSendPdfToRag}
-      onAddToAnalyse={handleAddToAnalyse}
       onExtract={handleExtract}
 
     />
