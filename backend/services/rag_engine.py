@@ -59,6 +59,9 @@ from backend.config import (
     RAG_RERANKER_MODEL,
     RAG_MULTI_GPU,
     RAG_USE_FLASH_ATTENTION,
+    RAG_CITATION_MODE,
+    RAG_CITATION_SUPPORT_FLOOR,
+    RAG_CITATION_SUPPORT_MARGIN,
     RAG_QDRANT_URL,
     RAG_QDRANT_API_KEY,
     RAG_QDRANT_DIR,
@@ -936,6 +939,17 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
         if self.mrl_dim and self.mrl_dim < self.model_dim:
             result = result[: self.mrl_dim]
         return result
+
+
+def _is_chrome_sentence(sentence: str) -> bool:
+    """True for publisher running heads/footers — journal name bars,
+    DOI/URL lines, copyright notices, all-caps headings. Quotes must
+    never anchor on these when body sentences score low."""
+    s = sentence.strip()
+    if re.search(r"https?://|doi\.org|©|all rights reserved", s, re.IGNORECASE):
+        return True
+    letters = [c for c in s if c.isalpha()]
+    return len(s) >= 10 and len(letters) >= 2 and s == s.upper()
 
 
 class RAGService:
@@ -2399,9 +2413,15 @@ class RAGService:
                     best = candidate
         return best
 
-    def _find_best_sentence(self, claim: str, chunk_text: str) -> str:
+    def _find_best_sentence(self, claim: str, chunk_text: str,
+                              exclude: tuple = ()) -> str:
         """Return the sentence in ``chunk_text`` most relevant to
         ``claim`` according to the cross-encoder reranker.
+
+        ``exclude`` holds already-used quote texts (normalized
+        comparison): when several claims cite one chunk, each gets a
+        distinct quote instead of all pointing at the same line.
+        Falls back to the overall best when everything is excluded.
 
         Falls back to the first non-trivial sentence if the reranker
         is unavailable, the chunk has only one sentence, or scoring
@@ -2411,15 +2431,33 @@ class RAGService:
         """
         if not chunk_text:
             return ""
-        sentences = [
-            s.strip()
-            for s in re.split(r"(?<=[.!?])\s+", chunk_text)
-            if s.strip()
+        # Split paragraphs first (and strip markdown heading markers)
+        # so a section heading can never glue itself to the following
+        # paragraph and win as one long "sentence".
+        paras = [
+            p.strip()
+            for p in re.split(r"\n\s*\n", chunk_text)
+            if p.strip()
         ]
+        sentences = []
+        for p in paras:
+            p = re.sub(r"(?m)^#{1,6}\s*", "", p).strip()
+            sentences.extend(
+                s.strip()
+                for s in re.split(r"(?<=[.!?])\s+", p)
+                if s.strip()
+            )
         # Drop very short fragments (likely artifacts of bullet
         # points, abbreviations like "et al.", etc.) so we don't
         # rank noise above real sentences.
         sentences = [s for s in sentences if len(s) >= 20]
+        # Drop publisher chrome (journal bars, DOI/URL lines,
+        # all-caps headings) so quotes never anchor on footers
+        # when body sentences score low. Fall back to the unfiltered
+        # list if everything was chrome — a quote beats no quote.
+        filtered = [s for s in sentences if not _is_chrome_sentence(s)]
+        if filtered:
+            sentences = filtered
         if not sentences:
             # Fallback to the chunk start if sentence-splitting yielded
             # nothing usable.
@@ -2427,7 +2465,6 @@ class RAGService:
         if len(sentences) == 1 or self.reranker is None:
             return sentences[0]
         try:
-            import numpy as np
             # Use the MODEL's actual max token count, not
             # ``config.reranker_max_length`` — the latter is the
             # construction-time setting and can exceed what the
@@ -2441,8 +2478,17 @@ class RAGService:
             ]
             pairs = [[t_claim, s] for s in t_sentences]
             scores = self.reranker.predict(pairs)
-            best_idx = int(np.argmax(scores))
-            return sentences[best_idx]
+            ranked = sorted(
+                range(len(scores)), key=lambda i: float(scores[i]),
+                reverse=True,
+            )
+            excluded = {
+                RAGService._normalize_for_match(q) for q in exclude
+            }
+            for i in ranked:
+                if RAGService._normalize_for_match(sentences[i]) not in excluded:
+                    return sentences[i]
+            return sentences[ranked[0]]
         except Exception as e:
             logger.warning(f"Sentence reranker scoring failed: {e}")
             return sentences[0]
@@ -2779,6 +2825,233 @@ class RAGService:
         if not attach_map:
             return answer, []
 
+        answer_with_markers = self._inject_markers_into_sentences(
+            answer, sentences, attach_map
+        )
+        return answer_with_markers, citations
+
+    @staticmethod
+    def _normalize_for_match(text: str) -> str:
+        """Lowercase + single-space text for fuzzy span matching."""
+        return re.sub(r"\s+", " ", text.strip().lower())
+
+    @staticmethod
+    def _verbatim_match(
+        sentence: str,
+        chunk_text: str,
+        min_words: int = 6,
+        ratio: float = 0.90,
+    ) -> Optional[str]:
+        """Return a source sentence verifying ``sentence`` with no
+        model inference, else None.
+
+        Instant hit when the normalized answer sentence contains (or
+        is contained in) a normalized source sentence — covers exact
+        quotes and lightly edited numbers/definitions. Otherwise a
+        difflib ratio over source sentences, accepted at >= 0.90.
+        Short sentences (< min_words) never match: they carry no
+        verifiable claim and would only anchor noise.
+        """
+        if len(sentence.split()) < min_words:
+            return None
+        import difflib
+        target = RAGService._normalize_for_match(sentence)
+        best_src = ""
+        best_ratio = 0.0
+        for raw in re.split(r"(?<=[.!?])\s+", chunk_text):
+            src = raw.strip()
+            if len(src.split()) < min_words:
+                continue
+            norm = RAGService._normalize_for_match(src)
+            if target in norm or norm in target:
+                return src
+            r = difflib.SequenceMatcher(None, target, norm).ratio()
+            if r > best_ratio:
+                best_ratio = r
+                best_src = src
+        return best_src if best_ratio >= ratio else None
+
+    def _attribute_sentences_to_sources(
+        self,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        floor: float = 0.0,
+        margin: float = 1.0,
+    ) -> tuple:
+        """Fast deterministic citation attribution — zero LLM calls.
+
+        Per answer sentence, in order:
+          1. Skip headings and short boilerplate (stay uncited).
+          2. Verbatim fast-path: an exact/near quote in a source chunk
+             attaches instantly at score 1.0, no inference.
+          3. Leftovers are scored against every chunk in ONE batched
+             cross-encoder ``predict``; the best chunk attaches when
+             it shows absolute certainty (score >= ``floor``) or
+             distinctiveness (beats that sentence's mean chunk score
+             by >= ``margin`` — scale-invariant, survives domain
+             logit shift). An already-cited chunk re-attaches only
+             when distinctly better than the best fresh alternative,
+             so answers don't collapse onto one number.
+        Unsupported sentences stay visibly uncited — never rewarded
+        with a plausible-but-wrong reference.
+
+        Returns ``(answer_with_markers, citations)`` — citations carry
+        ``{chunk_id, quote, page, source, title, score, verified,
+        attribution_method}``. ``score`` is always a plain float so
+        the NDJSON frame stays JSON-serializable. Quotes diversify:
+        sentences sharing one chunk get distinct passages, not the
+        same line repeated.
+        """
+        if not answer or not sources:
+            return answer, []
+
+        # Same strip as _reattribute_and_extract: small models
+        # sometimes emit markers themselves; the scorer chooses
+        # placement, so pre-existing markers would double-cite.
+        marker_pattern = re.compile(r"\[\s*[Cc]?\s*\d+\s*\]")
+        answer = marker_pattern.sub("", answer)
+        answer = re.sub(r"  +", " ", answer)
+
+        chunk_text_by_id: Dict[str, str] = {}
+        meta_by_id: Dict[str, Dict[str, Any]] = {}
+        for s in sources:
+            cid = s.get("chunk_id")
+            text = s.get("chunk_text", "")
+            if cid and text.strip() and cid not in chunk_text_by_id:
+                chunk_text_by_id[cid] = text
+                meta_by_id[cid] = s
+        if not chunk_text_by_id:
+            return answer, []
+
+        sentences = self._split_into_sentences(answer)
+        if not sentences:
+            return answer, []
+
+        def _cite(
+            cid: str, quote: str, score: float,
+            method: str, verified: bool,
+        ) -> Dict[str, Any]:
+            meta = meta_by_id.get(cid, {})
+            return {
+                "chunk_id": cid,
+                "quote": quote,
+                "page": meta.get("page"),
+                "source": meta.get("source", ""),
+                "title": meta.get("doc_title", ""),
+                "score": float(score),
+                "verified": verified,
+                "attribution_method": method,
+            }
+
+        attach_map: Dict[int, List[str]] = {}
+        citations: List[Dict[str, Any]] = []
+        n_verbatim = 0
+        pending: List[tuple] = []  # (sentence_idx, text)
+
+        for idx, sent in enumerate(sentences):
+            text = sent["text"].strip()
+            if text.startswith("#") or len(text.split()) < 8:
+                continue
+            hit_cid = ""
+            hit_quote = ""
+            for cid, ctext in chunk_text_by_id.items():
+                quote = self._verbatim_match(text, ctext)
+                if quote:
+                    hit_cid, hit_quote = cid, quote
+                    break
+            if hit_cid:
+                attach_map.setdefault(idx, []).append(hit_cid)
+                citations.append(
+                    _cite(hit_cid, hit_quote, 1.0, "verbatim", True)
+                )
+                n_verbatim += 1
+            else:
+                pending.append((idx, text))
+
+        n_scored = 0
+        rk_ok = False
+        used_quotes: List[str] = []
+        if pending:
+            rk = self.reranker
+            rk_ok = rk is not None
+            if rk is not None:
+                try:
+                    max_total = max(64, self._get_reranker_max_tokens() - 8)
+                    sentence_budget = min(96, max_total // 4)
+                    chunk_budget = max(64, max_total - sentence_budget)
+                    pending_text = dict(pending)
+                    trunc_sent = [
+                        self._truncate_for_reranker(t, sentence_budget)
+                        for t in pending_text.values()
+                    ]
+                    trunc_chunk = {
+                        cid: self._truncate_for_reranker(ct, chunk_budget)
+                        for cid, ct in chunk_text_by_id.items()
+                    }
+                    cids = list(chunk_text_by_id.keys())
+                    order: List[tuple] = []
+                    pairs: List[list] = []
+                    for i, idx in enumerate(pending_text.keys()):
+                        for cid in cids:
+                            order.append((idx, cid))
+                            pairs.append([trunc_chunk[cid], trunc_sent[i]])
+                    scores = rk.predict(pairs)
+                    scores_by_idx: Dict[int, list] = {}
+                    for (idx, cid), sc in zip(order, scores):
+                        scores_by_idx.setdefault(idx, []).append(
+                            (cid, float(sc))
+                        )
+                    n_scored = len(scores_by_idx)
+                    # Chunks already cited (verbatim hits included).
+                    # Without diversity pressure every sentence
+                    # independently picks the broadest chunk and the
+                    # answer reads "1 1 1 1".
+                    used_ids = {
+                        cid
+                        for ids in attach_map.values()
+                        for cid in ids
+                    }
+                    for idx, scored in scores_by_idx.items():
+                        ordered = sorted(
+                            scored, key=lambda t: t[1], reverse=True
+                        )
+                        mean = sum(s for _, s in scored) / len(scored)
+                        cid, sc_f = ordered[0]
+                        if cid in used_ids:
+                            fresh = next(
+                                (t for t in ordered if t[0] not in used_ids),
+                                None,
+                            )
+                            if fresh is not None and (sc_f - fresh[1]) < margin:
+                                # Not distinctly better than the best
+                                # fresh alternative — defer to it.
+                                cid, sc_f = fresh
+                        if sc_f >= floor or (sc_f - mean) >= margin:
+                            attach_map.setdefault(idx, []).append(cid)
+                            used_ids.add(cid)
+                            quote = self._find_best_sentence(
+                                pending_text[idx],
+                                chunk_text_by_id[cid],
+                                exclude=tuple(used_quotes),
+                            )
+                            used_quotes.append(quote)
+                            citations.append(_cite(
+                                cid,
+                                quote,
+                                sc_f,
+                                "cross_encoder",
+                                True,
+                            ))
+                except Exception as e:
+                    logger.warning(f"Fast citation scoring failed: {e}")
+
+        logger.warning(
+            "[CITATION DIAG] mode=fast sentences=%d verbatim=%d "
+            "scored=%d cited=%d floor=%s margin=%s rk=%s",
+            len(sentences), n_verbatim, n_scored,
+            len(citations), floor, margin,
+            "ok" if rk_ok else "missing",
+        )
         answer_with_markers = self._inject_markers_into_sentences(
             answer, sentences, attach_map
         )
@@ -3741,27 +4014,47 @@ Question: {question}"""
             rewrite_error: Optional[str] = None
             corrected_answer = accumulated
             used_chunk_ids: List[str] = []
+            attribution_mode = RAG_CITATION_MODE.strip().lower() or "fast"
             if accumulated.strip():
-                try:
-                    used_chunk_ids = await self._select_used_chunks(
-                        question=question,
-                        answer=accumulated,
-                        sources=prepared["sources"],
-                    )
-                except Exception as e:
-                    logger.warning(f"chunk-id selection failed: {e}")
-                    used_chunk_ids = []
-                try:
-                    corrected_answer, citations = self._reattribute_and_extract(
-                        accumulated,
-                        prepared["sources"],
-                        used_chunk_ids=used_chunk_ids,
-                    )
-                except Exception as e:
-                    logger.warning(f"Citation injection failed: {e}")
-                    citations = []
-                    corrected_answer = accumulated
-                    rewrite_error = str(e)[:200]
+                if attribution_mode == "fast":
+                    # Zero-LLM deterministic path: per-sentence verbatim
+                    # fast-path + one batched scorer pass. Any failure
+                    # degrades to the raw streamed answer, never a crash.
+                    try:
+                        corrected_answer, citations = (
+                            self._attribute_sentences_to_sources(
+                                accumulated,
+                                prepared["sources"],
+                                floor=RAG_CITATION_SUPPORT_FLOOR,
+                                margin=RAG_CITATION_SUPPORT_MARGIN,
+                            )
+                        )
+                    except Exception as e:
+                        logger.warning(f"Fast citation attribution failed: {e}")
+                        citations = []
+                        corrected_answer = accumulated
+                        rewrite_error = str(e)[:200]
+                else:
+                    try:
+                        used_chunk_ids = await self._select_used_chunks(
+                            question=question,
+                            answer=accumulated,
+                            sources=prepared["sources"],
+                        )
+                    except Exception as e:
+                        logger.warning(f"chunk-id selection failed: {e}")
+                        used_chunk_ids = []
+                    try:
+                        corrected_answer, citations = self._reattribute_and_extract(
+                            accumulated,
+                            prepared["sources"],
+                            used_chunk_ids=used_chunk_ids,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Citation injection failed: {e}")
+                        citations = []
+                        corrected_answer = accumulated
+                        rewrite_error = str(e)[:200]
 
             if accumulated.strip():
                 answer_rewritten = corrected_answer != accumulated
@@ -3773,8 +4066,9 @@ Question: {question}"""
                     for c in citations
                 ]
                 logger.warning(
-                    "[CITATION DIAG] llm_selected=%s injected=%s rewritten=%s "
+                    "[CITATION DIAG] mode=%s llm_selected=%s injected=%s rewritten=%s "
                     "citations=%s%s",
+                    attribution_mode,
                     used_chunk_ids,
                     len(citations),
                     answer_rewritten,

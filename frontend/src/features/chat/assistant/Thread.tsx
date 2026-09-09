@@ -5,10 +5,10 @@
  *   - Backend streams the answer with inline ``[<chunk_id>]`` markers
  *     (8-char hex IDs computed server-side per retrieved chunk).
  *   - ``MarkdownText`` runs a per-render ``preprocess`` that replaces
- *     each marker with ``[<sup>N</sup>](#cite-<chunk_id>)`` where N is
+ *     each marker with ``[N](#cite-<chunk_id>)`` where N is
  *     a 1-based number assigned in order of first appearance — so the
- *     reader sees clean ``[1] [2]`` superscripts, while the chunk_id
- *     stays internal to the data layer.
+ *     reader sees clean raised ``[1] [2]`` badges (``align-super``),
+ *     while the chunk_id stays internal to the data layer.
  *   - The custom markdown ``a`` component (CitationLink) renders any
  *     ``#cite-…`` link as a clickable pink badge that calls back into
  *     RagPage to open the markdown-preview panel.
@@ -216,7 +216,7 @@ const CitationLink: FC<{
           e.preventDefault();
           onCitationClick?.(chunkId);
         }}
-        className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 mx-0.5 -translate-y-0.5 text-[11px] font-semibold rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-middle shadow-none outline-none"
+        className="inline-flex items-center justify-center min-w-[18px] px-1 mx-0.5 text-[11px] font-semibold leading-none rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-super shadow-none outline-none"
         style={{ fontFamily: 'var(--font-google-sans)' }}
         title="View source"
         aria-label="View source for citation"

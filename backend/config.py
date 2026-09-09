@@ -138,6 +138,31 @@ RAG_EMBEDDING_INSTRUCTION = env("RAG_EMBEDDING_INSTRUCTION")
 RAG_TOP_K = env_int("RAG_TOP_K", 10)
 RAG_SIMILARITY_THRESHOLD = env_float("RAG_SIMILARITY_THRESHOLD", 0.85)
 RAG_RERANKER_MODEL = env("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+# Citation attribution: "fast" (default) skips the post-stream LLM
+# chunk-selection call and attributes each answer sentence
+# deterministically (verbatim fast-path, then one batched
+# cross-encoder pass). Any other value keeps the legacy
+# "llm_select" path unchanged.
+RAG_CITATION_MODE = env("RAG_CITATION_MODE", "fast")
+
+
+def _safe_float(key: str, default: float) -> float:
+    """Env float that never crashes startup on garbage input."""
+    try:
+        return float(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# A sentence cites its best chunk when EITHER holds:
+# - absolute certainty: best score >= FLOOR, or
+# - distinctiveness: best score beats that sentence's mean chunk
+#   score by >= MARGIN. The margin rule is scale-invariant — it
+#   survives domain logit shift (e.g. an ms-marco scorer going
+#   all-negative on biomedical text), where a fixed threshold
+#   would silently uncites everything.
+RAG_CITATION_SUPPORT_FLOOR = _safe_float("RAG_CITATION_SUPPORT_FLOOR", 0.0)
+RAG_CITATION_SUPPORT_MARGIN = _safe_float("RAG_CITATION_SUPPORT_MARGIN", 1.0)
 RAG_MULTI_GPU = env_bool("RAG_MULTI_GPU", False)
 RAG_USE_FLASH_ATTENTION = env_bool("RAG_USE_FLASH_ATTENTION", True)
 

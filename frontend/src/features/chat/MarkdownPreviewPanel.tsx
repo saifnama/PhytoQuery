@@ -185,34 +185,58 @@ function findFlexibleSpan(
   return [startInOrig, Math.min(haystack.length, startInOrig + needle.length)];
 }
 
+/** Restrict ``markdown`` to the region of 1-based ``page`` (delimited
+ * by ``<!-- Page N -->`` markers). Fuzzy matching inside one page
+ * cannot lock onto a duplicate passage (abstract-vs-body repeats
+ * are the most common wrong-hit). Returns the full markdown when
+ * the page markers are absent. */
+function scopeToPage(markdown: string, page: number): string {
+  const open = `<!-- Page ${page} -->`;
+  const start = markdown.indexOf(open);
+  if (start === -1) return markdown;
+  const bodyStart = start + open.length;
+  const next = markdown.indexOf('<!-- Page ', bodyStart);
+  return next === -1 ? markdown.slice(start) : markdown.slice(start, next);
+}
+
 /** Splice a single ``mark`` tag into the markdown anchored on the
  * most-specific match we can find. Strategy cascade, ordered by
  * accuracy not by latency (all strategies are fast):
  *   0. ``body_start``/``body_end`` recorded at INGEST time → byte-
- *      exact slice of the markdown. No fuzzy matching, no
- *      ambiguity. This is the primary mechanism for chunks indexed
- *      after the offset-tracking feature shipped. Inside that span
- *      we also try to brighten the verbatim quote (if present in
- *      the slice) for finer granularity.
+ *      exact slice of the markdown — but ONLY when the slice still
+ *      contains the chunk/quote text (content-validated). Stale
+ *      offsets from a re-extracted markdown fall through to fuzzy
+ *      instead of highlighting the wrong span with confidence.
  *   1. If no offsets present (legacy chunk OR ingest-time substring
  *      search failed) and Pass 2 gave us a ``quote`` that appears
  *      in the markdown, highlight just the quote.
  *   2. If still no anchor, fuzzy-match the full chunk text via
  *      findFlexibleSpan's three-step cascade (exact → multi-slice
  *      → n-gram density).
+ *   Strategies 1–2 search inside the cited page when known, so a
+ *   repeated passage on another page can't steal the highlight.
  *   3. Last resort, render unhighlighted. */
 function highlightInMarkdown(
   markdown: string,
   source: RagSource,
   quote?: string,
+  page?: number | null,
 ): { highlighted: string; chunkAnchorId: string | null } {
   const anchorId = 'pq-citation-anchor';
   const chunkText = source.chunk_text;
+  const norm = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+  const scoped =
+    typeof page === 'number' && page > 0 ? scopeToPage(markdown, page) : markdown;
+  // Offsets into ``scoped`` when scoping is active, so every slice
+  // below still indexes the string it searches.
+  const haystack = scoped;
+  const haystackOffset = markdown.indexOf(haystack);
 
   // Strategy 0 — exact offset slice from ingest-time metadata.
   // Only honor offsets that look sane against the current markdown
   // (defensive in case the markdown was re-extracted with a
-  // different parser since indexing).
+  // different parser since indexing) AND whose content still
+  // matches — otherwise fall through to fuzzy search.
   const bs = source.body_start;
   const be = source.body_end;
   if (
@@ -222,9 +246,12 @@ function highlightInMarkdown(
     be > bs &&
     be <= markdown.length
   ) {
-    const before = markdown.slice(0, bs);
-    let chunk = markdown.slice(bs, be);
-    const after = markdown.slice(be);
+    const sliceNorm = norm(markdown.slice(bs, be));
+    const probe = quote && quote.trim().length >= 8 ? quote : chunkText.slice(0, 120);
+    if (probe && sliceNorm.includes(norm(probe).slice(0, 60))) {
+      const before = markdown.slice(0, bs);
+      let chunk = markdown.slice(bs, be);
+      const after = markdown.slice(be);
 
     // Inside the offset-bounded chunk, brighten the verbatim quote
     // if Pass 2 returned one and it's actually present here.
@@ -241,13 +268,15 @@ function highlightInMarkdown(
 
     const wrapped = `<mark class="chunk-highlight" id="${anchorId}">${chunk}</mark>`;
     return { highlighted: before + wrapped + after, chunkAnchorId: anchorId };
+    }
   }
 
-  // Strategy 1 — quote-only fuzzy match (Pass 2 verbatim).
+  // Strategy 1 — quote-only fuzzy match (Pass 2 verbatim),
+  // scoped to the cited page when known.
   if (quote && quote.trim().length >= 8) {
-    const quoteSpan = findFlexibleSpan(markdown, quote);
+    const quoteSpan = findFlexibleSpan(haystack, quote);
     if (quoteSpan) {
-      const [qStart, qEnd] = quoteSpan;
+      const [qStart, qEnd] = [quoteSpan[0] + haystackOffset, quoteSpan[1] + haystackOffset];
       const before = markdown.slice(0, qStart);
       const matched = markdown.slice(qStart, qEnd);
       const after = markdown.slice(qEnd);
@@ -257,10 +286,10 @@ function highlightInMarkdown(
     }
   }
 
-  // Strategy 2 — chunk-text fuzzy match.
-  const chunkSpan = findFlexibleSpan(markdown, chunkText);
+  // Strategy 2 — chunk-text fuzzy match, same page scoping.
+  const chunkSpan = findFlexibleSpan(haystack, chunkText);
   if (chunkSpan) {
-    const [cStart, cEnd] = chunkSpan;
+    const [cStart, cEnd] = [chunkSpan[0] + haystackOffset, chunkSpan[1] + haystackOffset];
     const before = markdown.slice(0, cStart);
     const matched = markdown.slice(cStart, cEnd);
     const after = markdown.slice(cEnd);
@@ -317,8 +346,13 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
 
   const { highlighted, chunkAnchorId } = useMemo(() => {
     if (!markdown) return { highlighted: '', chunkAnchorId: null };
-    return highlightInMarkdown(markdown, source, citation?.quote);
-  }, [markdown, source, citation?.quote]);
+    return highlightInMarkdown(
+      markdown,
+      source,
+      citation?.quote,
+      citation?.page ?? source.page,
+    );
+  }, [markdown, source, citation?.quote, citation?.page]);
 
   // Scroll the highlighted chunk into view once the markdown renders.
   useEffect(() => {
@@ -341,15 +375,15 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
         <div className="min-w-0">
           <h3
             className="text-sm font-semibold text-on-surface truncate"
-            title={source.source}
+            title={citation?.title || source.source}
           >
-            {source.source}
+            {citation?.title || source.source}
           </h3>
-          {(source.section || source.page) && (
+          {(source.section || citation?.page || source.page) && (
             <p className="text-xs text-base-content/60 truncate">
               {source.section}
-              {source.section && source.page ? ' · ' : ''}
-              {source.page ? `p. ${source.page}` : ''}
+              {source.section && (citation?.page || source.page) ? ' · ' : ''}
+              {citation?.page || source.page ? `p. ${citation?.page ?? source.page}` : ''}
             </p>
           )}
         </div>
@@ -363,6 +397,30 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
           <X size={18} weight="bold" className="text-black" />
         </button>
       </div>
+
+      {citation && (
+        <div className="mx-5 mt-4 rounded-xl border border-[#fbcfe8] bg-[#ffecf6]/60 px-4 py-3 shrink-0">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            {citation.page != null ? (
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-[#d63384] text-white">
+                p. {citation.page}
+              </span>
+            ) : (
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-600">
+                page unknown
+              </span>
+            )}
+            {citation.verified && (
+              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700">
+                verified
+              </span>
+            )}
+          </div>
+          <p className="m-0 text-[13.5px] leading-relaxed text-slate-800 italic">
+            &ldquo;{citation.quote}&rdquo;
+          </p>
+        </div>
+      )}
 
       <div
         ref={containerRef}

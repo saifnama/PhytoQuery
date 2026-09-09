@@ -60,6 +60,12 @@ export interface RagSource {
 export interface Citation {
   chunk_id: string;
   quote: string;
+  page?: number | null;
+  source?: string;
+  title?: string;
+  score?: number;
+  verified?: boolean;
+  attribution_method?: string;
 }
 
 /** Custom metadata key our messages carry so the UI can render
