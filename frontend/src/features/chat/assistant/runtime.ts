@@ -391,17 +391,22 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
               }
             } else if (frame.type === 'citations') {
               citations = frame.citations;
+              // Push citation update so the UI sees the new References metadata
+              // even before the final `done` — without this the last
+              // `answer_corrected` yield had stale citations and the
+              // References block could appear empty until regenerate.
+              yield {
+                content: [{ type: 'text', text: accumulated }],
+                metadata: {
+                  custom: { sources, citations } satisfies RagMessageCustomData,
+                },
+              };
             } else if (frame.type === 'answer_corrected') {
-              // Reranker-driven re-attribution found at least one
-              // [cN] marker the LLM cited that didn't match the
-              // best-scoring chunk for the claim. Replace the
-              // streamed text wholesale so subsequent renders use
-              // the corrected chunk_id mappings. Visible superscript
-              // numbers stay stable because Thread.tsx numbers
-              // markers by order of first appearance — only the
-              // underlying #cite-cN link target changes, so the
-              // user doesn't see a flicker.
+              // LLM inline [cN] report → cleaned text + References.
+              // Treat as a token so the final `done` yield fires even
+              // if the backend sent no `text_delta` (e.g. single-shot).
               accumulated = frame.text;
+              receivedAnyToken = true;
               yield {
                 content: [{ type: 'text', text: accumulated }],
                 metadata: {

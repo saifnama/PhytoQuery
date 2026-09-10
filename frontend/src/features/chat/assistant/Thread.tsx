@@ -209,6 +209,27 @@ const CitationLink: FC<{
   const onCitationClick = useContext(CitationClickContext);
   if (typeof href === 'string' && href.startsWith('#cite-')) {
     const chunkId = href.slice('#cite-'.length);
+    // References list links have long text like "Vegetation data collection — file (p. 2)"
+    // — render as clean pink text. Inline badges are single digits like "1" — render as pill.
+    const label = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : '';
+    const isBadge = typeof label === 'string' && /^\d+$/.test(label.trim()) && label.trim().length <= 2;
+    if (isBadge) {
+      return (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            onCitationClick?.(chunkId);
+          }}
+          className="inline-flex items-center justify-center min-w-[18px] px-1 mx-0.5 text-[11px] font-semibold leading-none rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-super shadow-none outline-none"
+          style={{ fontFamily: 'var(--font-google-sans)' }}
+          title="View source"
+          aria-label="View source for citation"
+        >
+          {children}
+        </button>
+      );
+    }
     return (
       <button
         type="button"
@@ -216,7 +237,7 @@ const CitationLink: FC<{
           e.preventDefault();
           onCitationClick?.(chunkId);
         }}
-        className="inline-flex items-center justify-center min-w-[18px] px-1 mx-0.5 text-[11px] font-semibold leading-none rounded-full bg-[#ffecf6] text-[#d63384] border border-[#fbcfe8] hover:bg-[#d63384] hover:text-white transition-all cursor-pointer select-none align-super shadow-none outline-none"
+        className="text-left text-[14px] font-medium leading-relaxed text-[#d63384] hover:text-[#a01e5a] hover:underline underline-offset-2 transition-colors cursor-pointer select-text bg-transparent border-0 p-0 m-0 inline align-baseline shadow-none outline-none"
         style={{ fontFamily: 'var(--font-google-sans)' }}
         title="View source"
         aria-label="View source for citation"

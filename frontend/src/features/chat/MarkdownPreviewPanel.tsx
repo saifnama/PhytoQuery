@@ -221,12 +221,31 @@ function highlightInMarkdown(
   source: RagSource,
   quote?: string,
   page?: number | null,
+  section?: string,
 ): { highlighted: string; chunkAnchorId: string | null } {
   const anchorId = 'pq-citation-anchor';
   const chunkText = source.chunk_text;
   const norm = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
-  const scoped =
+  // Scope to page first, then to section heading when available —
+  // a heading's position is the cheapest section anchor and keeps
+  // fuzzy search from locking onto the same passage on another page.
+  let scoped =
     typeof page === 'number' && page > 0 ? scopeToPage(markdown, page) : markdown;
+  if (section && section.trim().length >= 4) {
+    const secNorm = norm(section);
+    // Find a markdown heading that contains the section text.
+    const headingRe = new RegExp(
+      `^#{1,6}\\s+.*${secNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*$`,
+      'im',
+    );
+    const m = headingRe.exec(scoped);
+    if (m && m.index !== undefined) {
+      // Keep from heading to next page break / end — the badge now
+      // lands in its section, not just its page.
+      const nextPage = scoped.indexOf('<!-- Page ', m.index + m[0].length);
+      scoped = nextPage === -1 ? scoped.slice(m.index) : scoped.slice(m.index, nextPage);
+    }
+  }
   // Offsets into ``scoped`` when scoping is active, so every slice
   // below still indexes the string it searches.
   const haystack = scoped;
@@ -351,8 +370,9 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
       source,
       citation?.quote,
       citation?.page ?? source.page,
+      source.section,
     );
-  }, [markdown, source, citation?.quote, citation?.page]);
+  }, [markdown, source, citation?.quote, citation?.page, source.section]);
 
   // Scroll the highlighted chunk into view once the markdown renders.
   useEffect(() => {
@@ -381,7 +401,9 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
           </h3>
           {(source.section || citation?.page || source.page) && (
             <p className="text-xs text-base-content/60 truncate">
-              {source.section}
+              {source.section && (
+                <span className="font-medium text-on-surface/70">{source.section}</span>
+              )}
               {source.section && (citation?.page || source.page) ? ' · ' : ''}
               {citation?.page || source.page ? `p. ${citation?.page ?? source.page}` : ''}
             </p>
@@ -398,24 +420,8 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
         </button>
       </div>
 
-      {citation && (
+        {citation && (
         <div className="mx-5 mt-4 rounded-xl border border-[#fbcfe8] bg-[#ffecf6]/60 px-4 py-3 shrink-0">
-          <div className="flex items-center gap-1.5 mb-1.5">
-            {citation.page != null ? (
-              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-[#d63384] text-white">
-                p. {citation.page}
-              </span>
-            ) : (
-              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-600">
-                page unknown
-              </span>
-            )}
-            {citation.verified && (
-              <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700">
-                verified
-              </span>
-            )}
-          </div>
           <p className="m-0 text-[13.5px] leading-relaxed text-slate-800 italic">
             &ldquo;{citation.quote}&rdquo;
           </p>

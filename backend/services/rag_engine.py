@@ -229,7 +229,7 @@ LLM_TEMPERATURE = RAG_TEMPERATURE
 LLM_CONTEXT_WINDOW = RAG_CONTEXT_WINDOW
 RAG_QUERY_TIMEOUT_SECONDS = float(os.getenv("RAG_QUERY_TIMEOUT_SECONDS", "45"))
 RAG_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("RAG_SUMMARY_TIMEOUT_SECONDS", "20"))
-RAG_RERANK_CANDIDATE_K = int(os.getenv("RAG_RERANK_CANDIDATE_K", "24"))
+RAG_RERANK_CANDIDATE_K = int(os.getenv("RAG_RERANK_CANDIDATE_K", "40"))
 RAG_RERANK_BATCH_SIZE = int(os.getenv("RAG_RERANK_BATCH_SIZE", "8"))
 ZERANK_EXPECTED_SENTENCE_TRANSFORMERS_VERSION = "5.4.1"
 ZERANK_EXPECTED_TRANSFORMERS_VERSION = "4.57.1"
@@ -1127,7 +1127,7 @@ class RAGService:
 
     def _get_semantic_splitter(self):
         """Lazy-init SemanticChunker for child-level semantic splitting."""
-        if self._semantic_splitter is None:
+        if getattr(self, "_semantic_splitter", None) is None:
             from langchain_experimental.text_splitter import SemanticChunker
             logger.info("Initializing SemanticChunker for child splitting...")
             self._semantic_splitter = SemanticChunker(
@@ -3379,6 +3379,74 @@ class RAGService:
             sources.append(record)
         return context_parts, sources, citable_sources
 
+    @staticmethod
+    def _build_references_block(
+        citations: List[Dict[str, Any]],
+        citable_sources: List[Dict[str, Any]],
+    ) -> str:
+        """Compact ``References:`` block for normal chat — deduped per
+        cited chunk in order of first appearance. Each line carries the
+        section (when the chunk has one), title, and page so the reader
+        sees *where* the claim came from without opening every badge.
+        Falls back gracefully when section/page are absent (tables,
+        docling chunks).
+
+        Returns ``""`` when there are no citations — no empty heading.
+        """
+        if not citations:
+            return ""
+        source_by_id = {
+            s["chunk_id"]: s for s in citable_sources if s.get("chunk_id")
+        }
+        seen: set = set()
+        order: List[str] = []
+        for c in citations:
+            cid = c.get("chunk_id")
+            if cid and cid not in seen:
+                seen.add(cid)
+                order.append(cid)
+        if not order:
+            return ""
+        lines = ["\n\n---\n\n**References**\n"]
+        for idx, cid in enumerate(order, 1):
+            src = source_by_id.get(cid, {})
+            # Prefer the citation's own enriched page/title when
+            # present (fast path carries them), else the source row.
+            # ``section`` lives only on the source row.
+            cite = next((x for x in citations if x.get("chunk_id") == cid), {})
+            section = (src.get("section") or "").strip()
+            title = (cite.get("title") or src.get("doc_title") or src.get("source") or "").strip()
+            page = cite.get("page") if cite.get("page") is not None else src.get("page")
+            # One-line reference: section prominent, then title + page.
+            # Examples:
+            #   1. Sampling — Grass & Herb Coverage (p. 7) — 41598_2026_Article_39006.pdf
+            #   2. Plant preparation (p. 3) — Jia et al. BMC Plant Biology
+            parts: List[str] = []
+            if section:
+                parts.append(section)
+            if title:
+                # Avoid repeating the filename when the section already
+                # equals the title (rare, but keeps the line short).
+                if not section or title.lower() != section.lower():
+                    parts.append(title)
+            display = ""
+            if parts:
+                display = " — ".join(parts)
+                if page:
+                    display += f" (p. {page})"
+                fname = (src.get("source") or cite.get("source") or "").strip()
+                if fname and fname not in display:
+                    display += f" — {fname}"
+            else:
+                display = cid
+                if page:
+                    display += f" (p. {page})"
+            # Clickable: References number and text both open the chunk's
+            # markdown preview — same handler as the inline [1] badges.
+            ref = f"{idx}. [{display}](#cite-{cid})"
+            lines.append(ref)
+        return "\n".join(lines)
+
     async def _prepare_query(
         self,
         question: str,
@@ -3549,13 +3617,16 @@ class RAGService:
             reranked_children = search_results
 
         # 3. Parent-Child Resolution: resolve filtered children to
-        # unique parents. We oversample up to 2x ``max_parents`` first
+        # unique parents. We oversample up to 3x ``max_parents`` first
         # so the diversity filter in step 3.5 has a richer candidate
         # pool to pick from. Without oversampling, a homogeneous top
         # of the rerank list would force all our chunks to come from
         # the same paragraph, which is exactly what produces the
         # "many citations on one line, all the same content" UX issue.
-        candidate_pool_size = max(config.max_parents * 2, 4)
+        # (3x, not 2x: generic queries like "summarize the methods"
+        # rank the right children mid-list — a 20-wide pool cut them
+        # off before diversity ever saw them.)
+        candidate_pool_size = max(config.max_parents * 3, 6)
         parent_ids_seen: set[str] = set()
         candidate_parents: List[Dict[str, Any]] = []
 
@@ -3757,17 +3828,13 @@ class RAGService:
 
         # Build multi-turn messages for conversation memory.
         #
-        # NOTE: the LLM is no longer asked to emit ``[cN]`` markers
-        # inline — that approach was fragile (small models, list-
-        # style answers, and multi-turn drift all caused the model
-        # to silently drop markers, leaving answers uncited). We now
-        # let the LLM answer freely in markdown prose; a separate
-        # post-stream JSON-mode call selects which chunk_ids were
-        # used, and the reranker then inserts ``[cN]`` markers at
-        # the sentence boundaries each chunk best supports. This is
-        # the structured-output pattern (LangChain ``with_structured_
-        # output``, LlamaIndex ``CitationQueryEngine``) — schema-
-        # enforced, so an answer can never be uncited.
+        # Inline self-report: the LLM cites the chunks it actually used
+        # by appending [cN] markers. Every chunk in the prompt is headed
+        # "[cN] [Title > Section (p. N)]" with its chunk_id — the ID
+        # plus doc_title/source/section/page are all in the header, so
+        # the model has the full provenance per chunk. It reports the
+        # chunk_id it drew on; we parse those IDs to build References.
+        # No second LLM call — the answer streams with its cites.
         system_msg = {
             "role": "system",
             "content": (
@@ -3782,11 +3849,12 @@ class RAGService:
                 "2. Be precise: prefer concrete numbers, dataset names, "
                 "and quoted terminology from the context over vague "
                 "summaries.\n"
-                "3. Do NOT add bracketed reference markers like [1], "
-                "[c1], (Smith 2020), or footnote-style citations of any "
-                "kind. The application attaches citations automatically "
-                "after you finish — your job is only to write the "
-                "answer."
+                "3. Cite chunks you used: at the end of each sentence "
+                "that draws on the context, append [cN] using the "
+                "chunk_id from its header (e.g. [c1], [c2]). Use only "
+                "IDs from this prompt, you may list several like "
+                "[c1][c3]. Leave a sentence uncited only if it is not "
+                "from the context."
             ),
         }
 
@@ -3864,6 +3932,43 @@ Question: {question}"""
             messages=prepared["messages"], timeout_seconds=RAG_QUERY_TIMEOUT_SECONDS
         )
         answer_text = (response.content or "").strip()
+
+        if answer_text and not prepared.get("is_kb_mode"):
+            # Normal chat: LLM inline [cN] → References from parsed IDs.
+            # No second LLM call, whole chunks, clickable.
+            try:
+                citable = prepared.get("citable_sources", prepared.get("sources", []))
+                valid_ids = {s["chunk_id"] for s in citable if s.get("chunk_id")}
+                nums = re.findall(r"\[\s*[Cc]?\s*(\d+)\s*\]", answer_text)
+                used_ids = []
+                seen: set = set()
+                for n in nums:
+                    cid = f"c{n}"
+                    if cid in valid_ids and cid not in seen:
+                        seen.add(cid)
+                        used_ids.append(cid)
+                # Clean visible text (no inline badges, just References)
+                cleaned = re.sub(r"\[†\]", "", answer_text)
+                cleaned = re.sub(r"\[\s*[Cc]?\s*\d+\s*\]", "", cleaned)
+                cleaned = re.sub(r"  +", " ", cleaned)
+                answer_text = cleaned
+                # Fallback to all citable when LLM cites nothing
+                ref_ids = used_ids if used_ids else [s["chunk_id"] for s in citable if s.get("chunk_id")]
+                if ref_ids:
+                    pseudo = [
+                        {
+                            "chunk_id": cid,
+                            "page": next((s.get("page") for s in citable if s.get("chunk_id") == cid), None),
+                            "title": next((s.get("doc_title") or s.get("title") or "" for s in citable if s.get("chunk_id") == cid), ""),
+                            "source": next((s.get("source") or "" for s in citable if s.get("chunk_id") == cid), ""),
+                        }
+                        for cid in ref_ids
+                    ]
+                    refs = self._build_references_block(pseudo, citable)
+                    if refs and "**References**" not in answer_text:
+                        answer_text = answer_text + refs
+            except Exception as e:
+                logger.warning(f"Fallback citation build failed: {e}")
 
         if prepared.get("is_kb_mode") and answer_text:
             seen_papers: Dict[str, Dict[str, str]] = {}
@@ -4096,72 +4201,93 @@ Question: {question}"""
                         ref_lines.append(line)
                     corrected_answer = accumulated + "\n" + "\n".join(ref_lines)
         else:
+            # Inline self-report: LLM appends [cN] per sentence it used.
+            # We parse those IDs (the chunk_ids we put in headers) to
+            # build References — whole chunks, section + page, clickable.
+            # No second LLM call. Visible answer stays clean (no inline
+            # badges) per user request — References below is the list.
             citations: List[Dict[str, Any]] = []
             rewrite_error: Optional[str] = None
-            corrected_answer = accumulated
-            used_chunk_ids: List[str] = []
-            attribution_mode = RAG_CITATION_MODE.strip().lower() or "fast"
-            if accumulated.strip():
-                if attribution_mode == "fast":
-                    # Zero-LLM deterministic path: per-sentence verbatim
-                    # fast-path + one batched scorer pass. Any failure
-                    # degrades to the raw streamed answer, never a crash.
-                    try:
-                        corrected_answer, citations = (
-                            self._attribute_sentences_to_sources(
-                                accumulated,
-                                citable_sources,
-                                floor=RAG_CITATION_SUPPORT_FLOOR,
-                                margin=RAG_CITATION_SUPPORT_MARGIN,
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning(f"Fast citation attribution failed: {e}")
-                        citations = []
-                        corrected_answer = accumulated
-                        rewrite_error = str(e)[:200]
-                else:
-                    try:
-                        used_chunk_ids = await self._select_used_chunks(
-                            question=question,
-                            answer=accumulated,
-                            sources=citable_sources,
-                        )
-                    except Exception as e:
-                        logger.warning(f"chunk-id selection failed: {e}")
-                        used_chunk_ids = []
-                    try:
-                        corrected_answer, citations = self._reattribute_and_extract(
-                            accumulated,
-                            citable_sources,
-                            used_chunk_ids=used_chunk_ids,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Citation injection failed: {e}")
-                        citations = []
-                        corrected_answer = accumulated
-                        rewrite_error = str(e)[:200]
+            attribution_mode = "llm_inline"
+            # Parse *before* stripping — these are the LLM's report.
+            valid_ids = {s["chunk_id"] for s in citable_sources if s.get("chunk_id")}
+            nums = re.findall(r"\[\s*[Cc]?\s*(\d+)\s*\]", accumulated)
+            used_ids: List[str] = []
+            seen: set = set()
+            for n in nums:
+                cid = f"c{n}"
+                if cid in valid_ids and cid not in seen:
+                    seen.add(cid)
+                    used_ids.append(cid)
+            # Clean visible text: strip leaked daggers + the [cN] we
+            # just parsed (so no inline badges, just References).
+            cleaned = re.sub(r"\[†\]", "", accumulated)
+            cleaned = re.sub(r"\[\s*[Cc]?\s*\d+\s*\]", "", cleaned)
+            cleaned = re.sub(r"  +", " ", cleaned)
+            corrected_answer = cleaned
+            # Fallback when LLM sends 0 markers (non-compliance) —
+            # scorer guess so References is never empty.
+            fallback_used = False
+            if not used_ids and accumulated.strip():
+                try:
+                    _, diag_cites = self._attribute_sentences_to_sources(
+                        accumulated,
+                        citable_sources,
+                        floor=RAG_CITATION_SUPPORT_FLOOR,
+                        margin=RAG_CITATION_SUPPORT_MARGIN,
+                    )
+                    # Use scorer's picks as used_ids
+                    for c in diag_cites:
+                        cid = c.get("chunk_id")
+                        if cid in valid_ids and cid not in seen:
+                            seen.add(cid)
+                            used_ids.append(cid)
+                    citations = diag_cites
+                    fallback_used = True
+                except Exception as e:
+                    logger.warning(f"Fallback attribution failed: {e}")
+                    citations = []
 
             if accumulated.strip():
-                answer_rewritten = corrected_answer != accumulated
                 citations_summary = [
                     {
-                        "chunk_id": c.get("chunk_id"),
-                        "quote_preview": (c.get("quote") or "")[:140],
+                        "chunk_id": cid,
+                        "quote_preview": next(
+                            (c.get("quote") or "")[:40] for c in citations if c.get("chunk_id") == cid
+                        ) if citations else "",
                     }
-                    for c in citations
+                    for cid in used_ids
                 ]
                 logger.warning(
-                    "[CITATION DIAG] mode=%s omitted=%d llm_selected=%s injected=%s rewritten=%s "
-                    "citations=%s%s",
+                    "[CITATION DIAG] mode=%s omitted=%d parsed=%s fallback=%s citations=%s%s",
                     attribution_mode,
                     len(prepared.get("sources", [])) - len(citable_sources),
-                    used_chunk_ids,
-                    len(citations),
-                    answer_rewritten,
+                    used_ids,
+                    fallback_used,
                     citations_summary,
                     f" error={rewrite_error!r}" if rewrite_error else "",
                 )
+
+        # References = the chunks the LLM said it used (parsed [cN]),
+        # or the fallback set when it said none. Whole chunks,
+        # section + page + title, clickable to markdown preview.
+        if not is_kb_mode and corrected_answer.strip():
+            # Prefer parsed LLM ids; if none, show all citable as honest
+            # "available to LLM" list (never empty).
+            ref_ids = used_ids if used_ids else [s["chunk_id"] for s in citable_sources if s.get("chunk_id")]
+            pseudo = [
+                {
+                    "chunk_id": cid,
+                    "page": next((s.get("page") for s in citable_sources if s.get("chunk_id") == cid), None),
+                    "title": next((s.get("doc_title") or s.get("title") or "" for s in citable_sources if s.get("chunk_id") == cid), ""),
+                    "source": next((s.get("source") or "" for s in citable_sources if s.get("chunk_id") == cid), ""),
+                }
+                for cid in ref_ids
+            ]
+            refs = self._build_references_block(pseudo, citable_sources)
+            if refs:
+                if "**References**" not in corrected_answer:
+                    corrected_answer = corrected_answer + refs
 
         if corrected_answer != accumulated:
             yield {"type": "answer_corrected", "text": corrected_answer}
@@ -4895,7 +5021,12 @@ Summary:"""
         Handles both Docling markdown output (# headers) and PyMuPDF plain text
         by recognizing standard scientific section names.
         """
-        # Standard scientific paper section names (case-insensitive)
+        # Top-level section names. Subsections are detected generically
+        # below (short Title Case line, no period, isolated) so pymupdf
+        # — which has no markdown headings — still splits "Soil
+        # preparation / Leaching experiment" without hardcoding every
+        # possible subsection name. Docling already has `##` headings
+        # and doesn't need this heuristic.
         SECTION_PATTERNS = [
             r"^(?:Abstract|Summary)\s*$",
             r"^(?:Introduction|Background|Literature Review|Related Work)\s*$",
@@ -4952,6 +5083,32 @@ Summary:"""
                     is_header = True
                     header_level = 1
                     header_title = stripped
+                # 5. Generic subsection for pymupdf (no markdown).
+                # Any short line (2-5 words, <45 chars, no period/colon,
+                # starts uppercase) followed by a real paragraph.
+                # Catches "Soil preparation", "Grass & Herb Coverage"
+                # without a hardcoded name list. Docling has `##`
+                # headings and never hits this branch.
+                elif (
+                    len(stripped) < 45
+                    and 2 <= len(stripped.split()) <= 5
+                    and not stripped.endswith(".")
+                    and not stripped.endswith(":")
+                    and stripped[0].isupper()
+                    # Generic running-header filter: pagination, postal
+                    # codes, emails, and author-line "et al." — no
+                    # journal/university/country name list.
+                    and not re.search(r"Page \d+ of|\d{5,}|@|et al\.", stripped)
+                ):
+                    nxt = ""
+                    for k in range(i + 1, min(len(lines), i + 4)):
+                        if lines[k].strip():
+                            nxt = lines[k].strip()
+                            break
+                    if nxt and len(nxt) > 40 and not nxt.startswith("#"):
+                        is_header = True
+                        header_level = 2
+                        header_title = stripped
 
             if is_header:
                 # Save previous section

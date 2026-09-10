@@ -99,7 +99,7 @@ interface ChatThreadAreaProps {
   onCitationClick: (payload: CitationClickPayload) => void;
 }
 
-const ChatThreadArea: React.FC<ChatThreadAreaProps> = React.memo(({
+const ChatThreadArea: React.FC<ChatThreadAreaProps> = ({
   getSelectedFiles,
   onCitationClick,
 }) => {
@@ -115,8 +115,7 @@ const ChatThreadArea: React.FC<ChatThreadAreaProps> = React.memo(({
       <Thread onCitationClick={onCitationClick} />
     </AssistantRuntimeProvider>
   );
-});
-ChatThreadArea.displayName = 'ChatThreadArea';
+};
 
 async function pollJobUntilDone(jobId: string, timeoutMs = 180000): Promise<UploadJobStatus> {
   const start = Date.now();
