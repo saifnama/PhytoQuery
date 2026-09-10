@@ -160,9 +160,16 @@ def _safe_float(key: str, default: float) -> float:
 #   score by >= MARGIN. The margin rule is scale-invariant — it
 #   survives domain logit shift (e.g. an ms-marco scorer going
 #   all-negative on biomedical text), where a fixed threshold
-#   would silently uncites everything.
+#   would silently leave everything uncited.
 RAG_CITATION_SUPPORT_FLOOR = _safe_float("RAG_CITATION_SUPPORT_FLOOR", 0.0)
 RAG_CITATION_SUPPORT_MARGIN = _safe_float("RAG_CITATION_SUPPORT_MARGIN", 1.0)
+
+# Tokens reserved out of RAG_CONTEXT_WINDOW for the system prompt,
+# conversation history, and the answer itself. The remainder is the
+# retrieval budget: sources past it are marked omitted_budget, kept
+# in the frame as an honest signal, but excluded from both the LLM
+# context and the citation pool. Char estimate uses 4/token.
+RAG_CONTEXT_RESERVE_TOKENS = int(_safe_float("RAG_CONTEXT_RESERVE_TOKENS", 2000))
 RAG_MULTI_GPU = env_bool("RAG_MULTI_GPU", False)
 RAG_USE_FLASH_ATTENTION = env_bool("RAG_USE_FLASH_ATTENTION", True)
 

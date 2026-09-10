@@ -52,6 +52,9 @@ export interface RagSource {
   body_start?: number;
   body_end?: number;
   page?: number;
+  /** "full" = sent to the LLM; "omitted_budget" = retrieved but cut
+   * by the context window — visible as an honest signal, never cited. */
+  context_status?: 'full' | 'omitted_budget';
 }
 
 /** One verbatim quote backing one claim, returned by Pass 2 of the

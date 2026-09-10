@@ -62,6 +62,7 @@ from backend.config import (
     RAG_CITATION_MODE,
     RAG_CITATION_SUPPORT_FLOOR,
     RAG_CITATION_SUPPORT_MARGIN,
+    RAG_CONTEXT_RESERVE_TOKENS,
     RAG_QDRANT_URL,
     RAG_QDRANT_API_KEY,
     RAG_QDRANT_DIR,
@@ -950,6 +951,26 @@ def _is_chrome_sentence(sentence: str) -> bool:
         return True
     letters = [c for c in s if c.isalpha()]
     return len(s) >= 10 and len(letters) >= 2 and s == s.upper()
+
+
+# Refusal/disclaimer fragments: a sentence carrying one makes no
+# verifiable claim (the model abstained), so citing it would certify
+# an honest "I don't know" with a random passage.
+_NON_FACTUAL_FRAGMENTS = (
+    "does not mention", "do not mention", "does not contain",
+    "do not contain", "no information", "not enough information",
+    "insufficient information", "cannot answer", "can't answer",
+    "unable to answer", "don't know", "do not know", "not provided",
+    "not in the context", "unclear from", "cannot determine",
+    "can't determine", "is not available",
+)
+
+
+def _is_non_factual(sentence: str) -> bool:
+    """True when the sentence abstains or disclaims (no verifiable
+    claim to cite)."""
+    low = sentence.lower()
+    return any(frag in low for frag in _NON_FACTUAL_FRAGMENTS)
 
 
 class RAGService:
@@ -2881,7 +2902,9 @@ class RAGService:
         """Fast deterministic citation attribution — zero LLM calls.
 
         Per answer sentence, in order:
-          1. Skip headings and short boilerplate (stay uncited).
+          1. Skip headings, short boilerplate, and refusal/disclaimer
+             sentences (an honest "not in context" carries no claim
+             to certify — stays uncited).
           2. Verbatim fast-path: an exact/near quote in a source chunk
              attaches instantly at score 1.0, no inference.
           3. Leftovers are scored against every chunk in ONE batched
@@ -2952,6 +2975,8 @@ class RAGService:
             text = sent["text"].strip()
             if text.startswith("#") or len(text.split()) < 8:
                 continue
+            if _is_non_factual(text):
+                continue
             hit_cid = ""
             hit_quote = ""
             for cid, ctext in chunk_text_by_id.items():
@@ -2969,11 +2994,11 @@ class RAGService:
                 pending.append((idx, text))
 
         n_scored = 0
-        rk_ok = False
+        rk_state = "unused"
         used_quotes: List[str] = []
         if pending:
             rk = self.reranker
-            rk_ok = rk is not None
+            rk_state = "ok" if rk is not None else "missing"
             if rk is not None:
                 try:
                     max_total = max(64, self._get_reranker_max_tokens() - 8)
@@ -3049,8 +3074,7 @@ class RAGService:
             "[CITATION DIAG] mode=fast sentences=%d verbatim=%d "
             "scored=%d cited=%d floor=%s margin=%s rk=%s",
             len(sentences), n_verbatim, n_scored,
-            len(citations), floor, margin,
-            "ok" if rk_ok else "missing",
+            len(citations), floor, margin, rk_state,
         )
         answer_with_markers = self._inject_markers_into_sentences(
             answer, sentences, attach_map
@@ -3096,9 +3120,19 @@ class RAGService:
                 i = j + 1
                 continue
 
-            # Paragraph line — sub-split on sentence delimiters.
+            # Paragraph line — sub-split on sentence delimiters,
+            # but never after abbreviations (species "L.", "et al.",
+            # "Fig.", "sp." ...) — splitting there drops markers
+            # mid-sentence ("L. [c1]from ...").
             local = 0
             for m in re.finditer(r"[.!?](?:\s+|$)", line):
+                prefix = line[:m.start()]
+                tok = prefix.split()[-1] if prefix.split() else ""
+                if (len(tok) == 1 and tok.isupper()) or tok.lower() in {
+                    "al", "fig", "eq", "sp", "spp", "var", "cf", "eg",
+                    "ie", "e.g", "i.e", "vs", "no", "ref", "etc",
+                }:
+                    continue
                 end_local = m.end()
                 seg = line[local:end_local].strip()
                 if seg:
@@ -3311,6 +3345,39 @@ class RAGService:
                 selected_grams.append(cand_grams)
 
         return selected
+
+    @staticmethod
+    def _apply_context_budget(
+        items: List[Dict[str, Any]],
+        budget_chars: int,
+    ) -> tuple:
+        """Split retrieved items into in-context vs over-budget.
+
+        ``items`` are ``{chunk_id, block, record}`` in retrieval order.
+        Sets ``record["context_status"]`` to ``"full"`` or
+        ``"omitted_budget"`` and returns
+        ``(context_parts, sources, citable_sources)`` — sources keeps
+        every record (omitted ones stay visible as an honest signal),
+        citable holds only what the model actually sees. The top item
+        is always included even over budget: some context beats a
+        guaranteed empty answer.
+        """
+        context_parts: List[str] = []
+        sources: List[Dict[str, Any]] = []
+        citable_sources: List[Dict[str, Any]] = []
+        used = 0
+        for i, item in enumerate(items):
+            record = item["record"]
+            block = item["block"]
+            if i == 0 or used + len(block) <= budget_chars:
+                record["context_status"] = "full"
+                context_parts.append(block)
+                citable_sources.append(record)
+                used += len(block)
+            else:
+                record["context_status"] = "omitted_budget"
+            sources.append(record)
+        return context_parts, sources, citable_sources
 
     async def _prepare_query(
         self,
@@ -3585,8 +3652,7 @@ class RAGService:
         # The ``c`` prefix avoids collisions with literal reference
         # numbers like ``[1]`` that appear naturally in scientific
         # papers.
-        context_parts = []
-        sources = []
+        items: List[Dict[str, Any]] = []
         for chunk_index, result in enumerate(parent_results):
             d = result["doc"]
             score = result.get("normalized_score", 0)
@@ -3616,11 +3682,11 @@ class RAGService:
             # using the same syntax. The header on the next line is
             # informational only.
             if ctype == "table":
-                context_parts.append(
+                block = (
                     f"[{chunk_id}] [TABLE | {header_str}]:\n{d.page_content}"
                 )
             else:
-                context_parts.append(
+                block = (
                     f"[{chunk_id}] [{header_str}]:\n{d.page_content}"
                 )
 
@@ -3663,8 +3729,18 @@ class RAGService:
                 source_record["body_end"] = body_end
             if page:
                 source_record["page"] = page
-            sources.append(source_record)
+            items.append(
+                {"chunk_id": chunk_id, "block": block, "record": source_record}
+            )
 
+        # Context budget: ~4 chars/token, minus reserve for system
+        # prompt + history + answer. Over-budget sources are marked,
+        # kept in the frame, but excluded from the LLM context AND
+        # the citation pool — never certify text the model never saw.
+        budget_chars = max(1000, (RAG_CONTEXT_WINDOW - RAG_CONTEXT_RESERVE_TOKENS) * 4)
+        context_parts, sources, citable_sources = self._apply_context_budget(
+            items, budget_chars
+        )
         context = "\n\n".join(context_parts)
 
         if not context_parts:
@@ -3761,7 +3837,12 @@ class RAGService:
 Question: {question}"""
         messages.append({"role": "user", "content": user_msg})
 
-        return {"messages": messages, "sources": sources, "is_kb_mode": is_kb_mode}
+        return {
+            "messages": messages,
+            "sources": sources,
+            "citable_sources": citable_sources,
+            "is_kb_mode": is_kb_mode,
+        }
 
     async def query(
         self,
@@ -3786,7 +3867,7 @@ Question: {question}"""
 
         if prepared.get("is_kb_mode") and answer_text:
             seen_papers: Dict[str, Dict[str, str]] = {}
-            for s in prepared.get("sources", []):
+            for s in prepared.get("citable_sources", prepared.get("sources", [])):
                 key = s.get("source", "")
                 if key and key not in seen_papers:
                     seen_papers[key] = {
@@ -3866,6 +3947,11 @@ Question: {question}"""
             yield {"type": "error", "error": f"LLM stream failed: {e}"}
             return
 
+        # Attribution + reference pool: only sources the model actually
+        # saw in context. The full list (incl. omitted_budget records)
+        # goes to the frames as an honest signal.
+        citable_sources = prepared.get("citable_sources", prepared.get("sources", []))
+
         # Diagnostic: log what the LLM actually cited vs what was
         # retrieved. Lets us spot at-a-glance whether bad citations
         # are coming from (a) LLM lazily citing only c1 — narrow set
@@ -3878,7 +3964,7 @@ Question: {question}"""
             # against retrieved chunk_ids so reference numbers
             # quoted from source text don't masquerade as citations.
             retrieved_id_set = {
-                s["chunk_id"] for s in prepared.get("sources", [])
+                s["chunk_id"] for s in citable_sources
             }
             # Same permissive pattern as the strip + extract sites
             # — accepts ``[c1]``, ``[1]``, ``[C1]``, ``[ c1]``,
@@ -3893,7 +3979,7 @@ Question: {question}"""
             ]
             unique_cited = sorted(set(found_markers))
             retrieved_ids = sorted(
-                s["chunk_id"] for s in prepared.get("sources", [])
+                s["chunk_id"] for s in citable_sources
             )
             # Build per-chunk diagnostic mapping. We also OFFSET-VALIDATE
             # each chunk: reload the saved paper markdown once per
@@ -3901,7 +3987,7 @@ Question: {question}"""
             # compare to the ``chunk_text`` field. If they diverge,
             # the offset is stale OR ``_strip_to_body`` is producing
             # a different body than what was stored at ingest.
-            sources_for_log = prepared.get("sources", [])
+            sources_for_log = citable_sources
             md_cache: Dict[str, Optional[str]] = {}
 
             def _load_md_once(filename: str) -> Optional[str]:
@@ -3992,7 +4078,7 @@ Question: {question}"""
             citations: List[Dict[str, Any]] = []
             if accumulated.strip():
                 seen_papers: Dict[str, Dict[str, str]] = {}
-                for s in prepared.get("sources", []):
+                for s in citable_sources:
                     key = s.get("source", "")
                     if key and key not in seen_papers:
                         seen_papers[key] = {
@@ -4024,7 +4110,7 @@ Question: {question}"""
                         corrected_answer, citations = (
                             self._attribute_sentences_to_sources(
                                 accumulated,
-                                prepared["sources"],
+                                citable_sources,
                                 floor=RAG_CITATION_SUPPORT_FLOOR,
                                 margin=RAG_CITATION_SUPPORT_MARGIN,
                             )
@@ -4039,7 +4125,7 @@ Question: {question}"""
                         used_chunk_ids = await self._select_used_chunks(
                             question=question,
                             answer=accumulated,
-                            sources=prepared["sources"],
+                            sources=citable_sources,
                         )
                     except Exception as e:
                         logger.warning(f"chunk-id selection failed: {e}")
@@ -4047,7 +4133,7 @@ Question: {question}"""
                     try:
                         corrected_answer, citations = self._reattribute_and_extract(
                             accumulated,
-                            prepared["sources"],
+                            citable_sources,
                             used_chunk_ids=used_chunk_ids,
                         )
                     except Exception as e:
@@ -4066,9 +4152,10 @@ Question: {question}"""
                     for c in citations
                 ]
                 logger.warning(
-                    "[CITATION DIAG] mode=%s llm_selected=%s injected=%s rewritten=%s "
+                    "[CITATION DIAG] mode=%s omitted=%d llm_selected=%s injected=%s rewritten=%s "
                     "citations=%s%s",
                     attribution_mode,
+                    len(prepared.get("sources", [])) - len(citable_sources),
                     used_chunk_ids,
                     len(citations),
                     answer_rewritten,
