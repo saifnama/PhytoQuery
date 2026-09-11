@@ -363,18 +363,23 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
 
           for await (const frame of readNdjsonFrames(streamResponse, abortSignal)) {
             if (frame.type === 'text_delta') {
-              accumulated += frame.text;
-              receivedAnyToken = true;
-              // Re-yield with current sources/citations so the
-              // MarkdownText preprocess can validate [chunk_id]
-              // markers as text streams in (the backend now emits
-              // the sources frame BEFORE text deltas).
-              yield {
-                content: [{ type: 'text', text: accumulated }],
-                metadata: {
-                  custom: { sources, citations } satisfies RagMessageCustomData,
-                },
-              };
+              // Break chunk into word tokens so multi-token network bursts
+              // flow onto the screen smoothly one-by-one like ChatGPT.
+              const tokens = frame.text.match(/\S+\s*|\s+/g) || [frame.text];
+              for (let i = 0; i < tokens.length; i++) {
+                if (abortSignal.aborted) break;
+                accumulated += tokens[i];
+                receivedAnyToken = true;
+                yield {
+                  content: [{ type: 'text', text: accumulated }],
+                  metadata: {
+                    custom: { sources, citations } satisfies RagMessageCustomData,
+                  },
+                };
+                if (tokens.length > 1 && i < tokens.length - 1) {
+                  await new Promise((resolve) => setTimeout(resolve, 12));
+                }
+              }
             } else if (frame.type === 'sources') {
               sources = frame.sources;
               // Push the sources update into the message metadata
@@ -403,8 +408,7 @@ export function usePhytoQueryRuntime(opts: PhytoQueryRuntimeOptions) {
               };
             } else if (frame.type === 'answer_corrected') {
               // LLM inline [cN] report → cleaned text + References.
-              // Treat as a token so the final `done` yield fires even
-              // if the backend sent no `text_delta` (e.g. single-shot).
+              // Direct replacement is safe now that smooth={false} is set.
               accumulated = frame.text;
               receivedAnyToken = true;
               yield {

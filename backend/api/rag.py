@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, R
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Any, List, Optional
 import os
+import re
 import shutil
 import uuid
 import json
@@ -35,6 +36,36 @@ router = APIRouter(prefix="/api/chat", tags=["Chat"])
 logger = logging.getLogger(__name__)
 
 job_store = UploadJobStore()
+
+# Matches a References section heading the backend appends
+# (``**References**``) or one the LLM writes itself imitating it
+# (``**References**`` / ``## References``). Plain prose lines are
+# deliberately NOT matched — only heading-shaped lines.
+_REF_HEADING_RE = re.compile(
+    r"(?m)^[ \t]*(?:#{1,6}[ \t]+References|\*\*References\*\*)[ \t]*$"
+)
+
+
+def _collapse_duplicate_references(text: str) -> str:
+    """Keep a single References section — the last one.
+
+    The LLM sometimes writes its own chunk-summary "References" block
+    and the backend then appends the authoritative one (clickable chunk
+    refs, or paper Title + DOI in knowledge-base mode), leaving two
+    headings. The appended block is always last, so keep it and drop
+    earlier ones. Fully generic: matches only the heading shape, never
+    titles, DOIs, filenames, or section names. Identity when 0–1
+    sections exist.
+    """
+    if not text or "**References**" not in text and "References" not in text:
+        return text
+    parts = _REF_HEADING_RE.split(text)
+    if len(parts) <= 2:
+        return text
+    head = parts[0].rstrip()
+    head = re.sub(r"\n[ \t]*---[ \t]*$", "", head).rstrip()
+    sep = "\n\n---\n\n**References**\n" if head else "**References**\n"
+    return head + sep + parts[-1].lstrip()
 
 
 async def _process_upload_job(job_id: str, saved_paths: List[str], parser_type: str, user_id: str):
@@ -334,6 +365,8 @@ async def query_rag_json(
             user_id=user_id,
             chat_history=history,
         )
+        if result.get("answer"):
+            result["answer"] = _collapse_duplicate_references(result["answer"])
         return QueryResponse(**result)
     except Exception as e:
         from backend.services import rag_engine as rag_engine_module
@@ -374,6 +407,11 @@ async def query_rag_stream(
                 user_id=user_id,
                 chat_history=history,
             ):
+                # The full-text frame is the only one that can hold both
+                # the LLM's own References block and the appended one —
+                # deltas stream incrementally, so collapse here, once.
+                if frame.get("type") == "answer_corrected" and frame.get("text"):
+                    frame["text"] = _collapse_duplicate_references(frame["text"])
                 yield json.dumps(frame) + "\n"
         except Exception as e:
             logger.exception("query_stream endpoint failed")
@@ -385,7 +423,11 @@ async def query_rag_stream(
     return StreamingResponse(
         frame_generator(),
         media_type="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+        },
     )
 
 

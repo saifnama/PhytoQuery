@@ -377,12 +377,8 @@ const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeRaw];
 
 // Module-level so its identity never changes across renders — a
-// per-render preprocess restarts the `smooth` animation on every
-// streamed token (metadata arrays get fresh identities per yield)
-// and can freeze visible text mid-answer while the message is whole.
-// No inline badges by design: strip leaked [cN]/[N]; long
-// `[display](#cite-cid)` References links pass through (their label
-// isn't bare digits).
+// Strip leaked [cN]/[N] markers; long `[display](#cite-cid)` References links
+// pass through (their label isn't bare digits).
 function stripInlineMarkers(text: string): string {
   return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, '');
 }
@@ -390,7 +386,7 @@ function stripInlineMarkers(text: string): string {
 const MarkdownText: FC = () => {
   return (
     <MarkdownTextPrimitive
-      smooth
+      smooth={false}
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       components={markdownComponents}
@@ -498,7 +494,12 @@ const AssistantMessage: FC = () => {
   const sources = customData.sources ?? [];
   const citations = customData.citations ?? [];
   const text = readMessageText(message);
-  const isPending = !text;
+  // Show the typing dot only when the message is actively streaming AND
+  // has no text yet. A completed message is never treated as pending even
+  // if text is briefly empty during an answer_corrected frame swap —
+  // that race previously caused the content to vanish and show the dot.
+  const isStreaming = message.status?.type === 'running';
+  const isPending = isStreaming && !text;
 
   const handleCitationClick = useCallback(
     (chunkId: string) => {

@@ -1799,10 +1799,8 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
             {paperAuthors.length > 0 && paperJournal && <span className="text-outline">•</span>}
             {paperJournal && <span className="italic">{paperJournal}</span>}
             
-            {/* Status icons — only when the source API actually reports it:
-                Open Access comes from Europe PMC/OpenAlex OA flags; Full Text
-                only when the reader is really serving the full paper. */}
-            {(isOpenAccess || mode === 'full_text') && (
+            {/* Status & Action icons */}
+            {(isOpenAccess || mode === 'full_text' || canUsePdfActions || (isExtracted && entities && entities.length > 0)) && (
               <span className="ml-auto flex items-center gap-1">
                 {isOpenAccess && (
                   <span className="status-ic" title="Open Access" style={{ color: "#E65100" }}>
@@ -1814,57 +1812,51 @@ const PaperViewer: React.FC<PaperViewerProps> = ({
                     <Article size={18} weight="regular" color="#1565C0" />
                   </span>
                 )}
+                {canUsePdfActions && (
+                  <button 
+                    type="button"
+                    onClick={onDownloadPdf} 
+                    disabled={isDownloadingPdf || downloadDone} 
+                    className="status-ic text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0 flex items-center justify-center disabled:cursor-default"
+                    style={{ width: 28, height: 28 }}
+                    title="Download"
+                    aria-label="Download"
+                  >
+                    {isDownloadingPdf ? (
+                      <SpinnerGap size={17} className="animate-spin text-on-surface-variant" />
+                    ) : downloadDone ? (
+                      <Check size={17} weight="bold" className="text-emerald-600" />
+                    ) : (
+                      <DownloadSimple size={17} weight="regular" />
+                    )}
+                  </button>
+                )}
+                {isExtracted && entities && entities.length > 0 && (
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setShowHL(v => {
+                        const next = !v;
+                        if (!next) {
+                          closeSpeciesPopup();
+                          closeChemicalPopup();
+                        }
+                        return next;
+                      });
+                    }} 
+                    className="status-ic text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0 flex items-center justify-center"
+                    style={{ width: 28, height: 28 }}
+                    title={showHL ? "Highlights: On" : "Highlights: Off"}
+                    aria-label={showHL ? "Highlights: On" : "Highlights: Off"}
+                  >
+                    {showHL ? (
+                      <Eye size={17} weight="regular" className="text-on-surface" />
+                    ) : (
+                      <EyeSlash size={17} weight="regular" className="text-on-surface-muted" />
+                    )}
+                  </button>
+                )}
               </span>
-            )}
-          </div>
-
-          {/* Action Row */}
-          <div className="flex items-center gap-6 mb-7">
-            {canUsePdfActions && (
-              <button 
-                onClick={onDownloadPdf} 
-                disabled={isDownloadingPdf || downloadDone} 
-                style={{ fontFamily: 'var(--font-google-sans)' }}
-                className={
-                  downloadDone
-                    ? "result-action flex items-center gap-1.5 bg-transparent text-emerald-600 text-[13.5px] font-medium transition-colors cursor-default"
-                    : "result-action flex items-center gap-2 bg-transparent text-on-surface-variant hover:text-on-surface text-[13.5px] font-medium transition-colors cursor-pointer"
-                }
-                title={downloadDone ? "Downloaded" : "Download PDF"}
-              >
-                {downloadDone ? (
-                  <Check size={16} weight="bold" className="text-emerald-600" />
-                ) : (
-                  <DownloadSimple size={17} weight="regular" />
-                )}
-                <span>{downloadDone ? 'Done' : 'Download'}</span>
-              </button>
-            )}
-
-            {isExtracted && entities && entities.length > 0 && (
-              <button 
-                type="button"
-                onClick={() => {
-                  setShowHL(v => {
-                    const next = !v;
-                    if (!next) {
-                      closeSpeciesPopup();
-                      closeChemicalPopup();
-                    }
-                    return next;
-                  });
-                }} 
-                className="status-ic ml-auto text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer border-0 bg-transparent p-0 flex items-center justify-center"
-                style={{ width: 28, height: 28 }}
-                title={showHL ? "Highlights: On" : "Highlights: Off"}
-                aria-label={showHL ? "Highlights: On" : "Highlights: Off"}
-              >
-                {showHL ? (
-                  <Eye size={17} weight="regular" className="text-on-surface" />
-                ) : (
-                  <EyeSlash size={17} weight="regular" className="text-on-surface-muted" />
-                )}
-              </button>
             )}
           </div>
 

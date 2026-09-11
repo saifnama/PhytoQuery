@@ -485,7 +485,7 @@ const RagPage: React.FC = () => {
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer ${sidebarCollapsed ? 'mx-auto' : ''}`}
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             <SidebarSimple size={20} />
           </button>
@@ -527,8 +527,10 @@ const RagPage: React.FC = () => {
                   onClick={() => openPdfViewer(file)}
                   className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer outline-none border-0 shrink-0 ${
                     isActive
-                      ? 'bg-slate-200/90 text-slate-900 shadow-sm'
-                      : 'hover:bg-surface-c text-slate-700 opacity-80 hover:opacity-100'
+                      ? 'bg-slate-200/90 text-slate-900 shadow-sm opacity-100'
+                      : file.selected
+                        ? 'hover:bg-surface-c text-slate-700 opacity-100'
+                        : 'hover:bg-surface-c text-slate-700 opacity-40 hover:opacity-80'
                   }`}
                 >
                   <PdfIcon size={24} className="shrink-0" />
@@ -537,7 +539,7 @@ const RagPage: React.FC = () => {
             })}
           </div>
 
-          <div className="pt-2 pb-2 mt-auto flex items-center justify-center shrink-0">
+          <div className="p-4 mt-auto flex items-center justify-center shrink-0">
             <button
               type="button"
               onClick={handleResetAll}
