@@ -6,7 +6,22 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
-from backend.core.http_client import HttpClientManager
+from backend.config import (
+    _safe_int,
+    LLMConfigError,
+    NER_HYBRID,
+    NER_CONFIDENCE_THRESHOLD,
+    NER_CHUNK_WORDS,
+    NER_MAX_ATTEMPTS,
+    NER_BUDGET_SECONDS,
+)
+from backend.core.llm_client import (
+    LLMAuthError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    LLMUpstreamError,
+    get_llm_client,
+)
 
 # Import dictionary-based matchers
 from backend.gazetteer.plant_part_matcher import match_plant_parts
@@ -16,44 +31,6 @@ from backend.gazetteer.chemical_matcher import match_chemicals
 from backend.gazetteer.bioactivity_matcher import match_bioactivities
 
 logger = logging.getLogger(__name__)
-
-# --- Import from NER config ---
-from backend.config import (
-    NER_OLLAMA_URL,
-    NER_OLLAMA_MODEL,
-    NER_OPENROUTER_API_KEY,
-    NER_OPENROUTER_MODEL,
-    NER_LLAMACPP_URL,
-    NER_LLAMACPP_API_KEY,
-    NER_LLAMACPP_MODEL,
-    NER_CONFIDENCE_THRESHOLD,
-    NER_CHUNK_SIZE_WORDS,
-    NER_LLM_ATTEMPTS,
-    NER_LLM_BUDGET_SECONDS,
-    NER_LLM_RETRY_AFTER_CAP,
-    OPENROUTER_URL,
-    _normalize_openai_compat_url,
-    get_ner_provider,
-)
-
-
-def get_active_provider():
-    """Determine which LLM provider to use as the primary for NER.
-
-    Priority: llama.cpp/OpenAI-compat (explicit opt-in) > Ollama (local,
-    fast for bulk) > OpenRouter (cloud-diverse). Other configured
-    providers remain available as fall-throughs in ``call_llm``.
-    """
-    if NER_LLAMACPP_URL:
-        return "llamacpp"
-    if NER_OLLAMA_URL:
-        return "ollama"
-    if NER_OPENROUTER_API_KEY:
-        return "openrouter"
-    raise ValueError(
-        "No LLM provider configured. Set NER_LLAMACPP_URL, "
-        "NER_OLLAMA_URL, or NER_OPENROUTER_API_KEY"
-    )
 
 
 # --- System Prompt for NER ---
@@ -123,6 +100,54 @@ def enrich_chemical_like_entity(entity: Dict[str, Any], chemical_matcher: Any) -
         )
 
 
+def preload_gazetteers() -> int:
+    """Compile all dictionary matchers now (spaCy + ~300K terms).
+
+    Matchers are module singletons, so warming them here is exactly what
+    first-request loading does — just moved to backend startup so the
+    first user never pays the ~minute compile cost. Safe to skip on
+    failure: requests fall back to lazy loading as before.
+    """
+    from backend.gazetteer.analytical_technique_matcher import (
+        get_matcher as get_analytical_matcher,
+    )
+    from backend.gazetteer.bioactivity_matcher import (
+        get_matcher as get_bioactivity_matcher,
+    )
+    from backend.gazetteer.chemical_matcher import (
+        get_matcher as get_chemical_matcher,
+    )
+    from backend.gazetteer.development_stage_matcher import (
+        get_matcher as get_development_matcher,
+    )
+    from backend.gazetteer.extraction_method_matcher import (
+        get_matcher as get_extraction_matcher,
+    )
+    from backend.gazetteer.plant_part_matcher import (
+        get_matcher as get_plant_matcher,
+    )
+    from backend.gazetteer.season_matcher import (
+        get_matcher as get_season_matcher,
+    )
+    from backend.gazetteer.species_matcher import (
+        get_matcher as get_species_matcher,
+    )
+
+    loaders = (
+        get_analytical_matcher,
+        get_bioactivity_matcher,
+        get_chemical_matcher,
+        get_development_matcher,
+        get_extraction_matcher,
+        get_plant_matcher,
+        get_season_matcher,
+        get_species_matcher,
+    )
+    for load in loaders:
+        load()
+    return len(loaders)
+
+
 class NERService:
     def __init__(self):
         self.all_labels = list(LABEL_DEFINITIONS.keys())
@@ -153,18 +178,22 @@ class NERService:
         # 4. LLM extraction (sequential to avoid rate limiting)
         # Each chunk goes through ``_extract_entities_with_retry`` —
         # on schema/validation failure we re-prompt the model with
-        # the specific error so a 7B local model can correct itself
+        # the specific error so a small local model can correct itself
         # instead of silently returning []. Dictionary entities are
         # still the safety net if the LLM path errors out entirely.
+        # NER_HYBRID=false skips this whole phase (dictionary-only).
         llm_entities = []
-        try:
-            for chunk in chunks:
-                parsed = await self._extract_entities_with_retry(chunk)
-                llm_entities.extend(parsed)
-        except Exception as e:
-            logger.warning(
-                f"LLM extraction failed: {e}. Using dictionary entities only."
-            )
+        if not NER_HYBRID:
+            logger.info("NER_HYBRID=false — dictionary-only extraction.")
+        else:
+            try:
+                for chunk in chunks:
+                    parsed = await self._extract_entities_with_retry(chunk)
+                    llm_entities.extend(parsed)
+            except Exception as e:
+                logger.warning(
+                    f"LLM extraction failed: {e}. Using dictionary entities only."
+                )
 
         # 5. Combine dict entities (already dedup'd) + LLM entities
         all_entities = dict_entities + llm_entities
@@ -284,63 +313,68 @@ class NERService:
         # LLM extraction in parallel across sections, bounded by a
         # semaphore so we don't overwhelm a single-GPU llama.cpp server
         # with concurrent requests. Default 1 for local GPU; set
-        # NER_LLM_CONCURRENCY env var to raise for cloud providers.
-        _llm_concurrency = int(os.environ.get("NER_LLM_CONCURRENCY", "1"))
-        sem = asyncio.Semaphore(_llm_concurrency)
-
-        # Wall-clock budget for the LLM phase. Unreliable/slow providers
-        # (e.g. rate-limited free tiers) used to stall the whole
-        # /paper/json request past the frontend timeout; once the budget
-        # is spent the remaining sections simply keep their dictionary
-        # entities instead of waiting on the LLM.
-        budget_seconds = NER_LLM_BUDGET_SECONDS
-        deadline = (
-            time.perf_counter() + budget_seconds if budget_seconds > 0 else None
-        )
-        skipped_sections = 0
-
-        async def _llm_for_section(section: Dict[str, str]) -> List[Dict[str, Any]]:
-            nonlocal skipped_sections
-            section_title = section.get("title", "Unknown")
-            section_text = section.get("content", "")
-            async with sem:
-                # Re-check inside the semaphore: with concurrency 1 the
-                # queued sections only resume after earlier calls finish,
-                # long past the budget deadline they saw at gather time.
-                if deadline is not None and time.perf_counter() > deadline:
-                    skipped_sections += 1
-                    return []
-                try:
-                    parsed = await self._extract_entities_with_retry(section_text)
-                except Exception as exc:
-                    logger.warning(
-                        f"LLM extraction failed for section '{section_title}': {exc}"
-                    )
-                    return []
-            return [{**e, "section": section_title} for e in parsed]
-
-        # return_exceptions=True keeps one section's hard failure from
-        # cancelling the rest of the batch — default gather() would
-        # propagate the first exception and cancel siblings mid-flight,
-        # losing their results.
-        section_results = await asyncio.gather(
-            *[_llm_for_section(s) for s in valid_sections],
-            return_exceptions=True,
-        )
-
+        # NER_CONCURRENCY env var to raise for cloud providers.
+        # NER_HYBRID=false skips this whole phase (dictionary-only).
         all_llm_entities: List[Dict[str, Any]] = []
-        for result in section_results:
-            if isinstance(result, BaseException):
-                logger.warning(f"LLM section task raised: {result}")
-                continue
-            all_llm_entities.extend(result)
+        if not NER_HYBRID:
+            logger.info("NER_HYBRID=false — dictionary-only extraction.")
+            skipped_sections = 0
+        else:
+            _llm_concurrency = max(1, _safe_int("NER_CONCURRENCY", 1))
+            sem = asyncio.Semaphore(_llm_concurrency)
 
-        if skipped_sections:
-            logger.warning(
-                f"NER LLM budget ({NER_LLM_BUDGET_SECONDS:.0f}s) exhausted: "
-                f"{skipped_sections}/{len(valid_sections)} sections fell back "
-                f"to dictionary-only entities"
+            # Wall-clock budget for the LLM phase. Unreliable/slow providers
+            # (e.g. rate-limited free tiers) used to stall the whole
+            # /paper/json request past the frontend timeout; once the budget
+            # is spent the remaining sections simply keep their dictionary
+            # entities instead of waiting on the LLM.
+            budget_seconds = NER_BUDGET_SECONDS
+            deadline = (
+                time.perf_counter() + budget_seconds if budget_seconds > 0 else None
             )
+            skipped_sections = 0
+
+            async def _llm_for_section(section: Dict[str, str]) -> List[Dict[str, Any]]:
+                nonlocal skipped_sections
+                section_title = section.get("title", "Unknown")
+                section_text = section.get("content", "")
+                async with sem:
+                    # Re-check inside the semaphore: with concurrency 1 the
+                    # queued sections only resume after earlier calls finish,
+                    # long past the budget deadline they saw at gather time.
+                    if deadline is not None and time.perf_counter() > deadline:
+                        skipped_sections += 1
+                        return []
+                    try:
+                        parsed = await self._extract_entities_with_retry(section_text)
+                    except Exception as exc:
+                        logger.warning(
+                            f"LLM extraction failed for section '{section_title}': {exc}"
+                        )
+                        return []
+                return [{**e, "section": section_title} for e in parsed]
+
+            # return_exceptions=True keeps one section's hard failure from
+            # cancelling the rest of the batch — default gather() would
+            # propagate the first exception and cancel siblings mid-flight,
+            # losing their results.
+            section_results = await asyncio.gather(
+                *[_llm_for_section(s) for s in valid_sections],
+                return_exceptions=True,
+            )
+
+            for result in section_results:
+                if isinstance(result, BaseException):
+                    logger.warning(f"LLM section task raised: {result}")
+                    continue
+                all_llm_entities.extend(result)
+
+            if skipped_sections:
+                logger.warning(
+                    f"NER LLM budget ({NER_BUDGET_SECONDS:.0f}s) exhausted: "
+                    f"{skipped_sections}/{len(valid_sections)} sections fell back "
+                    f"to dictionary-only entities"
+                )
 
         # Normalize entities
         normalized = self._normalize_entities(all_dict_entities + all_llm_entities)
@@ -544,7 +578,7 @@ class NERService:
         return all_entities
 
     def split_into_word_chunks(
-        self, text: str, chunk_size: int = NER_CHUNK_SIZE_WORDS
+        self, text: str, chunk_size: int = NER_CHUNK_WORDS
     ) -> List[str]:
         words = text.split()
         chunks = []
@@ -559,96 +593,78 @@ class NERService:
         text_chunk: str,
         error_hint: Optional[str] = None,
     ) -> str:
-        """Call LLM for NER: Ollama first, then OpenRouter fallback.
+        """Call the shared unified LLM for NER extraction.
 
         ``error_hint`` — when set, prepended to the user message so
         the model can see what went wrong with its previous attempt
         (validation-retry pattern). ``None`` preserves the original
         single-shot behavior for callers that don't need retry.
-        """
-        provider = None
-        try:
-            provider = get_active_provider()
-        except Exception as e:
-            logger.error(f"NER provider config error: {e}")
-            return ""
 
+        Returns ``""`` on config/auth/timeout/upstream failures.
+        Re-raises ``LLMRateLimitError`` so the retry loop can fail fast
+        instead of re-prompting a throttled server.
+        """
         # User-facing message body. The error hint is prepended as a
         # correction block so it's the first thing the model attends
         # to; the original "Extract entities from..." instruction
-        # remains stable so the system prompt + few-shot examples
-        # still apply cleanly.
+        # remains stable so the system prompt still applies cleanly.
         if error_hint:
             user_content = (
                 "Your previous response was rejected for the "
                 f"following reason:\n  {error_hint}\n\n"
                 "Retry with a corrected response that follows the "
                 "schema from the system prompt.\n\n"
-                f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+                f"Extract entities from:\n\n{text_chunk}"
             )
         else:
-            user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
+            user_content = f"Extract entities from:\n\n{text_chunk}"
 
-        # Try self-hosted OpenAI-compatible (llama.cpp / vLLM / LM
-        # Studio) first when configured — same wire format as
-        # OpenRouter so we delegate to ``_call_openai_compatible``
-        # with the normalized endpoint URL.
-        if provider == "llamacpp" and NER_LLAMACPP_URL:
-            content = await self._call_openai_compatible(
-                provider_name="llamacpp",
-                url=_normalize_openai_compat_url(NER_LLAMACPP_URL),
-                api_key=NER_LLAMACPP_API_KEY or "",
-                model=NER_LLAMACPP_MODEL,
-                text_chunk=text_chunk,
-                error_hint=error_hint,
-            )
-            if content:
-                return content
-            # If llama.cpp didn't return content (server down, model
-            # crashed, etc.), fall through to the cloud fallbacks.
+        try:
+            client = get_llm_client()
+        except LLMConfigError as e:
+            logger.error(f"NER LLM config error: {e}")
+            return ""
 
-        # Try Ollama first (primary)
-        if provider == "ollama":
-            payload = {
-                "model": NER_OLLAMA_MODEL,
-                "messages": [
+        try:
+            response = await client.invoke(
+                messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_content},
                 ],
-                "stream": False,
-                "options": {
-                    "temperature": 0.0,
-                    "seed": 42,
-                    "num_ctx": 8192,
-                    "num_predict": 4096,
-                },
-            }
-            try:
-                client = await HttpClientManager.get_client()
-                response = await client.post(
-                    f"{NER_OLLAMA_URL}/api/chat", json=payload, timeout=300.0
-                )
-                if response.status_code == 200:
-                    result = response.json()
-                    return result.get("message", {}).get("content", "")
-            except Exception as e:
-                logger.error(f"Error calling Ollama LLM: {e}")
-                # Fall through to try OpenRouter
-
-        # Try OpenRouter (fallback) — OpenAI-compatible wire format
-        if NER_OPENROUTER_API_KEY:
-            content = await self._call_openai_compatible(
-                provider_name="OpenRouter",
-                url=OPENROUTER_URL,
-                api_key=NER_OPENROUTER_API_KEY,
-                model=NER_OPENROUTER_MODEL,
-                text_chunk=text_chunk,
-                error_hint=error_hint,
+                temperature=0.0,
+                max_tokens=2048,
+                timeout_seconds=120.0,
+                json_mode=True,
             )
-            if content:
-                return content
-
-        return ""
+        except LLMRateLimitError:
+            raise
+        except LLMUpstreamError as e:
+            # Some servers reject response_format (HTTP 400 on unknown
+            # fields). Retry once in free-text mode rather than losing
+            # the section to dictionary-only entities.
+            if "400" not in str(e):
+                logger.warning(f"NER LLM call failed: {e}")
+                return ""
+            logger.warning(f"NER JSON mode unsupported ({e}); retrying plain")
+            try:
+                response = await client.invoke(
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    temperature=0.0,
+                    max_tokens=2048,
+                    timeout_seconds=120.0,
+                )
+            except LLMRateLimitError:
+                raise
+            except (LLMAuthError, LLMTimeoutError, LLMUpstreamError) as retry_e:
+                logger.warning(f"NER LLM call failed: {retry_e}")
+                return ""
+        except (LLMAuthError, LLMTimeoutError) as e:
+            logger.warning(f"NER LLM call failed: {e}")
+            return ""
+        return response.content or ""
 
     async def _extract_entities_with_retry(
         self,
@@ -667,7 +683,7 @@ class NERService:
         itself rather than silently returning ``[]``.
 
         After ``max_attempts`` failed attempts (default
-        ``NER_LLM_ATTEMPTS``), returns ``[]`` — callers keep their
+        ``NER_MAX_ATTEMPTS``), returns ``[]`` — callers keep their
         dictionary-extracted entities, which are always merged in
         ``process_sections`` regardless of the LLM outcome.
 
@@ -678,7 +694,7 @@ class NERService:
             return []
 
         if max_attempts is None:
-            max_attempts = max(1, NER_LLM_ATTEMPTS)
+            max_attempts = max(1, NER_MAX_ATTEMPTS)
 
         try:
             from json_repair import repair_json
@@ -694,7 +710,14 @@ class NERService:
 
         for attempt in range(max_attempts):
             t0 = time.perf_counter()
-            raw = await self.call_llm(text_chunk, error_hint=error_hint)
+            try:
+                raw = await self.call_llm(text_chunk, error_hint=error_hint)
+            except LLMRateLimitError as e:
+                # Throttled — re-prompting cannot succeed. Fail fast so
+                # the section falls back to dictionary entities instead
+                # of burning the time budget on doomed retries.
+                logger.warning(f"NER rate limited, skipping retries: {e}")
+                return []
             llm_ms = (time.perf_counter() - t0) * 1000
             if not raw:
                 error_hint = (
@@ -704,8 +727,8 @@ class NERService:
                 )
                 continue
 
-            # Strip reasoning blocks before parsing (Qwen-style CoT
-            # wrappers — emitted even when /no_think is requested).
+            # Strip reasoning blocks before parsing (some models emit
+            # chain-of-thought wrappers despite the JSON-only instruction).
             cleaned = re.sub(
                 r"<reasoning>.*?</reasoning>", "", raw, flags=re.DOTALL
             ).strip()
@@ -729,16 +752,27 @@ class NERService:
                 continue
 
             # Locate the entity array — accept both bare-list and
-            # object-wrapped shapes.
+            # object-wrapped shapes. A JSON-encoded *string* (the model
+            # quoting the whole array) gets one more repair pass on its
+            # inner content before it counts as a failure.
             entities = None
+            if isinstance(parsed, str) and parsed.strip():
+                try:
+                    parsed = repair_json(parsed.strip(), return_objects=True)
+                except Exception:
+                    pass
             if isinstance(parsed, list):
                 entities = parsed
             elif isinstance(parsed, dict):
-                for key in ("entities", "data", "results", "items"):
-                    value = parsed.get(key)
-                    if isinstance(value, list):
-                        entities = value
-                        break
+                if "span" in parsed or "text" in parsed:
+                    # Single bare entity object — wrap it.
+                    entities = [parsed]
+                else:
+                    for key in ("entities", "data", "results", "items"):
+                        value = parsed.get(key)
+                        if isinstance(value, list):
+                            entities = value
+                            break
                 if entities is None:
                     visible_keys = ", ".join(
                         sorted(str(k) for k in parsed.keys())[:6]
@@ -813,135 +847,6 @@ class NERService:
         )
         return []
 
-    async def _call_openai_compatible(
-        self,
-        provider_name: str,
-        url: str,
-        api_key: str,
-        model: str,
-        text_chunk: str,
-        error_hint: Optional[str] = None,
-    ) -> str:
-        """Generic OpenAI-compatible chat completion call (OpenRouter,
-        llama.cpp / vLLM, LM Studio).
-
-        All these providers expose the same wire format: POST {model, messages,
-        temperature} to /chat/completions, Bearer auth, response shape
-        ``{ choices: [ { message: { content } } ] }``.
-
-        ``error_hint`` — when set, prepended to the user message so
-        the model can see what went wrong with its previous attempt
-        (validation-retry pattern; mirrors ``call_llm``).
-        """
-        if error_hint:
-            user_content = (
-                "Your previous response was rejected for the "
-                f"following reason:\n  {error_hint}\n\n"
-                "Retry with a corrected response that follows the "
-                "schema from the system prompt.\n\n"
-                f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
-            )
-        else:
-            user_content = f"Extract entities from:\n\n{text_chunk}\n\n/no_think"
-
-        # Only include Authorization when an API key is set. Self-
-        # hosted servers (llama.cpp, vLLM) usually run without one —
-        # ``Bearer `` with empty token is malformed and some HTTP
-        # stacks reject it before reaching the server.
-        headers: Dict[str, str] = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "stream": False,
-            "temperature": 0.0,
-            "max_tokens": 4096,
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-
-        max_retries = 2
-        base_delay = 1.0
-        for attempt in range(max_retries):
-            try:
-                client = await HttpClientManager.get_client()
-                t0 = time.perf_counter()
-                response = await client.post(
-                    url, json=payload, headers=headers, timeout=120.0
-                )
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-
-                # Handle rate limiting (429) with retry. Honor the
-                # provider's Retry-After but cap it — some free tiers
-                # send very large values that would stall the whole
-                # extraction past any usable request timeout.
-                if response.status_code == 429:
-                    raw_retry_after = response.headers.get(
-                        "retry-after", base_delay * (2**attempt)
-                    )
-                    try:
-                        retry_after = float(raw_retry_after)
-                    except (TypeError, ValueError):
-                        retry_after = base_delay * (2**attempt)
-                    retry_after = min(retry_after, NER_LLM_RETRY_AFTER_CAP)
-                    logger.warning(
-                        f"{provider_name} rate limited (429). Retrying after "
-                        f"{retry_after:.0f}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(retry_after)
-                    continue
-
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(
-                        f"{provider_name} OK in {elapsed_ms:.0f}ms "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    return (
-                        result.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
-                # Non-200 non-429 → fall through to next retry/provider
-                logger.warning(
-                    f"{provider_name} status {response.status_code} in {elapsed_ms:.0f}ms: "
-                    f"{response.text[:200]}"
-                )
-            except Exception as e:
-                err_str = str(e)
-                # Reset the connection pool on connection-level errors so
-                # the next attempt gets a fresh socket instead of reusing
-                # a stale one from the dead tunnel / crashed server.
-                is_conn_error = any(
-                    kw in err_str.upper()
-                    for kw in ("CONNECT", "REMOTE", "POOL", "RESET", "PIPE")
-                )
-                is_ssl_error = "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper()
-
-                if is_ssl_error:
-                    logger.error(
-                        f"SSL handshake failed calling {provider_name} at {url}: {e}. "
-                        f"Check that the URL scheme matches the server."
-                    )
-                    # SSL failures are non-retryable
-                    return ""
-                elif is_conn_error:
-                    logger.warning(
-                        f"Connection error calling {provider_name}: {e}. "
-                        f"Resetting connection pool (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await HttpClientManager.reset_client()
-                    await asyncio.sleep(base_delay * (2 ** attempt))
-                else:
-                    logger.error(f"Error calling {provider_name} LLM: {e}")
-                    await asyncio.sleep(base_delay * (2 ** attempt))
-                continue
-
-        return ""
-
     def parse_llm_response(self, raw_text: str) -> List[Dict[str, Any]]:
         """Parse response: strip <reasoning> block, extract JSON,
         and map span/type to text/label for internal compatibility.
@@ -971,20 +876,23 @@ class NERService:
             return []
 
         # The model is asked to return a top-level array. Accept that
-        # directly; also accept an object whose ``entities``/``data``
-        # field is the array (a common drift the prompt doesn't
-        # forbid). Anything else degrades to ``[]``.
+        # directly, a single bare entity object, or an object whose
+        # ``entities``/``data`` field is the array (common drifts the
+        # prompt doesn't forbid). Anything else degrades to ``[]``.
         if isinstance(parsed, list):
             entities = parsed
         elif isinstance(parsed, dict):
-            entities = None
-            for key in ("entities", "data", "results", "items"):
-                value = parsed.get(key)
-                if isinstance(value, list):
-                    entities = value
-                    break
-            if entities is None:
-                return []
+            if "span" in parsed or "text" in parsed:
+                entities = [parsed]
+            else:
+                entities = None
+                for key in ("entities", "data", "results", "items"):
+                    value = parsed.get(key)
+                    if isinstance(value, list):
+                        entities = value
+                        break
+                if entities is None:
+                    return []
         else:
             return []
 

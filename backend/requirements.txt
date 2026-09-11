@@ -31,6 +31,12 @@ python-multipart==0.0.27
 
 # === HTTP ===================================================================
 httpx==0.28.1
+# Official OpenAI SDK — the single LLM boundary (RAG, NER, RAGAS eval).
+# Pinned directly; do not rely on transitive installs via ragas/instructor.
+# v3 rides on httpx2 (separate fork) — our httpx==0.28.1 pin is unaffected.
+# NOTE: instructor/langchain-openai declare openai<3; both import fine and
+# the RAGAS handoff constructs, but re-run an eval row after any bump.
+openai==3.13.0
 
 # === NLP — dictionary matchers (spaCy PhraseMatcher) =======================
 # spaCy model is downloaded out-of-band: ``python -m spacy download en_core_web_sm``

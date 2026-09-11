@@ -123,6 +123,21 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup: Initialize the global HTTP client
     await HttpClientManager.get_client()
+    # Pre-compile NER gazetteers (~300K terms) so the first user request
+    # doesn't pay the ~minute lazy-load cost. Guarded: failure falls back
+    # to per-request lazy loading, never a startup crash.
+    try:
+        import asyncio as _asyncio
+        import time as _time
+        from backend.services.ner_engine import preload_gazetteers
+
+        _t0 = _time.perf_counter()
+        _n = await _asyncio.to_thread(preload_gazetteers)
+        logger.info(f"Preloaded {_n} NER gazetteers "
+                    f"in {_time.perf_counter() - _t0:.1f}s.")
+    except Exception as exc:
+        logger.warning(f"Gazetteer preload skipped ({exc}); "
+                       f"matchers will load lazily on first request.")
     logger.info("PhytoQuery backend startup complete.")
     yield
     # Shutdown — order matters here:
@@ -137,6 +152,11 @@ async def lifespan(app: FastAPI):
     #      never trigger a wasteful lazy-init at shutdown when the
     #      service was never used during this process.
     await HttpClientManager.close_client()
+    try:
+        from backend.core.llm_client import close_llm_client
+        await close_llm_client()
+    except Exception as exc:
+        logger.warning(f"LLM client shutdown raised (ignored): {exc}")
     try:
         from backend.services.rag_engine import peek_rag_service
         svc = peek_rag_service()

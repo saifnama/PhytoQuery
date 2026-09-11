@@ -88,7 +88,7 @@ def run_config1(texts: dict) -> dict:
 
 
 async def _llm_for_doc(text: str) -> list:
-    """LLM extraction via production NER engine (prompt, provider chain,
+    """LLM extraction via production NER engine (prompt, shared client,
     json_repair, validation-retry). Returns entities with offsets for
     EVERY occurrence of each unique (text, label) in the document.
 
@@ -230,7 +230,7 @@ def save(data: dict, path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--skip-llm", action="store_true", help="Run dict and hybrid only (skip Ollama)"
+        "--skip-llm", action="store_true", help="Run dict and hybrid only (skip LLM)"
     )
     parser.add_argument(
         "--llm-only", action="store_true", help="Re-run LLM only and rebuild hybrid"

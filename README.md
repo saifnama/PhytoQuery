@@ -64,7 +64,7 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 
 ### Named Entity Recognition (NER)
 - **Dictionary-backed** matchers (spaCy PhraseMatcher with stemmed surface forms): PLANT PART, ANALYTICAL TECHNIQUE, EXTRACTION METHOD, DEVELOPMENT STAGE, SEASON, SPECIES, CHEMICAL, BIOACTIVITY
-- **LLM-assisted** path (requires Ollama / OpenRouter / llama.cpp config)
+- **LLM-assisted** path (uses the shared `LLM_API_*` OpenAI-compatible client)
 - Entities highlighted inline and grouped in a sidebar; CSV export
 - **Graph View** — physics-based knowledge graph linking the paper's DOI to its extracted entities (vis-network)
 
@@ -97,8 +97,8 @@ A research-paper reader and RAG workbench for **phytochemistry, ethnobotany, and
 | Molecules | smiles-drawer (SMILES → 2D structure) |
 | Sanitization | nh3 (server, Rust-backed), DOMPurify (client) |
 | Paper sources | Europe PMC API, OpenAlex API, PubMed eutils |
-| RAG LLM | llama.cpp / vLLM / LM Studio (OpenAI-compatible) > OpenRouter > Ollama |
-| NER LLM | llama.cpp > Ollama > OpenRouter |
+| RAG LLM | Shared OpenAI-compatible client (`LLM_API_*`: OpenAI, OpenRouter, Ollama `/v1`, llama.cpp / vLLM) |
+| NER LLM | Same shared client (prompts/options differ, server config shared) |
 | Knowledge base | SQLite (WAL, FK on, busy-timeout) + async SQLAlchemy (`sqlite+aiosqlite`) |
 | Config | python-dotenv + per-environment `.env.<profile>` switching |
 
@@ -186,7 +186,7 @@ The `status` command prints the active runtime so you can confirm which engine i
 
 Override any of them with env vars: `QDRANT_RUNTIME`, `QDRANT_CONTAINER`, `QDRANT_STORAGE_DIR`, `QDRANT_VERSION`, `QDRANT_PORT_REST`, `QDRANT_PORT_GRPC`. Once it's up, the helper prints the REST URL (`http://localhost:6333`) and the Web UI URL (`http://localhost:6333/dashboard`).
 
-> **No Docker AND no Podman?** Fall back to embedded mode by leaving `RAG_QDRANT_URL` unset — the backend will use an in-process Qdrant client backed by `data/qdrant/`. See [Embedded mode caveats](#embedded-mode-caveats) below.
+> **No Docker AND no Podman?** Fall back to embedded mode by leaving `QDRANT_URL` unset — the backend will use an in-process Qdrant client backed by `data/qdrant/`. See [Embedded mode caveats](#embedded-mode-caveats) below.
 >
 > **Switching engines on an existing container?** Docker and Podman don't share storage by default, so a container created by one engine isn't visible to the other. Run `remove` first, then `start` under the new runtime — your `QDRANT_STORAGE_DIR` data is bind-mounted from the host and survives the swap.
 
@@ -207,7 +207,7 @@ python -m spacy download en_core_web_sm
 
 # point at Qdrant + configure providers (see "Configuration" below)
 cp .env.example .env
-# edit .env — at minimum set RAG_QDRANT_URL and one LLM provider
+# edit .env — at minimum set QDRANT_URL and the LLM keys
 
 # run
 uvicorn backend.app:app --host 0.0.0.0 --port 8000
@@ -272,60 +272,49 @@ The legacy workflow still works if you prefer it — just copy the right preset 
 cp .env.server .env       # or cp .env.macbook .env
 ```
 
-### LLM providers
+### LLM (one shared OpenAI SDK client)
 
-PhytoQuery dispatches across three providers per pipeline. The **first one with credentials wins**; the rest stand by as fallbacks.
-
-**RAG priority:** llama.cpp (or any OpenAI-compatible self-host) → OpenRouter → Ollama
-
-```bash
-# Self-hosted OpenAI-compatible (highest priority when URL is set —
-# explicit opt-in always wins). Works with llama.cpp `server`, vLLM,
-# LM Studio, LocalAI, Text Generation WebUI. URL accepts any of:
-#   https://name.trycloudflare.com
-#   https://name.trycloudflare.com/v1
-#   https://name.trycloudflare.com/v1/chat/completions
-# RAG_LLAMACPP_URL=https://your-name.trycloudflare.com
-# RAG_LLAMACPP_MODEL=qwen2.5-7b-instruct
-# RAG_LLAMACPP_API_KEY=               # optional; only if server uses --api-key
-
-# OpenRouter (diverse model catalog)
-RAG_OPENROUTER_API_KEY=sk-or-v1-...
-RAG_OPENROUTER_MODEL=nvidia/nemotron-3-super-120b-a12b:free
-
-# Ollama (local fallback — uses /api/chat, NOT OpenAI-compatible)
-RAG_OLLAMA_URL=http://localhost:11434
-RAG_OLLAMA_MODEL=llama3.1:8b
-```
-
-**NER priority:** llama.cpp → Ollama → OpenRouter (local-first; bulk per-paper extraction is cheaper local)
+RAG, NER, and RAGAS evaluation share a single `AsyncOpenAI` Chat Completions
+client (`backend/core/llm_client.py`). The target server changes only through
+these three variables — no provider names, no per-pipeline overrides:
 
 ```bash
-# NER_LLAMACPP_URL=https://your-name.trycloudflare.com
-NER_OLLAMA_URL=http://localhost:11434
-NER_OLLAMA_MODEL=llama3.1:8b
-NER_OPENROUTER_API_KEY=sk-or-v1-...
+# Official OpenAI
+LLM_API_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+
+# OpenRouter (or any OpenAI-compatible /v1 server: Ollama at
+# http://localhost:11434/v1, llama.cpp server, vLLM, LM Studio)
+# LLM_API_BASE_URL=https://openrouter.ai/api/v1
+# LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ```
+
+`LLM_API_BASE_URL` must be a `/v1` root — never `/v1/chat/completions` or
+native `/api/chat`. Pre-unification `RAG_*`/`NER_*` LLM keys still work as a
+deprecated fallback when no `LLM_API_*` variable is set; set the three above
+and the legacy keys are ignored.
 
 ### Qdrant — server vs embedded
 
 ```bash
 # Server mode (recommended). Leave unset for embedded.
-RAG_QDRANT_URL=http://localhost:6333
+QDRANT_URL=http://localhost:6333
 # Optional bearer (Qdrant Cloud, or any server started with --service.api_key=...)
-# RAG_QDRANT_API_KEY=
+# QDRANT_API_KEY=
 
-# Embedded mode storage path. Only consulted when RAG_QDRANT_URL is empty.
+# Embedded mode storage path. Only consulted when QDRANT_URL is empty.
 # Leave empty for default `<repo>/data/qdrant/`. ~ is expanded; relative
 # paths resolve to absolute at startup.
-# RAG_QDRANT_DIR=
+# QDRANT_DIR=
 ```
 
 ### Embedding + reranker
 
 ```bash
+# Single embedding model — a load failure raises instead of silently
+# swapping models (mixed-model indexes corrupt retrieval).
 RAG_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-4B
-RAG_FALLBACK_EMBEDDING_MODEL=BAAI/bge-m3
 
 # MRL (Matryoshka) truncation. The new safety clamp means:
 #   * If RAG_EMBEDDING_DIM <= model_dim: used verbatim (truncates down)
@@ -338,12 +327,12 @@ RAG_EMBEDDING_INSTRUCTION=Instruct: Given a scientific query about phytochemistr
 RAG_RERANKER_MODEL=zeroentropy/zerank-2     # commercial: zerank-1-small (Apache-2.0)
 
 # GPU settings (CUDA only)
-RAG_USE_FLASH_ATTENTION=true
+RAG_FLASH_ATTENTION=true
 RAG_MULTI_GPU=true
 
 # Retrieval tuning
 RAG_TEMPERATURE=0.1
-RAG_CONTEXT_WINDOW=8192
+LLM_CONTEXT_WINDOW=32768
 RAG_TOP_K=10
 RAG_SIMILARITY_THRESHOLD=0.85
 ```
@@ -476,7 +465,7 @@ PhytoQuery/
 │   └── phytoquery.sqlite
 ├── data/                       # Runtime data (created lazily on first use)
 │   ├── cache/                  # Paper + NER file cache
-│   ├── qdrant/                 # Only used in embedded Qdrant mode (override with RAG_QDRANT_DIR)
+│   ├── qdrant/                 # Only used in embedded Qdrant mode (override with QDRANT_DIR)
 │   └── uploads/                # Per-user uploaded PDFs + extracted markdown
 ├── .env.example                # Template — copy to .env or set PHYTOQUERY_PROFILE
 ├── .env.macbook                # MacBook (M-series, MPS) preset

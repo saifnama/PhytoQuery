@@ -337,7 +337,7 @@
     --destructive-foreground: #FFFFFF;
     --border:      #E4E4E7;
     --input:       #E4E4E7;
-    --ring:        #009688;
+    --ring:        #71717A;
     --radius:      12px;
     --sidebar:            #FAFAFA;
     --sidebar-foreground: #18181B;
@@ -346,7 +346,7 @@
     --sidebar-accent:     #F4F4F5;
     --sidebar-accent-foreground: #18181B;
     --sidebar-border:     #E4E4E7;
-    --sidebar-ring:       #009688;
+    --sidebar-ring:       #71717A;
 
     /* shadcn chart palette â€” consumed by JournalBarsChart, EntityDonutChart, etc.
        Colors intentionally match the screenshot's teal/green/cyan/orange/purple arc. */
@@ -531,7 +531,7 @@ textarea::-webkit-scrollbar-corner,
 }
 .btn:active { transform: scale(0.98); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn:focus-visible { outline: 2px solid var(--teal-500); outline-offset: 2px; }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 .btn-primary { background: var(--teal-500); color: #fff; }
 .btn-primary:hover { background: var(--teal-600); }

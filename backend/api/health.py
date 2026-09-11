@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from backend.config import NER_OLLAMA_URL
-from backend.core.http_client import HttpClientManager
+from backend.config import llm_status
 import logging
 
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -8,27 +7,24 @@ logger = logging.getLogger(__name__)
 @router.get("/ready")
 async def readiness_check():
     """
-    Check if the service and its dependencies (Ollama, Qdrant) are ready.
-    Used by load balancers and orchestrators.
+    Check if the service and its dependencies (LLM config, Qdrant) are ready.
+    Used by load balancers and orchestrators. The LLM check is
+    configuration-only — it never issues a billable model request.
     """
     health_status = {
         "status": "ready",
-        "dependencies": {"ollama": "unknown", "qdrant": "deferred"},
+        "dependencies": {"llm": "unknown", "qdrant": "deferred"},
     }
 
-    # 1. Check Ollama
+    # 1. Check LLM configuration (no network call)
     try:
-        client = await HttpClientManager.get_client()
-        # Ollama has a tags endpoint that is fast
-        response = await client.get(f"{NER_OLLAMA_URL}/api/tags", timeout=2.0)
-        if response.status_code == 200:
-            health_status["dependencies"]["ollama"] = "up"
-        else:
-            health_status["dependencies"]["ollama"] = "down"
+        status = llm_status()
+        health_status["dependencies"]["llm"] = status["llm"]
+        if status["llm"] != "configured":
             health_status["status"] = "partial"
     except Exception as e:
-        logger.error(f"Health check failed for Ollama: {e}")
-        health_status["dependencies"]["ollama"] = "unreachable"
+        logger.error(f"Health check failed for LLM config: {e}")
+        health_status["dependencies"]["llm"] = "unreachable"
         health_status["status"] = "partial"
 
     # 2. Check Qdrant — only if the RAG service has been booted.

@@ -838,7 +838,7 @@ def cmd_ingest(qdrant, conn: sqlite3.Connection, workers: int = PARSE_WORKERS) -
     # Lazy import — don't load embeddings into worker processes at import time.
     from backend.services.rag_engine import PhytoQueryEmbeddings
 
-    embeddings = PhytoQueryEmbeddings(primary_model=EMBEDDING_MODEL_NAME)
+    embeddings = PhytoQueryEmbeddings(model=EMBEDDING_MODEL_NAME)
 
     ensure_collection(qdrant)
 

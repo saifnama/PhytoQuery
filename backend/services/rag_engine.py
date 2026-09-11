@@ -14,7 +14,13 @@ from importlib import metadata as importlib_metadata
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
-from backend.core.http_client import HttpClientManager
+from backend.core.llm_client import (
+    LLMAuthError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+    SharedLLMClient,
+    get_llm_client,
+)
 from backend.core.rag_storage import (
     delete_user_upload_file,
     delete_user_uploads,
@@ -48,25 +54,25 @@ except Exception:  # allow tests / minimal envs to inject a stub later
 
 # --- Import from RAG config ---
 from backend.config import (
+    _safe_float,
+    _safe_int,
     RAG_TEMPERATURE,
     RAG_CONTEXT_WINDOW,
     RAG_EMBEDDING_MODEL,
-    RAG_FALLBACK_EMBEDDING_MODEL,
     RAG_EMBEDDING_DIM,
     RAG_EMBEDDING_INSTRUCTION,
     RAG_TOP_K,
     RAG_SIMILARITY_THRESHOLD,
     RAG_RERANKER_MODEL,
     RAG_MULTI_GPU,
-    RAG_USE_FLASH_ATTENTION,
+    RAG_FLASH_ATTENTION,
     RAG_CITATION_MODE,
     RAG_CITATION_SUPPORT_FLOOR,
     RAG_CITATION_SUPPORT_MARGIN,
     RAG_CONTEXT_RESERVE_TOKENS,
-    RAG_QDRANT_URL,
-    RAG_QDRANT_API_KEY,
-    RAG_QDRANT_DIR,
-    get_rag_provider,
+    QDRANT_URL,
+    QDRANT_API_KEY,
+    QDRANT_DIR,
 )
 
 
@@ -224,13 +230,14 @@ def _sanitize_documents_for_qdrant(documents):
 
 
 # --- RAG Configuration ---
-LLM_PROVIDER = get_rag_provider()
 LLM_TEMPERATURE = RAG_TEMPERATURE
-LLM_CONTEXT_WINDOW = RAG_CONTEXT_WINDOW
-RAG_QUERY_TIMEOUT_SECONDS = float(os.getenv("RAG_QUERY_TIMEOUT_SECONDS", "45"))
-RAG_SUMMARY_TIMEOUT_SECONDS = float(os.getenv("RAG_SUMMARY_TIMEOUT_SECONDS", "20"))
-RAG_RERANK_CANDIDATE_K = int(os.getenv("RAG_RERANK_CANDIDATE_K", "40"))
-RAG_RERANK_BATCH_SIZE = int(os.getenv("RAG_RERANK_BATCH_SIZE", "8"))
+
+# Crash-proof env numerics live in backend.config (_safe_float/_safe_int);
+# reused here so empty/garbage values fall back instead of killing import.
+RAG_QUERY_TIMEOUT_SECONDS = _safe_float("RAG_QUERY_TIMEOUT_SECONDS", 45.0)
+RAG_SUMMARY_TIMEOUT_SECONDS = _safe_float("RAG_SUMMARY_TIMEOUT_SECONDS", 20.0)
+RAG_RERANK_CANDIDATE_K = _safe_int("RAG_RERANK_CANDIDATE_K", 40)
+RAG_RERANK_BATCH_SIZE = _safe_int("RAG_RERANK_BATCH_SIZE", 8)
 ZERANK_EXPECTED_SENTENCE_TRANSFORMERS_VERSION = "5.4.1"
 ZERANK_EXPECTED_TRANSFORMERS_VERSION = "4.57.1"
 
@@ -288,8 +295,7 @@ class RAGConfig:
     # RAM and a mid-job crash leaves earlier files indexed.
     upload_workers: int = 4
     index_flush_size: int = 50
-    # Embedding models
-    fallback_embedding_model: str = RAG_FALLBACK_EMBEDDING_MODEL
+    # Embedding model
     embedding_dim: Optional[int] = RAG_EMBEDDING_DIM  # MRL truncation (None = full dim)
     embedding_instruction: Optional[str] = RAG_EMBEDDING_INSTRUCTION or None  # Query instruction for Qwen3
     # Reranker model
@@ -312,13 +318,13 @@ class RAGConfig:
     # ``chroma_dir`` per-user-folder layout.
     #
     # Path resolution order:
-    #   1. ``$RAG_QDRANT_DIR`` env var if set (with ``~`` expansion and
+    #   1. ``$QDRANT_DIR`` env var if set (with ``~`` expansion and
     #      resolution to an absolute path) — required on filesystems
     #      without working flock support (Lustre, some NFS configs).
     #   2. Default: ``<repo>/data/qdrant/`` relative to this source file.
     qdrant_dir: str = (
-        os.path.abspath(os.path.expanduser(RAG_QDRANT_DIR))
-        if RAG_QDRANT_DIR
+        os.path.abspath(os.path.expanduser(QDRANT_DIR))
+        if QDRANT_DIR
         else os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "data",
@@ -390,33 +396,27 @@ def _check_bm25() -> bool:
 
 
 
-class RAGProviderAuthError(Exception):
-    """Raised when the configured LLM provider rejects authentication/config."""
+# Backward-compatible aliases — backend/api/rag.py maps these to HTTP 502/504.
+RAGProviderAuthError = LLMAuthError
+RAGLLMTimeoutError = LLMTimeoutError
 
 
-class RAGLLMTimeoutError(Exception):
-    """Raised when an RAG LLM request exceeds the configured wall-clock budget."""
+class SDKLLMAdapter:
+    """Provider-neutral LLM adapter over the shared OpenAI SDK client.
 
+    Keeps the historical ``invoke`` / ``astream`` contract so RAGService
+    call sites are unchanged. Legacy constructor kwargs (base_url,
+    model, provider, api_key, num_ctx, ...) are accepted and ignored.
+    """
 
-class OllamaLLM:
-    """Wrapper for Ollama or OpenRouter API"""
-
-    def __init__(
-        self,
-        base_url,
-        model,
-        temperature=0.1,
-        num_ctx=4096,
-        provider="ollama",
-        api_key=None,
-    ):
-        self.base_url = base_url
-        self.url = f"{base_url}/api/chat" if provider == "ollama" else base_url
-        self.model = model
+    def __init__(self, temperature=0.1, _client=None, **_ignored):
         self.temperature = temperature
-        self.num_ctx = num_ctx
-        self.provider = provider
-        self.api_key = api_key
+        self._client = _client  # injectable for tests
+
+    def _shared(self) -> SharedLLMClient:
+        if self._client is not None:
+            return self._client
+        return get_llm_client()
 
     async def invoke(
         self,
@@ -424,296 +424,59 @@ class OllamaLLM:
         messages: list = None,
         max_retries: int = 3,
         base_delay: float = 2.0,
-        timeout_seconds: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
+        timeout_seconds=None,
+        response_format=None,
+        thinking: Optional[bool] = None,
+        **_ignored,
     ):
-        """Invoke the LLM with either a simple prompt or a full messages list.
+        """Invoke the LLM with either a simple prompt or messages list.
 
         Args:
-            prompt: Simple string prompt (converted to single user message).
-            messages: Full messages list for multi-turn conversations.
             response_format: When set to ``{"type": "json_object"}`` the
-                LLM is forced into JSON mode. Used by the citation
-                extraction pass (Pydantic-validated downstream).
-                Translated transparently per provider:
-                  - Ollama: payload.format = "json"
-                  - OpenAI-compatible (OpenRouter/llama.cpp): payload.response_format
-                Default ``None`` preserves the prior free-text behavior.
+                LLM is asked for JSON mode (citation extraction pass).
         """
-        # Build messages list from either argument
-        if messages is not None:
-            msg_list = messages
-        elif prompt is not None:
-            msg_list = [{"role": "user", "content": prompt}]
-        else:
+        if messages is None and prompt is None:
             raise ValueError("Either prompt or messages must be provided")
-
-        # Disable LLM thinking for all providers
-        if msg_list and msg_list[-1]["role"] == "user":
-            msg_list[-1]["content"] += "\n\n/no_think"
-
-        if self.provider == "unconfigured":
-            raise RAGProviderAuthError(
-                "RAG is not configured. Set RAG_LLAMACPP_URL, "
-                "RAG_OPENROUTER_API_KEY, or configure RAG_OLLAMA_URL."
-            )
-
-        headers = {}
-        if self.provider == "ollama":
-            payload = {
-                "model": self.model,
-                "messages": msg_list,
-                "stream": False,
-                "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
-            }
-            if response_format is not None:
-                # Ollama uses a top-level ``format`` field; "json" enables
-                # grammar-constrained JSON output.
-                payload["format"] = "json"
-        else:  # OpenAI-compatible: openrouter, llamacpp
-            payload = {
-                "model": self.model,
-                "messages": msg_list,
-                "temperature": self.temperature,
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            if response_format is not None:
-                payload["response_format"] = response_format
-            # Only include Authorization when an API key is set.
-            # Self-hosted servers (llama.cpp, vLLM) usually run
-            # without one — sending ``Bearer `` with an empty token
-            # is technically malformed and some HTTP stacks (notably
-            # Cloudflare tunnels) reject it before it reaches the
-            # backend. When ``self.api_key`` is empty, omit the
-            # header entirely.
-            headers = {}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-        last_exception = None
-        for attempt in range(max_retries):
+        last_error = None
+        for attempt in range(max(1, max_retries)):
             try:
-                client = await HttpClientManager.get_client()
-                kwargs = {"json": payload, "timeout": None}
-                if self.provider != "ollama":
-                    kwargs["headers"] = headers
-                try:
-                    if timeout_seconds is not None:
-                        response = await asyncio.wait_for(client.post(self.url, **kwargs), timeout=timeout_seconds)
-                    else:
-                        response = await client.post(self.url, **kwargs)
-                except asyncio.TimeoutError as exc:
-                    raise RAGLLMTimeoutError(
-                        f"RAG {self.provider} request exceeded {timeout_seconds}s timeout"
-                    ) from exc
-
-                if self.provider != "ollama" and response.status_code == 401:
-                    env_var = {
-                        "openrouter": "RAG_OPENROUTER_API_KEY",
-                        "llamacpp": "RAG_LLAMACPP_API_KEY",
-                    }.get(self.provider, "the provider's API key")
-                    raise RAGProviderAuthError(
-                        f"{self.provider.title()} authentication failed. "
-                        f"Check {env_var} or configure RAG_OLLAMA_URL as a fallback."
-                    )
-
-                # Handle rate limiting (429) with retry
-                if response.status_code == 429:
-                    retry_after = int(
-                        response.headers.get("retry-after", base_delay * (2**attempt))
-                    )
-                    logger.warning(
-                        f"Rate limited (429). Retrying after {retry_after}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(retry_after)
-                    continue
-
-                response.raise_for_status()
-                result = response.json()
-
-                class Response:
-                    def __init__(self, content):
-                        self.content = content
-
-                if self.provider == "ollama":
-                    return Response(result["message"]["content"])
-                else:  # OpenAI-compatible: openrouter, llamacpp
-                    return Response(result["choices"][0]["message"]["content"])
-            except Exception as e:
-                last_exception = e
-                # Retry on network errors or 5xx errors
-                if (
-                    hasattr(e, "status_code")
-                    and e.status_code
-                    and 500 <= e.status_code < 600
-                ):
-                    delay = base_delay * (2**attempt)
-                    logger.warning(
-                        f"Server error {e.status_code}. Retrying after {delay}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                # Surface SSL/TLS handshake failures with a hint — usually
-                # caused by an https:// URL pointing at a plain-HTTP server
-                # (or vice versa).
-                err_str = str(e)
-                if "WRONG_VERSION_NUMBER" in err_str or "SSL" in err_str.upper():
-                    logger.error(
-                        f"SSL handshake failed calling {self.provider} LLM at {self.url}: {e}. "
-                        f"Check that the URL scheme (http vs https) matches what the server is "
-                        f"actually serving. Plain Ollama runs on http; a Cloudflare tunnel needs https."
-                    )
-                else:
-                    logger.error(f"Error calling {self.provider} LLM for RAG: {e}")
-                raise
-
-        # All retries exhausted
-        import traceback
-
-        err_msg = f"RAG LLM Request URL: {self.url}\nPayload: {payload}\nError: {last_exception}\n{traceback.format_exc()}"
-        # Explicit utf-8 — payloads carry scientific Unicode (U+2212
-        # minus sign, U+00B1 ±, Greek letters, em-dashes) that the
-        # Windows-default cp1252 codec cannot encode. Without this,
-        # the file write itself raises UnicodeEncodeError which then
-        # propagates back up to the caller and looks like an LLM
-        # failure instead of a logging-side issue.
-        with open("rag_error.log", "w", encoding="utf-8") as f:
-            f.write(err_msg)
-        logger.error(f"All retries failed for RAG LLM: {last_exception}")
-        raise last_exception
+                return await self._shared().invoke(
+                    prompt=prompt,
+                    messages=messages,
+                    temperature=self.temperature,
+                    response_format=response_format,
+                    timeout_seconds=timeout_seconds,
+                    thinking=thinking,
+                )
+            except LLMRateLimitError as exc:
+                last_error = exc
+                delay = base_delay * (2**attempt)
+                logger.warning(
+                    f"LLM rate limited, retrying after {delay}s "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                await asyncio.sleep(delay)
+        raise last_error
 
     async def astream(
         self,
         prompt: str = None,
         messages: list = None,
+        thinking: Optional[bool] = None,
+        **_ignored,
     ):
-        """Async-iterate streamed text chunks from the LLM.
-
-        Yields plain string deltas as they arrive. Caller accumulates.
-
-        Format handling:
-          - Ollama streams newline-delimited JSON; each line carries
-            ``message.content`` and a final ``done: true`` marker.
-          - OpenAI-compatible (OpenRouter / llama.cpp) streams SSE; each
-            ``data: {...}`` line has ``choices[0].delta.content`` and
-            ends with ``data: [DONE]``.
-        """
-        if messages is not None:
-            msg_list = messages
-        elif prompt is not None:
-            msg_list = [{"role": "user", "content": prompt}]
-        else:
+        """Async-iterate streamed text chunks from the LLM."""
+        if messages is None and prompt is None:
             raise ValueError("Either prompt or messages must be provided")
+        async for chunk in self._shared().astream(
+            prompt=prompt, messages=messages, temperature=self.temperature,
+            thinking=thinking,
+        ):
+            yield chunk
 
-        # Disable LLM thinking for all providers
-        if msg_list and msg_list[-1]["role"] == "user":
-            msg_list[-1]["content"] += "\n\n/no_think"
 
-        if self.provider == "unconfigured":
-            raise RAGProviderAuthError(
-                "RAG is not configured. Set RAG_LLAMACPP_URL, "
-                "RAG_OPENROUTER_API_KEY, or configure RAG_OLLAMA_URL."
-            )
-
-        headers = {}
-        if self.provider == "ollama":
-            payload = {
-                "model": self.model,
-                "messages": msg_list,
-                "stream": True,
-                "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
-            }
-        else:  # OpenAI-compatible: openrouter, llamacpp
-            payload = {
-                "model": self.model,
-                "messages": msg_list,
-                "temperature": self.temperature,
-                "stream": True,
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-            # Same defensive header handling as ``invoke``: self-hosted
-            # OpenAI-compatible servers usually run without an API key,
-            # and ``Bearer `` with empty token can be rejected by HTTP
-            # stacks / proxies before reaching the server.
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-
-        client = await HttpClientManager.get_client()
-        kwargs = {"json": payload, "timeout": None}
-        if self.provider != "ollama":
-            kwargs["headers"] = headers
-
-        async with client.stream("POST", self.url, **kwargs) as response:
-            if self.provider != "ollama" and response.status_code == 401:
-                env_var = {
-                    "openrouter": "RAG_OPENROUTER_API_KEY",
-                    "llamacpp": "RAG_LLAMACPP_API_KEY",
-                }.get(self.provider, "the provider's API key")
-                raise RAGProviderAuthError(
-                    f"{self.provider.title()} authentication failed. "
-                    f"Check {env_var} or configure RAG_OLLAMA_URL as a fallback."
-                )
-
-            # Surface upstream error bodies. Without aread() the body
-            # is still a streaming iterator, so the default
-            # raise_for_status() message hides the actual provider
-            # error JSON (e.g. an OpenAI-compatible "messages must
-            # alternate roles" or context-window overflow), making
-            # 400s impossible to diagnose from logs alone.
-            if response.status_code >= 400:
-                await response.aread()
-                body_text = response.text or "<empty body>"
-                logger.error(
-                    "LLM stream %s from %s: %s",
-                    response.status_code,
-                    self.url,
-                    body_text[:2000],
-                )
-                raise RuntimeError(
-                    f"{self.provider} streaming failed "
-                    f"({response.status_code}): {body_text[:500]}"
-                )
-
-            async for raw_line in response.aiter_lines():
-                if not raw_line:
-                    continue
-                line = raw_line.strip()
-                if not line:
-                    continue
-
-                if self.provider == "ollama":
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    msg = data.get("message") or {}
-                    chunk = msg.get("content", "")
-                    if chunk:
-                        yield chunk
-                    if data.get("done"):
-                        break
-                else:
-                    if not line.startswith("data:"):
-                        continue
-                    payload_str = line[len("data:"):].strip()
-                    if not payload_str:
-                        continue
-                    if payload_str == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(payload_str)
-                    except json.JSONDecodeError:
-                        continue
-                    try:
-                        choices = data.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
-                        chunk = delta.get("content") or ""
-                        if chunk:
-                            yield chunk
-                    except (KeyError, IndexError, TypeError):
-                        continue
+# Historical name — kept so any external reference keeps importing.
+OllamaLLM = SDKLLMAdapter
 
 
 def _quote_matches_chunk(quote: str, chunk_text: str) -> bool:
@@ -744,23 +507,21 @@ from langchain_core.embeddings import Embeddings as _LCEmbeddings
 
 
 class PhytoQueryEmbeddings(_LCEmbeddings):
-    """Custom embeddings with Qwen3-Embedding-4B primary and bge-m3 fallback.
+    """Single-model embeddings (``RAG_EMBEDDING_MODEL``).
 
     Inherits from ``langchain_core.embeddings.Embeddings`` so strict
     ``isinstance`` checks (``langchain-qdrant`` does one in
-    QdrantVectorStore.__init__) pass. The interface ``embed_documents``
-    / ``embed_query`` is unchanged from before — the base class only
-    declares those as abstract methods.
+    QdrantVectorStore.__init__) pass.
 
     For Qwen3, queries use ``prompt_name="query"`` for instruction-aware
-    retrieval; documents are encoded without prompts. Falls back to
-    bge-m3 on load failure.
+    retrieval; documents are encoded without prompts. A load failure
+    raises — no silent model swap (mixed-model indexes corrupt
+    retrieval).
     """
 
     def __init__(
         self,
-        primary_model: str = "Qwen/Qwen3-Embedding-4B",
-        fallback_model: str = "BAAI/bge-m3",
+        model: str = "Qwen/Qwen3-Embedding-4B",
         device: Optional[str] = None,
         mrl_dim: Optional[int] = None,
         query_instruction: Optional[str] = None,
@@ -768,13 +529,11 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
         self.device = device or get_optimal_device()
         self.mrl_dim = mrl_dim
         self.query_instruction = query_instruction
-        self.model_name = primary_model
+        self.model_name = model
         self.model_dim: int = 2560  # Qwen3-Embedding-4B default
         self._timing_local = threading.local()
 
         # Defer model loading to first use so RAGService construction is lightweight
-        self._primary_model = primary_model
-        self._fallback_model = fallback_model
         self._model = None
         self._model_lock = threading.Lock()
 
@@ -788,8 +547,8 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
             return {"calls": 0, "total_ms": 0.0, "texts": 0}
         return session
 
-    def _load_model(self, primary: str, fallback: str):
-        """Load embedding model with fallback on failure.
+    def _load_model(self, model_name: str):
+        """Load the configured embedding model.
 
         For CUDA we enable fp16 (auto dtype) for speed/memory savings.
         For Apple MPS we keep fp32 because MPS fp16 support is still maturing.
@@ -797,82 +556,76 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
         """
         from sentence_transformers import SentenceTransformer
 
-        for model_name in [primary, fallback]:
-            try:
-                logger.info(f"Loading embedding model: {model_name} on {self.device}...")
-                kwargs: Dict[str, Any] = {"trust_remote_code": True}
+        try:
+            logger.info(f"Loading embedding model: {model_name} on {self.device}...")
+            kwargs: Dict[str, Any] = {"trust_remote_code": True}
 
-                if self.device.startswith("cuda"):
-                    cuda_kwargs = _build_cuda_model_kwargs(
-                        enable_flash_attn=RAG_USE_FLASH_ATTENTION,
-                        enable_multi_gpu=RAG_MULTI_GPU,
-                    )
-                    if "device_map" in cuda_kwargs:
-                        # device_map="auto" handles its own device placement;
-                        # passing device= as well can raise a conflict.
-                        kwargs["model_kwargs"] = cuda_kwargs
-                    else:
-                        kwargs["device"] = self.device
-                        kwargs["model_kwargs"] = cuda_kwargs
-                    if _flash_attn_available():
-                        logger.info("Flash Attention 2 enabled for embedding model.")
-                    if RAG_MULTI_GPU and _has_multiple_gpus():
-                        try:
-                            import torch as _torch
-                            gpu_count = _torch.cuda.device_count()
-                        except ImportError:
-                            gpu_count = 0
-                        logger.info(f"Multi-GPU enabled: sharding across {gpu_count} GPUs.")
+            if self.device.startswith("cuda"):
+                cuda_kwargs = _build_cuda_model_kwargs(
+                    enable_flash_attn=RAG_FLASH_ATTENTION,
+                    enable_multi_gpu=RAG_MULTI_GPU,
+                )
+                if "device_map" in cuda_kwargs:
+                    # device_map="auto" handles its own device placement;
+                    # passing device= as well can raise a conflict.
+                    kwargs["model_kwargs"] = cuda_kwargs
                 else:
                     kwargs["device"] = self.device
-
-                model = SentenceTransformer(model_name, **kwargs)
-                self.model_name = model_name
-                # Detect dimension from the model (support both old and new API)
-                self.model_dim = (
-                    getattr(model, "get_embedding_dimension", None)()
-                    or getattr(model, "get_sentence_embedding_dimension", None)()
-                    or self.model_dim
-                )
-                logger.info(
-                    f"Embedding model loaded: {model_name} "
-                    f"(dim={self.model_dim}, mrl_dim={self.mrl_dim or 'full'}, "
-                    f"instruction={'yes' if self.query_instruction else 'no'}, "
-                    f"device={self.device})"
-                )
-                return model
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load embedding model {model_name} on {self.device}: {e}"
-                )
-                # If MPS failed, silently retry on CPU before giving up entirely
-                if self.device == "mps" and model_name == primary:
+                    kwargs["model_kwargs"] = cuda_kwargs
+                if _flash_attn_available():
+                    logger.info("Flash Attention 2 enabled for embedding model.")
+                if RAG_MULTI_GPU and _has_multiple_gpus():
                     try:
-                        logger.info("Retrying embedding model load on CPU due to MPS failure...")
-                        kwargs = {"device": "cpu", "trust_remote_code": True}
-                        model = SentenceTransformer(model_name, **kwargs)
-                        self.model_name = model_name
-                        self.model_dim = (
-                            getattr(model, "get_embedding_dimension", None)()
-                            or getattr(model, "get_sentence_embedding_dimension", None)()
-                            or self.model_dim
-                        )
-                        self.device = "cpu"
-                        logger.info(
-                            f"Embedding model loaded (CPU fallback): {model_name} "
-                            f"(dim={self.model_dim}, device=cpu)"
-                        )
-                        return model
-                    except Exception:
-                        pass  # fall through to normal fallback flow
-                if model_name == primary:
-                    logger.info(f"Falling back to {fallback}...")
-                else:
-                    raise RuntimeError(
-                        f"Both primary ({primary}) and fallback ({fallback}) "
-                        f"embedding models failed to load."
-                    )
-        return None  # unreachable, but satisfies type checker
+                        import torch as _torch
+                        gpu_count = _torch.cuda.device_count()
+                    except ImportError:
+                        gpu_count = 0
+                    logger.info(f"Multi-GPU enabled: sharding across {gpu_count} GPUs.")
+            else:
+                kwargs["device"] = self.device
+
+            model = SentenceTransformer(model_name, **kwargs)
+        except Exception as e:
+            # If MPS failed, retry once on CPU before giving up entirely.
+            if self.device != "mps":
+                raise RuntimeError(
+                    f"Embedding model {model_name} failed to load: {e}"
+                )
+            logger.info("Retrying embedding model load on CPU due to MPS failure...")
+            try:
+                model = SentenceTransformer(
+                    model_name, device="cpu", trust_remote_code=True
+                )
+            except Exception as cpu_e:
+                raise RuntimeError(
+                    f"Embedding model {model_name} failed to load "
+                    f"(including CPU fallback): {cpu_e}"
+                )
+            self.device = "cpu"
+            logger.info(
+                f"Embedding model loaded (CPU fallback): {model_name} "
+                f"(device=cpu)"
+            )
+            return self._finalize_model(model, model_name)
+
+        return self._finalize_model(model, model_name)
+
+    def _finalize_model(self, model, model_name: str):
+        """Record dimension metadata for a loaded model."""
+        self.model_name = model_name
+        # Detect dimension from the model (support both old and new API)
+        self.model_dim = (
+            getattr(model, "get_embedding_dimension", None)()
+            or getattr(model, "get_sentence_embedding_dimension", None)()
+            or self.model_dim
+        )
+        logger.info(
+            f"Embedding model loaded: {model_name} "
+            f"(dim={self.model_dim}, mrl_dim={self.mrl_dim or 'full'}, "
+            f"instruction={'yes' if self.query_instruction else 'no'}, "
+            f"device={self.device})"
+        )
+        return model
 
     def _ensure_model_loaded(self):
         """Lazy-load the embedding model on first use."""
@@ -881,7 +634,7 @@ class PhytoQueryEmbeddings(_LCEmbeddings):
         with self._model_lock:
             if self._model is not None:
                 return
-            self._model = self._load_model(self._primary_model, self._fallback_model)
+            self._model = self._load_model(self.model_name)
 
     def _maybe_truncate(self, embeddings: List[List[float]]) -> List[List[float]]:
         """Truncate embeddings to MRL dimension if configured."""
@@ -981,11 +734,10 @@ class RAGService:
     # ``_get_qdrant_client``.
     _atexit_registered: bool = False
 
-    def __init__(self):
+    def __init__(self, llm=None):
         self._device = get_optimal_device()
         self.embeddings = PhytoQueryEmbeddings(
-            primary_model=config.embedding_model,
-            fallback_model=config.fallback_embedding_model,
+            model=config.embedding_model,
             device=self._device,
             mrl_dim=config.embedding_dim,
             query_instruction=config.embedding_instruction,
@@ -997,14 +749,10 @@ class RAGService:
         self._reranker = ...  # sentinel: not loaded yet
         self._reranker_lock = threading.Lock()
 
-        self.llm = OllamaLLM(
-            base_url=LLM_PROVIDER.get("url", "").replace("/api/chat", ""),
-            model=LLM_PROVIDER["model"],
-            temperature=LLM_TEMPERATURE,
-            num_ctx=LLM_CONTEXT_WINDOW,
-            provider=LLM_PROVIDER["provider"],
-            api_key=LLM_PROVIDER.get("api_key"),
-        )
+        # SDK-backed adapter over the one shared process-wide client.
+        # Construction is lightweight (no I/O); unconfigured LLM raises
+        # only when a query actually invokes the model.
+        self.llm = llm or SDKLLMAdapter(temperature=LLM_TEMPERATURE)
         # Cache for per-user vectorstores
         self._vectorstore_cache: Dict[str, Any] = {}
         # Shared Qdrant local client (one DB, many per-user collections).
@@ -1086,7 +834,7 @@ class RAGService:
 
                 if self._device.startswith("cuda"):
                     cuda_kwargs = _build_cuda_model_kwargs(
-                        enable_flash_attn=RAG_USE_FLASH_ATTENTION,
+                        enable_flash_attn=RAG_FLASH_ATTENTION,
                         enable_multi_gpu=RAG_MULTI_GPU,
                     )
                     if "device_map" in cuda_kwargs:
@@ -1222,7 +970,7 @@ class RAGService:
                 return self._qdrant_client
             from qdrant_client import QdrantClient
 
-            # Two modes, env-toggled via ``RAG_QDRANT_URL``:
+            # Two modes, env-toggled via ``QDRANT_URL``:
             #
             #   - SET (e.g. ``http://localhost:6333``) → connect to a
             #     Qdrant Server (Docker, native binary, Qdrant Cloud).
@@ -1237,18 +985,18 @@ class RAGService:
             # Call sites only see ``self._qdrant_client`` — they don't
             # care which mode produced it. The Qdrant Python client
             # exposes the same interface for both.
-            if RAG_QDRANT_URL:
+            if QDRANT_URL:
                 # ``api_key`` is optional — qdrant-client accepts None
                 # gracefully (no Authorization header sent). Qdrant Cloud
                 # and any server started with ``--service.api_key=...``
                 # require it; plain Docker/local server doesn't.
                 self._qdrant_client = QdrantClient(
-                    url=RAG_QDRANT_URL,
-                    api_key=RAG_QDRANT_API_KEY or None,
+                    url=QDRANT_URL,
+                    api_key=QDRANT_API_KEY or None,
                 )
-                _auth_note = " (authenticated)" if RAG_QDRANT_API_KEY else ""
+                _auth_note = " (authenticated)" if QDRANT_API_KEY else ""
                 logger.info(
-                    f"Initialized Qdrant remote client at {RAG_QDRANT_URL}{_auth_note}"
+                    f"Initialized Qdrant remote client at {QDRANT_URL}{_auth_note}"
                 )
             else:
                 os.makedirs(config.qdrant_dir, exist_ok=True)
@@ -1519,7 +1267,7 @@ class RAGService:
             return None
 
         kb_model = self._read_kb_config("embedding_model") or self._KB_DEFAULT_EMBEDDING_MODEL
-        kb_embeddings = PhytoQueryEmbeddings(primary_model=kb_model)
+        kb_embeddings = PhytoQueryEmbeddings(model=kb_model)
 
         sparse = self._get_sparse_embeddings()
         if sparse is not None:
@@ -3461,7 +3209,7 @@ class RAGService:
             found — caller can short-circuit and return this directly.
           * ``{"messages": list, "sources": list}`` when the LLM
             should be invoked. ``messages`` is ready for either
-            ``OllamaLLM.invoke`` (full answer) or ``OllamaLLM.astream``
+            ``SDKLLMAdapter.invoke`` (full answer) or ``SDKLLMAdapter.astream``
             (token streaming); ``sources`` is the citation list that
             should accompany the answer.
 

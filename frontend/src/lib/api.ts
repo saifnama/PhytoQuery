@@ -292,14 +292,6 @@ export const dbApi = {
   },
 };
 
-// Health API
-export const healthApi = {
-  async check(): Promise<{ status: string }> {
-    const response = await api.get('/health');
-    return response.data;
-  },
-};
-
 // DOI Abstract Fallback API
 export const doiApi = {
   /**

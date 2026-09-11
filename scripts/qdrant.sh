@@ -136,7 +136,7 @@ print_urls() {
     echo "gRPC:    localhost:${PORT_GRPC}"
     echo
     echo "Point PhytoQuery at it by setting (in .env / .env.<profile> or shell):"
-    echo "  RAG_QDRANT_URL=${REST_URL}"
+    echo "  QDRANT_URL=${REST_URL}"
 }
 
 wait_for_health() {

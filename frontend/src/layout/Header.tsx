@@ -152,7 +152,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
           to="/"
           search={{}}
           onClick={() => useSearchStore.getState().resetSearch()}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50 rounded-lg"
         >
           <img
             src="/logo.gif?v=30s"
@@ -220,8 +220,9 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
                   activeOptions={item.to === '/' ? { exact: true } : undefined}
                   style={{ fontFamily: 'var(--font-google-sans)' }}
                   className={[
-                    'relative z-[1] inline-flex items-center gap-[9px] h-[44px] px-[20px] rounded-full',
+                    'relative z-[1] inline-flex items-center gap-[9px] h-[44px] px-[20px] rounded-full outline-none',
                     'text-[16px] cursor-pointer no-underline transition-colors duration-200',
+                    'focus-visible:ring-2 focus-visible:ring-zinc-400/50',
                     isActive ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium hover:text-on-surface',
                   ].join(' ')}
                 >

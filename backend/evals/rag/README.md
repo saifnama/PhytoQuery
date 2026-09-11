@@ -6,7 +6,7 @@ End-to-end guide for evaluating PhytoQuery's RAG chatbot.
 
 1. Qdrant run:
 
-2. `.env` configured with your LLM provider (Ollama, llama.cpp, or OpenRouter).
+2. `.env` configured with the unified LLM (`LLM_API_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`).
 
 3. Python venv with dependencies:
    ```bash
@@ -93,12 +93,9 @@ All settings are env-var driven. Defaults work out of the box if `.env` is confi
 | `EVAL_OUTPUT_DIR` | `backend/evals/rag/results` | Where CSVs go |
 | `EVAL_MCQ_CSV` | `backend/evals/rag/data/mcq.csv` | MCQ questions input |
 | `EVAL_OPEN_ENDED_CSV` | `backend/evals/rag/data/open_ended.csv` | Open-ended questions input |
-| `RAGAS_LLM_MODEL` | same as RAG engine | Judge LLM for Ragas |
-| `RAGAS_LLM_BASE_URL` | same as RAG engine | Judge LLM endpoint |
-| `RAGAS_LLM_API_KEY` | same as RAG engine | Judge LLM API key |
 | `RAGAS_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embeddings for Ragas |
 
-The evaluator LLM automatically inherits whatever provider is configured in `.env` (llamacpp > openrouter > ollama). Override with `RAGAS_LLM_*` vars if you want a different model as judge.
+The evaluator LLM uses the same shared `LLM_API_*` client as RAG and NER (no evaluator overrides).
 
 ## File Structure
 

@@ -5,7 +5,6 @@ import time
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from openai import AsyncOpenAI
 
 from ragas.llms import llm_factory
 from ragas.embeddings.base import embedding_factory
@@ -86,23 +85,10 @@ def append_row(row: dict):
     )
 
 
-def _get_ragas_base_url() -> str:
-    from backend.config import get_rag_provider
+def _get_llm_client_and_model():
+    from backend.core.llm_client import create_ragas_client
 
-    provider = get_rag_provider()
-    url = provider.get("url", "")
-    if not url:
-        return "http://localhost:11434/v1"
-    for suffix in ["/v1/chat/completions", "/api/chat", "/v1"]:
-        if url.endswith(suffix):
-            url = url[: -len(suffix)]
-            break
-    return url.rstrip("/") + "/v1"
-
-
-def _get_provider(key, default=""):
-    from backend.config import get_rag_provider
-    return get_rag_provider().get(key, default)
+    return create_ragas_client()
 
 
 df = pd.read_csv(INPUT_CSV)
@@ -111,16 +97,11 @@ print(f"Loaded {len(df)} generated RAG samples")
 start_idx = load_checkpoint()
 print(f"Resuming from index {start_idx + 1}")
 
-local_client = AsyncOpenAI(
-    api_key=os.getenv("RAGAS_LLM_API_KEY", "") or _get_provider("api_key") or "ollama",
-    base_url=os.getenv("RAGAS_LLM_BASE_URL", "") or _get_ragas_base_url(),
-    timeout=300.0,
-    max_retries=5,
-)
+local_client, eval_model = _get_llm_client_and_model()
 
 eval_llm = llm_factory(
-    model=os.getenv("RAGAS_LLM_MODEL", "") or _get_provider("model") or "qwen3.5:27b",
-    provider=os.getenv("RAGAS_LLM_PROVIDER", "openai"),
+    model=eval_model,
+    provider="openai",
     client=local_client,
     max_tokens=4096,
     temperature=0,
