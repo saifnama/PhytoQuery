@@ -1,17 +1,18 @@
 /**
  * assistant-ui chat thread for the PhytoQuery RAG page — shadcn/ui build.
  *
- * Citation rendering pipeline (industry-standard two-pass design):
- *   - Backend streams the answer with inline ``[<chunk_id>]`` markers
- *     (8-char hex IDs computed server-side per retrieved chunk).
- *   - ``MarkdownText`` runs a per-render ``preprocess`` that replaces
- *     each marker with ``[N](#cite-<chunk_id>)`` where N is
- *     a 1-based number assigned in order of first appearance — so the
- *     reader sees clean raised ``[1] [2]`` badges (``align-super``),
- *     while the chunk_id stays internal to the data layer.
- *   - The custom markdown ``a`` component (CitationLink) renders any
- *     ``#cite-…`` link as a clickable pink badge that calls back into
- *     RagPage to open the markdown-preview panel.
+ * Citation rendering pipeline:
+ *   - Backend parses the LLM's inline ``[cN]`` self-report to build the
+ *     ``References`` block (whole chunks, clickable), then strips all
+ *     inline markers from the visible text.
+ *   - ``MarkdownText`` runs a module-level ``stripInlineMarkers``
+ *     preprocess as a safety net for any leaked ``[cN]``/``[N]`` — it
+ *     has a stable identity on purpose: recreating it per render
+ *     restarts the ``smooth`` streaming animation every token and can
+ *     leave the visible text frozen mid-answer while the message itself
+ *     is complete. References links (long labels) pass through to the
+ *     custom markdown ``a`` component (CitationLink), which renders
+ *     them as clickable pink text opening the preview panel in RagPage.
  */
 
 import {
@@ -20,7 +21,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useMemo,
   useState,
   useEffect,
 } from 'react';
@@ -376,42 +376,25 @@ const markdownComponents = memoizeMarkdownComponents({
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeRaw];
 
+// Module-level so its identity never changes across renders — a
+// per-render preprocess restarts the `smooth` animation on every
+// streamed token (metadata arrays get fresh identities per yield)
+// and can freeze visible text mid-answer while the message is whole.
+// No inline badges by design: strip leaked [cN]/[N]; long
+// `[display](#cite-cid)` References links pass through (their label
+// isn't bare digits).
+function stripInlineMarkers(text: string): string {
+  return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, '');
+}
+
 const MarkdownText: FC = () => {
-  const message = useMessage();
-  const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
-  const validChunkIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const s of customData.sources ?? []) {
-      if (s.chunk_id) ids.add(s.chunk_id);
-    }
-    return ids;
-  }, [customData.sources]);
-
-  const preprocess = useCallback(
-    (text: string) => {
-      const numbering = new Map<string, number>();
-      let next = 1;
-      return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, (match, num: string) => {
-        const id = `c${num}`;
-        if (!validChunkIds.has(id)) return match;
-        if (!numbering.has(id)) {
-          numbering.set(id, next);
-          next += 1;
-        }
-        const n = numbering.get(id);
-        return `[${n}](#cite-${id})`;
-      });
-    },
-    [validChunkIds],
-  );
-
   return (
     <MarkdownTextPrimitive
       smooth
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       components={markdownComponents}
-      preprocess={preprocess}
+      preprocess={stripInlineMarkers}
       className="w-full text-slate-800 text-[17px] leading-[1.7]"
     />
   );

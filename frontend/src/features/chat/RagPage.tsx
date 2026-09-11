@@ -464,8 +464,8 @@ const RagPage: React.FC = () => {
     >
       {/* ─── Sources Sidebar ─── */}
       <aside
-        className={`border-r border-surface-c bg-background flex flex-col flex-shrink-0 transition-all duration-200 ${
-          sidebarCollapsed ? 'w-14' : 'w-72'
+        className={`sidebar-transition border-r border-surface-c bg-background flex flex-col shrink-0 relative h-full ${
+          sidebarCollapsed ? 'sidebar-collapsed' : 'w-72'
         }`}
       >
         <input
@@ -476,231 +476,217 @@ const RagPage: React.FC = () => {
           accept=".pdf"
           className="hidden"
         />
-        {sidebarCollapsed ? (
-          /* ── Collapsed: icon strip matching Analyse mode ── */
-          <div className="flex flex-col h-full w-full">
-            {/* Top Header Bar matching expanded h-14 */}
-            <div className="h-14 border-b border-surface-c px-3.5 flex items-center justify-center shrink-0">
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
-              >
-                <SidebarSimple size={20} />
-              </button>
-            </div>
 
-            {/* Mini upload icon with breathing space */}
-            <div className="pt-3.5 pb-2 flex flex-col items-center shrink-0">
-              <button
-                onClick={handleUploadClick}
-                disabled={isUploading}
-                style={{
-                  backgroundColor: '#ffecf6',
-                  color: '#d63384',
-                  borderColor: '#fbcfe8',
-                  boxShadow: 'none',
-                }}
-                className="w-10 h-10 rounded-full border flex items-center justify-center transition-all hover:opacity-90 text-[#d63384] shadow-none outline-none disabled:cursor-wait cursor-pointer active:scale-95"
-                title={isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
-              >
-                {isUploading ? (
-                  <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
-                ) : (
-                  <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
-                )}
-              </button>
-            </div>
+        {/* Unified Top Header Bar */}
+        <div className="px-3.5 h-14 border-b border-surface-c flex items-center justify-between shrink-0">
+          <span className={`!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap transition-opacity duration-150 ${sidebarCollapsed ? 'hidden' : 'block'}`}>
+            Sources
+          </span>
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className={`p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer ${sidebarCollapsed ? 'mx-auto' : ''}`}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <SidebarSimple size={20} />
+          </button>
+        </div>
 
-            {/* Subtle divider before PDF file stack (if files exist) */}
-            {uploadedFiles.length > 0 && (
-              <div className="w-5 h-[1.5px] bg-slate-200/80 rounded-full mx-auto my-2.5 shrink-0" />
+        {/* Mini View (Icons only) */}
+        <div className="sidebar-mini-view flex-1 min-h-0 flex-col items-center pt-3.5 gap-2 w-full overflow-y-auto chat-scrollbar pb-4">
+          <button
+            onClick={handleUploadClick}
+            disabled={isUploading}
+            style={{
+              backgroundColor: '#ffecf6',
+              color: '#d63384',
+              borderColor: '#fbcfe8',
+              boxShadow: 'none',
+            }}
+            className="w-10 h-10 rounded-full border flex items-center justify-center transition-all hover:opacity-90 text-[#d63384] shadow-none outline-none disabled:cursor-wait cursor-pointer active:scale-95 shrink-0"
+            title={isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
+          >
+            {isUploading ? (
+              <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
+            ) : (
+              <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
             )}
+          </button>
 
-            {/* Scrollable list of clickable PDF icons with comfortable spacing */}
-            <div className="flex-1 overflow-y-auto px-2 py-1 space-y-3 flex flex-col items-center chat-scrollbar">
-              {uploadedFiles.map((file) => {
-                const isActive = activePdfFile?.name === file.name;
-                return (
-                  <button
+          {uploadedFiles.length > 0 && (
+            <div className="w-5 h-[1.5px] bg-slate-200/80 rounded-full mx-auto my-1 shrink-0" />
+          )}
+
+          <div className="flex-1 overflow-y-auto px-2 py-1 space-y-3 flex flex-col items-center chat-scrollbar w-full">
+            {uploadedFiles.map((file) => {
+              const isActive = activePdfFile?.name === file.name;
+              return (
+                <button
+                  key={file.name}
+                  type="button"
+                  title={displayName(file.name)}
+                  onClick={() => openPdfViewer(file)}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer outline-none border-0 shrink-0 ${
+                    isActive
+                      ? 'bg-slate-200/90 text-slate-900 shadow-sm'
+                      : 'hover:bg-surface-c text-slate-700 opacity-80 hover:opacity-100'
+                  }`}
+                >
+                  <PdfIcon size={24} className="shrink-0" />
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pt-2 pb-2 mt-auto flex items-center justify-center shrink-0">
+            <button
+              type="button"
+              onClick={handleResetAll}
+              style={{ boxShadow: 'none' }}
+              className="w-10 h-10 rounded-full border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 flex items-center justify-center transition-all shadow-none outline-none cursor-pointer active:scale-95"
+              title="Delete Chats"
+            >
+              <Fire size={18} weight="regular" className="text-red-600 shrink-0" />
+            </button>
+          </div>
+        </div>
+
+        {/* Main Sidebar Content */}
+        <div className={`sidebar-content flex-1 min-h-0 flex flex-col overflow-hidden w-72 min-w-[18rem] shrink-0 transition-opacity duration-150 ${sidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+          {/* Upload controls */}
+          <div className="px-4 py-3 space-y-2 shrink-0">
+            {/* Parser type toggle matching Analyse switcher pill */}
+            <div 
+              className="flex items-center rounded-full p-1 border-0"
+              style={{ background: "var(--surface-c)" }}
+            >
+              <button
+                type="button"
+                onClick={() => setParserType('pymupdf')}
+                className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0 cursor-pointer"
+                style={{
+                  fontFamily: 'var(--font-google-sans)',
+                  boxShadow: 'none',
+                  background: parserType === 'pymupdf' ? '#FFFFFF' : 'transparent',
+                  color: parserType === 'pymupdf' ? '#000000' : '#666666',
+                  fontWeight: parserType === 'pymupdf' ? 600 : 500,
+                }}
+              >
+                Fast
+              </button>
+              <button
+                type="button"
+                onClick={() => setParserType('docling')}
+                className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0 cursor-pointer"
+                style={{
+                  fontFamily: 'var(--font-google-sans)',
+                  boxShadow: 'none',
+                  background: parserType === 'docling' ? '#FFFFFF' : 'transparent',
+                  color: parserType === 'docling' ? '#000000' : '#666666',
+                  fontWeight: parserType === 'docling' ? 600 : 500,
+                }}
+              >
+                Detailed
+              </button>
+            </div>
+
+            <button
+              onClick={handleUploadClick}
+              disabled={isUploading}
+              style={{
+                backgroundColor: '#ffecf6',
+                color: '#d63384',
+                borderColor: '#fbcfe8',
+                fontFamily: 'var(--font-google-sans)',
+                boxShadow: 'none',
+              }}
+              className="w-full py-2.5 px-4 rounded-full border border-[#fbcfe8] flex items-center justify-center gap-2 text-[14.5px] font-bold transition-all hover:opacity-95 active:scale-[0.99] text-[#d63384] shadow-none outline-none disabled:cursor-wait cursor-pointer"
+            >
+              {isUploading ? (
+                <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
+              ) : (
+                <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
+              )}
+              <span className="font-bold text-[#d63384] whitespace-nowrap">
+                {isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
+              </span>
+            </button>
+          </div>
+
+          {/* Subtle divider before file stack */}
+          <div className="mx-4 mb-2 h-[1px] bg-slate-200/60 shrink-0" />
+
+          {/* File List */}
+          <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1 flex flex-col chat-scrollbar">
+            {uploadedFiles.length > 0 ? (
+              <div>
+                {uploadedFiles.map((file) => (
+                  <div
                     key={file.name}
-                    type="button"
-                    title={displayName(file.name)}
                     onClick={() => openPdfViewer(file)}
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer outline-none border-0 ${
-                      isActive
-                        ? 'bg-slate-200/90 text-slate-900 shadow-sm'
-                        : 'hover:bg-surface-c text-slate-700 opacity-80 hover:opacity-100'
+                    className={`w-full flex items-center space-x-3 p-3 rounded-2xl transition-all group cursor-pointer border-0 shadow-none outline-none ${
+                      activePdfFile?.name === file.name
+                        ? 'bg-[#f4f4f4] opacity-100'
+                        : file.selected
+                          ? 'bg-transparent hover:bg-[#fafafa] opacity-100'
+                          : 'bg-transparent hover:bg-[#fafafa] opacity-70 hover:opacity-100'
                     }`}
                   >
                     <PdfIcon size={24} className="shrink-0" />
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Sidebar Footer: Delete Chats icon button without divider line */}
-            <div className="pt-2 pb-4 mt-auto flex items-center justify-center bg-background shrink-0">
-              <button
-                type="button"
-                onClick={handleResetAll}
-                style={{ boxShadow: 'none' }}
-                className="w-10 h-10 rounded-full border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 flex items-center justify-center transition-all shadow-none outline-none cursor-pointer active:scale-95"
-                title="Delete Chats"
-              >
-                <Fire size={18} weight="regular" className="text-red-600 shrink-0" />
-              </button>
-            </div>
-          </div>
-        ) : (
-          /* ── Expanded sidebar ── */
-          <>
-            {/* Top Header Bar */}
-            <div className="h-14 border-b border-surface-c px-3.5 flex items-center justify-between shrink-0">
-              <span className="!text-[17px] !font-bold text-slate-900 tracking-tight whitespace-nowrap">Sources</span>
-              <button
-                onClick={() => setSidebarCollapsed(true)}
-                className="p-1.5 text-slate-600 hover:text-slate-900 rounded-md hover:bg-surface-c active:scale-90 transition-all duration-100 outline-none cursor-pointer"
-              >
-                <SidebarSimple size={20} />
-              </button>
-            </div>
-
-            {/* Upload controls */}
-            <div className="px-4 py-3 space-y-2">
-              {/* Parser type toggle matching Analyse switcher pill */}
-              <div 
-                className="flex items-center rounded-full p-1 border-0"
-                style={{ background: "var(--surface-c)" }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setParserType('pymupdf')}
-                  className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0"
-                  style={{
-                    fontFamily: 'var(--font-google-sans)',
-                    boxShadow: 'none',
-                    background: parserType === 'pymupdf' ? '#FFFFFF' : 'transparent',
-                    color: parserType === 'pymupdf' ? '#000000' : '#666666',
-                    fontWeight: parserType === 'pymupdf' ? 600 : 500,
-                  }}
-                >
-                  Fast
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setParserType('docling')}
-                  className="flex-1 h-9 rounded-full text-[14px] transition-all flex items-center justify-center outline-none border-0"
-                  style={{
-                    fontFamily: 'var(--font-google-sans)',
-                    boxShadow: 'none',
-                    background: parserType === 'docling' ? '#FFFFFF' : 'transparent',
-                    color: parserType === 'docling' ? '#000000' : '#666666',
-                    fontWeight: parserType === 'docling' ? 600 : 500,
-                  }}
-                >
-                  Detailed
-                </button>
-              </div>
-
-              <button
-                onClick={handleUploadClick}
-                disabled={isUploading}
-                style={{
-                  backgroundColor: '#ffecf6',
-                  color: '#d63384',
-                  borderColor: '#fbcfe8',
-                  fontFamily: 'var(--font-google-sans)',
-                  boxShadow: 'none',
-                }}
-                className="w-full py-2.5 px-4 rounded-full border border-[#fbcfe8] flex items-center justify-center gap-2 text-[14.5px] font-bold transition-all hover:opacity-95 active:scale-[0.99] text-[#d63384] shadow-none outline-none disabled:cursor-wait"
-              >
-                {isUploading ? (
-                  <SpinnerGap size={18} weight="bold" className="animate-spin text-[#d63384] shrink-0" />
-                ) : (
-                  <Plus size={18} weight="bold" className="text-[#d63384] shrink-0" />
-                )}
-                <span className="font-bold text-[#d63384]">
-                  {isUploading ? (uploadStatus || 'Processing 1/1') : 'Add Sources'}
-                </span>
-              </button>
-            </div>
-
-            {/* Subtle divider before file stack */}
-            <div className="mx-4 mb-2 h-[1px] bg-slate-200/60 shrink-0" />
-
-            {/* File List */}
-            <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1 flex flex-col chat-scrollbar">
-              {uploadedFiles.length > 0 ? (
-                <div>
-                  {uploadedFiles.map((file) => (
-                    <div
-                      key={file.name}
-                      onClick={() => openPdfViewer(file)}
-                      className={`w-full flex items-center space-x-3 p-3 rounded-2xl transition-all group cursor-pointer border-0 shadow-none outline-none ${
-                        activePdfFile?.name === file.name
-                          ? 'bg-[#f4f4f4] opacity-100'
-                          : file.selected
-                            ? 'bg-transparent hover:bg-[#fafafa] opacity-100'
-                            : 'bg-transparent hover:bg-[#fafafa] opacity-70 hover:opacity-100'
-                      }`}
-                    >
-                      <PdfIcon size={24} className="shrink-0" />
-                      <div className="flex-1 min-w-0 text-left">
-                        <p className={`text-[14px] truncate leading-tight ${activePdfFile?.name === file.name ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                          {displayName(file.name)}
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className={`text-[14px] truncate leading-tight ${activePdfFile?.name === file.name ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+                        {displayName(file.name)}
+                      </p>
+                      {(file.authors || file.journal) && (
+                        <p className="text-[11px] text-on-surface-muted truncate leading-tight mt-0.5">
+                          {file.authors && <span>{file.authors}</span>}
+                          {file.authors && file.journal && <span> · </span>}
+                          {file.journal && <span className="italic">{file.journal}</span>}
                         </p>
-                        {(file.authors || file.journal) && (
-                          <p className="text-[11px] text-on-surface-muted truncate leading-tight mt-0.5">
-                            {file.authors && <span>{file.authors}</span>}
-                            {file.authors && file.journal && <span> · </span>}
-                            {file.journal && <span className="italic">{file.journal}</span>}
-                          </p>
-                        )}
-                        {file.summary && (
-                          <p className="text-[11px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
-                            {file.summary}
-                          </p>
-                        )}
-                      </div>
-                      <button
-                        onClick={(e) => handleDeleteFile(file.name, e)}
-                        className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0"
-                        title={`Remove ${file.name}`}
-                      >
-                        <TrashSimple size={16} weight="regular" />
-                      </button>
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <CustomCheckbox
-                          checked={file.selected}
-                          onChange={() => toggleFile(file.name)}
-                        />
-                      </div>
+                      )}
+                      {file.summary && (
+                        <p className="text-[11px] text-on-surface-muted line-clamp-2 leading-snug mt-0.5" title={file.summary}>
+                          {file.summary}
+                        </p>
+                      )}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-8">
-                  <FileText size={40} className="text-on-surface-muted/30 mb-3" />
-                  <p className="text-[14px] text-on-surface-muted leading-relaxed font-normal">
-                    No sources added yet.
-                  </p>
-                </div>
-              )}
-            </div>
-            
-            {/* Sidebar Footer: Delete Chats */}
-            <div className="p-4 bg-background mt-auto">
-              <button
-                onClick={handleResetAll}
-                style={{ fontFamily: 'var(--font-google-sans)', boxShadow: 'none' }}
-                className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-background border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 rounded-full transition-all font-semibold text-[14.5px] shadow-none outline-none"
-              >
-                <Fire size={18} weight="regular" />
-                <span>Delete Chats</span>
-              </button>
-            </div>
-          </>
-        )}
+                    <button
+                      onClick={(e) => handleDeleteFile(file.name, e)}
+                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition-all p-1 rounded-md hover:bg-red-50 flex-shrink-0 cursor-pointer"
+                      title={`Remove ${file.name}`}
+                    >
+                      <TrashSimple size={16} weight="regular" />
+                    </button>
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <CustomCheckbox
+                        checked={file.selected}
+                        onChange={() => toggleFile(file.name)}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-4 py-8">
+                <FileText size={40} className="text-on-surface-muted/30 mb-3 shrink-0" />
+                <p className="text-[14px] text-on-surface-muted leading-relaxed font-normal whitespace-nowrap">
+                  No sources added yet.
+                </p>
+              </div>
+            )}
+          </div>
+          
+          {/* Sidebar Footer: Delete Chats */}
+          <div className="p-4 bg-background mt-auto shrink-0">
+            <button
+              onClick={handleResetAll}
+              style={{ fontFamily: 'var(--font-google-sans)', boxShadow: 'none' }}
+              className="w-full flex items-center justify-center space-x-2 py-2.5 px-4 bg-background border border-red-200 hover:bg-red-50 hover:border-red-300 text-red-600 rounded-full transition-all font-semibold text-[14.5px] shadow-none outline-none cursor-pointer"
+            >
+              <Fire size={18} weight="regular" className="shrink-0" />
+              <span className="whitespace-nowrap">Delete Chats</span>
+            </button>
+          </div>
+        </div>
       </aside>
 
       {/* ─── Chat Area (assistant-ui Thread) ─── */}
