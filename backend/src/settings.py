@@ -101,7 +101,7 @@ def env_optional(key: str):
 #     -p 6333:6333 -p 6334:6334 \
 #     -v "$HOME/.local/share/bloomindex/qdrant_storage:/qdrant/storage" \
 #     --restart unless-stopped \
-#     qdrant/qdrant:v1.18.0
+#     qdrant/qdrant:v1.19.0
 QDRANT_URL = env("QDRANT_URL")
 
 # QDRANT_API_KEY: optional bearer token for Qdrant Cloud or any

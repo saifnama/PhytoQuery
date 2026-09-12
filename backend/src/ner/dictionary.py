@@ -197,7 +197,7 @@ def enrich_chemical_like_entity(entity: Dict[str, Any], chemical_matcher: Any) -
         )
 
 
-def preload_gazetteers() -> int:
+def preload_dictionaries() -> int:
     """Compile all dictionary matchers now (spaCy + ~300K terms).
 
     Matchers are module singletons, so warming them here is exactly what

@@ -174,7 +174,7 @@ export interface paths {
          *     Returns ``{label, text, canonical, count, metadata, aliases}`` per
          *     entity. ``metadata`` is whatever was stored in the ``paper_entities.
          *     metadata`` JSON column at ingest time (chemical/species enrichment
-         *     happens on the frontend via the gazetteer CSVs at render time).
+         *     happens on the frontend via the dictionary CSVs at render time).
          */
         get: operations["get_paper_entities_paper_db__doi__entities_get"];
         put?: never;

@@ -2,7 +2,7 @@
 Dictionary-based Chemical Matcher using spaCy PhraseMatcher.
 
 Matches preferred chemical names and synonyms with high precision and enriches
-chemical entities with metadata from the chemical gazetteer.
+chemical entities with metadata from the chemical dictionary.
 """
 
 import logging
@@ -291,7 +291,7 @@ def build_chemical_cache_data(
 
 
 class ChemicalMatcher:
-    """High-precision chemical matcher backed by gazetteer data."""
+    """High-precision chemical matcher backed by dictionary data."""
 
     def __init__(self, nlp: Any = None):
         self.nlp = nlp or spacy.blank("en")
@@ -352,7 +352,7 @@ class ChemicalMatcher:
 
     def _build_from_csv(self) -> None:
         if not DATA_FILE.exists():
-            raise FileNotFoundError(f"Chemical gazetteer not found: {DATA_FILE}")
+            raise FileNotFoundError(f"Chemical dictionary not found: {DATA_FILE}")
 
         BUILD_DIR.mkdir(parents=True, exist_ok=True)
 

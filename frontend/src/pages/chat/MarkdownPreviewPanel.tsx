@@ -332,9 +332,12 @@ export const MarkdownPreviewPanel: FC<MarkdownPreviewPanelProps> = ({
   const [loading, setLoading] = useState(true);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Re-fetch every time the source filename changes.
+  // Re-fetch every time the source filename changes. The loading/error
+  // resets are fetch lifecycle (with cancellation guard), not derived state
+  // (per-call disable below).
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch lifecycle
     setLoading(true);
     setError(null);
     setMarkdown(null);

@@ -167,8 +167,11 @@ const Dashboard: React.FC = () => {
   // in as a paper-tab filter, then clear the signal so it can fire again.
   const pendingOpenQuery = useDrawerStore((s) => s.pendingOpenQuery);
   const clearPendingOpenQuery = useDrawerStore((s) => s.clearPendingOpenQuery);
+  // Consume-once cross-page signal (see drawerStore). Event-like consumption
+  // of external store state — must stay in the effect, not render.
   useEffect(() => {
     if (!pendingOpenQuery) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume-once signal
     openDrawer({
       tab: 'papers',
       filter: {

@@ -15,5 +15,5 @@ Existing prod DB (already has the shape): `alembic stamp head` — never upgrade
 
 **Troubleshooting.** Port clash → `scripts/qdrant.sh status`. Empty dashboard →
 `backend/src/db/bloomindex.sqlite` missing (see import). Chat 503 → another op holds
-the user lock (60 s timeout) or Qdrant down. Slow first NER → gazetteer
+the user lock (60 s timeout) or Qdrant down. Slow first NER → dictionary
 pickle build (~1 min, once).

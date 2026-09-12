@@ -5,7 +5,7 @@ param([Parameter(Position=0)][string]$Action = "status")
 
 $ErrorActionPreference = "Stop"
 $name = if ($env:QDRANT_CONTAINER) { $env:QDRANT_CONTAINER } else { "bloomindex-qdrant" }
-$ver = if ($env:QDRANT_VERSION) { $env:QDRANT_VERSION } else { "v1.18.0" }
+$ver = if ($env:QDRANT_VERSION) { $env:QDRANT_VERSION } else { "v1.19.1" }
 $rest = if ($env:QDRANT_PORT_REST) { $env:QDRANT_PORT_REST } else { "6333" }
 $grpc = if ($env:QDRANT_PORT_GRPC) { $env:QDRANT_PORT_GRPC } else { "6334" }
 $storage = if ($env:QDRANT_STORAGE_DIR) { $env:QDRANT_STORAGE_DIR } else { "$env:LOCALAPPDATA\bloomindex\qdrant_storage" }
@@ -28,7 +28,9 @@ switch ($Action) {
     $state = & $rt ps -a --filter "name=^$name$" --format "{{.State}}" 2>$null
     if ($state -match "running") { Write-Host "already running"; break }
     if ($state -match "exited|created|paused") { & $rt start $name; break }
-    & $rt run -d --name $name -p "${rest}:6333" -p "${grpc}:6334" -v "${storage}:/qdrant/storage" --restart unless-stopped $image
+    # NOTE: publish on 127.0.0.1 explicitly. A bare `-p 6333:6333` binds
+    # IPv6-only under Podman-on-Windows (wslrelay) and connections die.
+    & $rt run -d --name $name -p "127.0.0.1:${rest}:6333" -p "127.0.0.1:${grpc}:6334" -v "${storage}:/qdrant/storage" --restart unless-stopped $image
   }
   "stop" { & $rt stop $name }
   "restart" { & $rt stop $name; & $rt start $name }
@@ -36,6 +38,6 @@ switch ($Action) {
   "remove" { & $rt rm -f $name }
   default {
     & $rt ps -a --filter "name=^$name$" --format "table {{.Names}}\t{{.State}}\t{{.Ports}}"
-    try { (Invoke-RestMethod "http://localhost:$rest/healthz" -TimeoutSec 3); Write-Host "health: ok" } catch { Write-Host "health: down" }
+    try { (Invoke-RestMethod "http://127.0.0.1:$rest/healthz" -TimeoutSec 3); Write-Host "health: ok" } catch { Write-Host "health: down" }
   }
 }

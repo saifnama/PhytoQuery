@@ -178,7 +178,11 @@ const ChatPage: React.FC = () => {
   // every send so the user's checkbox state always reflects in the
   // outgoing /api/chat/query/json request.
   const uploadedFilesRef = useRef(uploadedFiles);
-  uploadedFilesRef.current = uploadedFiles;
+  // Mirror for the stable send-callback below. Assigned in an effect so the
+  // ref is never written during render; callbacks always run post-commit.
+  useEffect(() => {
+    uploadedFilesRef.current = uploadedFiles;
+  }, [uploadedFiles]);
   const getSelectedFiles = useCallback(
     () =>
       uploadedFilesRef.current
@@ -285,13 +289,11 @@ const ChatPage: React.FC = () => {
   // handled by ``invalidateIndexedFiles()`` in the upload completion
   // path; manual refetches still go through ``loadIndexedFiles()``.
 
-  useEffect(() => {
-    if (!activePdfFile) return;
-    const stillExists = uploadedFiles.some((file) => file.name === activePdfFile.name);
-    if (!stillExists) {
-      closePdfViewer();
-    }
-  }, [activePdfFile, closePdfViewer, uploadedFiles]);
+  // If the previewed file vanished (deleted while previewing), close the
+  // viewer in the same commit — no flash of stale content, no extra pass.
+  if (activePdfFile && !uploadedFiles.some((file) => file.name === activePdfFile.name)) {
+    closePdfViewer();
+  }
 
   useEffect(() => {
     const pendingImport = locationState?.importPaperPdf;

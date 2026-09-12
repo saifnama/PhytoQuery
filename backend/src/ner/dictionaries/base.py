@@ -2,7 +2,7 @@
 """
 Build script for dictionary-based NER matcher.
 
-Compiles gazetteer CSV files into binary matcher for fast loading.
+Compiles dictionary CSV files into binary matcher for fast loading.
 """
 
 import csv

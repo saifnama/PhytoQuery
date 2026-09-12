@@ -89,20 +89,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup: Initialize the global HTTP client
     await HttpClientManager.get_client()
-    # Pre-compile NER gazetteers (~300K terms) so the first user request
+    # Pre-compile NER dictionaries (~300K terms) so the first user request
     # doesn't pay the ~minute lazy-load cost. Guarded: failure falls back
     # to per-request lazy loading, never a startup crash.
     try:
         import asyncio as _asyncio
         import time as _time
-        from backend.src.ner.dictionary import preload_gazetteers
+        from backend.src.ner.dictionary import preload_dictionaries
 
         _t0 = _time.perf_counter()
-        _n = await _asyncio.to_thread(preload_gazetteers)
-        logger.info(f"Preloaded {_n} NER gazetteers "
+        _n = await _asyncio.to_thread(preload_dictionaries)
+        logger.info(f"Preloaded {_n} NER dictionaries "
                     f"in {_time.perf_counter() - _t0:.1f}s.")
     except Exception as exc:
-        logger.warning(f"Gazetteer preload skipped ({exc}); "
+        logger.warning(f"Dictionary preload skipped ({exc}); "
                        f"matchers will load lazily on first request.")
     logger.info("BloomIndex backend startup complete.")
     yield

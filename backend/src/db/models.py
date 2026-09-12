@@ -12,7 +12,7 @@ were abandoned; that DDL is no longer in the database. The simpler shape
 matches the design diagram: the DB is a thin annotation layer that the
 frontend lists / drills into. Paper content is fetched live from
 Europe PMC / OpenAlex / Semantic Scholar at click time; entity metadata
-enrichment (chemical SMILES, species taxonomy) comes from the gazetteer
+enrichment (chemical SMILES, species taxonomy) comes from the dictionary
 CSV files at render time. The ``metadata`` column on ``paper_entities``
 stores any structured payload kept at ingest time (e.g.
 ``{"family": "Verbenaceae"}`` for species rows, ``{"country": "..."}``

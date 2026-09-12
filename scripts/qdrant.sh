@@ -263,7 +263,7 @@ Settings via env vars:
   QDRANT_RUNTIME       auto | docker | podman   (default: auto)
   QDRANT_CONTAINER     (default: bloomindex-qdrant)
   QDRANT_STORAGE_DIR   (default: \$HOME/.local/share/bloomindex/qdrant_storage)
-  QDRANT_VERSION       (default: v1.18.0)
+  QDRANT_VERSION       (default: v1.19.1)
   QDRANT_PORT_REST     (default: 6333)
   QDRANT_PORT_GRPC     (default: 6334)
 EOF

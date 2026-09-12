@@ -75,13 +75,22 @@ const TAB_META: Record<DrawerTab, { label: string }> = {
 const DbExplorerDrawer: React.FC<Props> = ({
   open, onClose, tab: tabProp, filter, entities, journals, onOpenPaper,
 }) => {
-  // Tab managed internally; syncs when parent changes tabProp
+  // Tab managed internally; syncs when parent changes tabProp.
+  // Render-time adjustment (same commit, no extra pass) instead of an effect.
   const [activeTab, setActiveTab] = useState<DrawerTab>(tabProp);
-  useEffect(() => { setActiveTab(tabProp); }, [tabProp]);
+  const [prevTabProp, setPrevTabProp] = useState(tabProp);
+  if (prevTabProp !== tabProp) {
+    setPrevTabProp(tabProp);
+    setActiveTab(tabProp);
+  }
 
-  // Filter managed internally so user can clear it
+  // Filter managed internally so user can clear it; same adjustment pattern.
   const [activeFilter, setActiveFilter] = useState<DrawerFilter | null>(filter);
-  useEffect(() => { setActiveFilter(filter); }, [filter]);
+  const [prevFilterProp, setPrevFilterProp] = useState(filter);
+  if (prevFilterProp !== filter) {
+    setPrevFilterProp(filter);
+    setActiveFilter(filter);
+  }
 
   const [width, setWidth]             = useState<number>(DEFAULT_W);
   const [dragging, setDragging]       = useState(false);
@@ -99,11 +108,12 @@ const DbExplorerDrawer: React.FC<Props> = ({
     return () => clearTimeout(t);
   }, [searchQuery]);
 
-  // Portal target — dedicated #portal-root sibling to #root in index.html
-  const portalRoot = useRef<Element>(
-    (typeof document !== 'undefined'
-      ? document.getElementById('portal-root') ?? document.body
-      : null) as Element,
+  // Portal target — dedicated #portal-root sibling to #root in index.html.
+  // Resolved once via lazy initializer (stable for the drawer's lifetime).
+  const [portalRoot] = useState<Element | null>(() =>
+    typeof document !== 'undefined'
+      ? (document.getElementById('portal-root') ?? document.body)
+      : null,
   );
 
   // ── Drag-to-resize ──────────────────────────────────────────────────────────
@@ -146,6 +156,8 @@ const DbExplorerDrawer: React.FC<Props> = ({
   }, [open, onClose]);
 
   // ── Papers fetch ────────────────────────────────────────────────────────────
+  // Async fetch with cancellation: the setPapers(null) reset belongs to the
+  // fetch lifecycle (loading state), not render — keep in the effect.
   useEffect(() => {
     if (!open || activeTab !== 'papers') return;
 
@@ -153,14 +165,15 @@ const DbExplorerDrawer: React.FC<Props> = ({
     const year     = activeFilter?.kind === 'year'    ? activeFilter.value : undefined;
     const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (debouncedQuery || undefined);
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch loading reset
     setPapers(null);
     setPapersError(false);
 
     dbApi.getPapers(50, 0, country, apiQuery, year)
-      .then((data: any) => {
-        const list: PaperRow[] = Array.isArray(data) ? data : data?.papers ?? data?.items ?? [];
+      .then((data) => {
+        const list: PaperRow[] = Array.isArray(data) ? data : data.papers ?? data.items ?? [];
         setPapers(list);
-        setTotalPapers(data?.total ?? list.length);
+        setTotalPapers(data && !Array.isArray(data) && typeof data.total === 'number' ? data.total : list.length);
       })
       .catch((err) => {
         console.error('Failed to fetch explorer papers:', err);
@@ -181,10 +194,10 @@ const DbExplorerDrawer: React.FC<Props> = ({
       country,
       apiQuery,
       year,
-    ).then((data: any) => {
-      const list: PaperRow[] = Array.isArray(data) ? data : data?.papers ?? data?.items ?? [];
+    ).then((data) => {
+      const list: PaperRow[] = Array.isArray(data) ? data : data.papers ?? data.items ?? [];
       setPapers(prev => [...(prev ?? []), ...list]);
-      if (typeof data?.total === 'number') setTotalPapers(data.total);
+      if (!Array.isArray(data) && typeof data.total === 'number') setTotalPapers(data.total);
     });
   };
 
@@ -540,7 +553,8 @@ const DbExplorerDrawer: React.FC<Props> = ({
     </aside>
   );
 
-  return createPortal(drawer, portalRoot.current);
+  if (!portalRoot) return null;
+  return createPortal(drawer, portalRoot);
 };
 
 const PASTEL_PALETTES = [

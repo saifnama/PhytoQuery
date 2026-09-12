@@ -57,11 +57,14 @@ export function PublicationTimelineChart({ data, onYearClick }: Props) {
   const [range, setRange] = useState({ startIndex: 0, endIndex: lastIdx })
 
   // Reset the window whenever the dataset changes shape (e.g. year
-  // count grows from a re-ingest). Without this, an old endIndex could
-  // point past the new array.
-  useEffect(() => {
-    setRange({ startIndex: 0, endIndex: Math.max(0, data.length - 1) })
-  }, [data.length])
+  // count grows from a re-ingest). Render-time adjustment: same commit,
+  // no extra pass. Without this, an old endIndex could point past the
+  // new array.
+  const [prevDataLength, setPrevDataLength] = useState(data.length);
+  if (prevDataLength !== data.length) {
+    setPrevDataLength(data.length);
+    setRange({ startIndex: 0, endIndex: Math.max(0, data.length - 1) });
+  }
 
   // Wheel-driven zoom. React's onWheel is attached passively in modern
   // React, so preventDefault() is a no-op there — we need to bind the
@@ -117,12 +120,16 @@ export function PublicationTimelineChart({ data, onYearClick }: Props) {
           accessibilityLayer
           data={data}
           margin={{ left: 12, right: 12, top: 18, bottom: 4 }}
-          onClick={(e: any) => {
-            if (e?.activePayload && e.activePayload.length > 0) {
-              const yearName = e.activePayload[0]?.payload?.name
+          onClick={(e: unknown) => {
+            const chart = e as {
+              activePayload?: Array<{ payload?: { name?: unknown } }>;
+              activeLabel?: unknown;
+            } | null;
+            if (chart?.activePayload && chart.activePayload.length > 0) {
+              const yearName = chart.activePayload[0]?.payload?.name
               if (yearName) onYearClick?.(String(yearName))
-            } else if (e?.activeLabel) {
-              onYearClick?.(String(e.activeLabel))
+            } else if (chart?.activeLabel) {
+              onYearClick?.(String(chart.activeLabel))
             }
           }}
           style={{ cursor: onYearClick ? 'pointer' : 'default' }}

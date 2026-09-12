@@ -22,7 +22,13 @@ export function DefaultPending() {
   );
 }
 
-export function DefaultError({ error }: { error: Error }) {
+export function DefaultError({ error }: { error: unknown }) {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'An unknown error occurred while rendering this route.';
   return (
     <div className="w-full max-w-2xl mx-auto px-6 py-16">
       <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
@@ -30,7 +36,7 @@ export function DefaultError({ error }: { error: Error }) {
           Something went wrong on this page
         </h2>
         <p className="text-sm text-red-700 mb-4">
-          {error?.message ?? 'An unknown error occurred while rendering this route.'}
+          {message}
         </p>
         <Link
           to="/"

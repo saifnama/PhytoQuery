@@ -292,7 +292,7 @@ async def get_paper_entities(doi: str, db: AsyncSession = Depends(get_db)):
     Returns ``{label, text, canonical, count, metadata, aliases}`` per
     entity. ``metadata`` is whatever was stored in the ``paper_entities.
     metadata`` JSON column at ingest time (chemical/species enrichment
-    happens on the frontend via the gazetteer CSVs at render time).
+    happens on the frontend via the dictionary CSVs at render time).
     """
     try:
         from backend.src.db import repository as _repo

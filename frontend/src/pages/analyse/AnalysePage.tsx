@@ -392,7 +392,7 @@ const AnalysePage = () => {
     if (graphRef.current?.exportSnapshot()) {
       return;
     }
-    const nodes: any[] = graphEntities.map(e => ({
+    const nodes: { id: string; label: string; group: string }[] = graphEntities.map(e => ({
       id: `${e.label}-${e.text.toLowerCase()}`,
       label: e.text,
       group: e.label,
@@ -429,11 +429,14 @@ const AnalysePage = () => {
 
   const isComparing = isCompareMode && compareSelection.length >= 2;
 
-  // Auto-load PDF when active paper changes
+  // Auto-load PDF when active paper changes. Fires an async side effect
+  // (PDF load), so it must stay in the effect — render cannot do this
+  // (per-call disable below).
   useEffect(() => {
     if (!isCompareMode && activePapers.length === 1) {
       const paper = activePapers[0];
       if (paper.pdfUrl && paper.id !== viewerPaper?.id && paper.id !== viewerLoadingPaperId) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- async side effect
         void openViewer(paper);
       } else if (!paper.pdfUrl) {
         closeViewer();

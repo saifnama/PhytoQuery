@@ -605,6 +605,8 @@ const ExplorePage: React.FC = () => {
   };
 
   // Restore on mount: if URL query matches cache, paint cached results.
+  // Mount-once initialization (didInitFromUrl guard) — intentionally not
+  // derived state; the doSearch call is a fetch side effect (see disable below).
   useEffect(() => {
     if (didInitFromUrl.current) return;
     didInitFromUrl.current = true;
@@ -623,6 +625,7 @@ const ExplorePage: React.FC = () => {
       requestAnimationFrame(() => window.scrollTo({ top: scrollY }));
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mount init + fetch
     doSearch(q, filters, 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

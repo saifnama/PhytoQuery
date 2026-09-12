@@ -428,13 +428,17 @@ const SearchForm: React.FC<SearchFormProps> = ({
     };
   }, [expanded]);
 
-  // Sync from URL when navigating back
-  useEffect(() => {
+  // Sync from URL when navigating back. Render-time adjustment: the query
+  // is derived from defaultQuery, applied in the same commit.
+  const [prevDefaultQuery, setPrevDefaultQuery] = useState(defaultQuery);
+  if (prevDefaultQuery !== defaultQuery) {
+    setPrevDefaultQuery(defaultQuery);
     setQuery(defaultQuery);
-  }, [defaultQuery]);
+  }
 
-  useEffect(() => {
-    if (!defaultFilters) return;
+  if (defaultFilters) {
+    // Functional updater bails out (returns prev) when nothing changed,
+    // so this is a no-op on most renders — same commit, no extra pass.
     setFilters((prev) => {
       const same =
         prev.open_access   === (defaultFilters.open_access   ?? false) &&
@@ -451,7 +455,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
         source:        defaultFilters.source        ?? 'europepmc',
       };
     });
-  }, [defaultFilters]);
+  }
 
   // Fetch types when source changes (Europe PMC = static; OpenAlex = instant cached + background sync)
   const fetchTypeOptions = useCallback((source: string) => {
@@ -469,7 +473,11 @@ const SearchForm: React.FC<SearchFormProps> = ({
     }
   }, []);
 
+  // Fetch-on-source-change has a side effect (network + background sync):
+  // it cannot move to render. The setTypeOptions calls are fetch lifecycle
+  // (per-call disable below).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch side effect
     fetchTypeOptions(filters.source);
   }, [filters.source, fetchTypeOptions]);
 

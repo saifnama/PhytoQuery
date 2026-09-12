@@ -412,7 +412,7 @@ Return ONLY the JSON array."""
 
 
 LABEL_DEFINITIONS = {
-    # Dictionary-only types (handled by gazetteer, no LLM needed)
+    # Dictionary-only types (handled by dictionary, no LLM needed)
     "PLANT PART": "Plant morphological structures (leaf, bark, root, flower, etc.).",
     "ANALYTICAL TECHNIQUE": "Specific separation or analytical technique.",
     "EXTRACTION METHOD": "Physical or mechanical extraction process.",

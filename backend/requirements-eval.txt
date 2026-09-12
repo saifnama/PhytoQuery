@@ -1,0 +1,8 @@
+# BloomIndex eval-only dependencies — install separately, never with runtime:
+#   uv pip install --python .venv/Scripts/python.exe -r backend/requirements-eval.txt
+#
+# Split because ragas pulls `instructor`, whose openai/typer ranges conflict
+# with the runtime pins (openai==3.13, docling's typer>=0.12.5). The eval
+# harness needs its own resolution; do not merge back without re-checking.
+ragas==0.4.3
+nervaluate==1.2.1

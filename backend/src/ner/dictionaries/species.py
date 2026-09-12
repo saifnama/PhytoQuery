@@ -2,7 +2,7 @@
 Dictionary-based Species Matcher using spaCy PhraseMatcher.
 
 Matches verified scientific names with high precision and enriches species
-entities with accepted-name/common-name metadata from the species gazetteer.
+entities with accepted-name/common-name metadata from the species dictionary.
 """
 
 import csv
@@ -68,7 +68,7 @@ class SpeciesMatcher:
 
     def _build_from_csv(self) -> None:
         if not DATA_FILE.exists():
-            raise FileNotFoundError(f"Species gazetteer not found: {DATA_FILE}")
+            raise FileNotFoundError(f"Species dictionary not found: {DATA_FILE}")
 
         BUILD_DIR.mkdir(parents=True, exist_ok=True)
 

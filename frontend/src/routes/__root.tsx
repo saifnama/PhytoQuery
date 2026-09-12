@@ -16,10 +16,12 @@ import { ragApi } from '../lib/api/chat';;
 
 // Empty context now; leaves room to inject queryClient or auth state later
 // without forcing a refactor of every route.
+// eslint-disable-next-line react-refresh/only-export-components -- TanStack requires the Route export in this file.
 export const Route = createRootRouteWithContext<Record<string, never>>()({
   component: RootLayout,
 });
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located with its Route by design.
 function RootLayout() {
   useEffect(() => {
     // Fire-and-forget async fetch() never completes in beforeunload —

@@ -7,7 +7,7 @@ metadata), and then for each ``(label, canonical_text)`` on each row
 UPSERTs into ``paper_entities``:
 
   * On first insert: ``frequency = 1`` and ``metadata`` is the merged
-    gazetteer + Excel metadata dict, or NULL if nothing useful.
+    dictionary + Excel metadata dict, or NULL if nothing useful.
   * On conflict (re-import of an already-seen ``(paper_id, label,
     canonical_text)`` tuple): ``frequency += 1`` and ``metadata`` is
     kept as-is (``COALESCE(existing, new)`` — first non-NULL wins).
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 EXCEL_PATH = r"C:\Users\saif\saifnama_lab\csv data\testing\2_paper_data_for_NER.xlsx"
 
 
-# Keys we should never carry into the metadata JSON column — gazetteer
+# Keys we should never carry into the metadata JSON column — dictionary
 # internals + Excel scratch fields that would only add noise.
 DROPPED_FIELDS = {
     "text", "span", "type", "label", "score",
@@ -160,12 +160,12 @@ def get_entity_mappings(row):
     return entities
 
 
-# ─────────────────────── gazetteer enrichment + metadata merge ────────────
+# ─────────────────────── dictionary enrichment + metadata merge ────────────
 
-def _enrich_from_gazetteer(label: str, canonical_text: str,
+def _enrich_from_dictionary(label: str, canonical_text: str,
                            chem_matcher, species_matcher) -> Dict[str, Any]:
-    """Look the entity up in the appropriate gazetteer (CHEMICAL or SPECIES).
-    Returns the gazetteer's metadata dict, or ``{}`` for unknown labels /
+    """Look the entity up in the appropriate dictionary (CHEMICAL or SPECIES).
+    Returns the dictionary's metadata dict, or ``{}`` for unknown labels /
     unknown terms. Tries the canonical_text first, then a normalized
     lowercase variant.
     """
@@ -182,21 +182,21 @@ def _enrich_from_gazetteer(label: str, canonical_text: str,
         return result or {}
     except Exception as e:
         logger.warning(
-            f"Gazetteer lookup failed for {label} '{canonical_text}': {e}"
+            f"Dictionary lookup failed for {label} '{canonical_text}': {e}"
         )
         return {}
 
 
-def _build_metadata(gazetteer_meta: Dict[str, Any],
+def _build_metadata(dictionary_meta: Dict[str, Any],
                     excel_meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Merge gazetteer + Excel metadata into a single dict for the
+    """Merge dictionary + Excel metadata into a single dict for the
     ``paper_entities.metadata`` JSON column. Excel wins on conflicts
     (manually curated). Returns ``None`` if there is nothing useful to
     store — that keeps the column SQL NULL.
     """
     merged: Dict[str, Any] = {}
-    if gazetteer_meta:
-        merged.update(gazetteer_meta)
+    if dictionary_meta:
+        merged.update(dictionary_meta)
     if excel_meta:
         for k, v in excel_meta.items():
             if v is not None and v != "":
@@ -245,8 +245,10 @@ async def upsert_paper_entity(
             "frequency": PaperEntity.frequency + 1,
             # COALESCE keeps the existing metadata if non-NULL; only
             # backfills with the new payload when the row had no
-            # metadata yet.
-            "meta": func.coalesce(PaperEntity.meta, stmt.excluded.meta),
+            # metadata yet. NOTE: `set_` keys AND `excluded` attrs use
+            # the SQL column *name* ("metadata"), not the Python
+            # attribute (`meta`).
+            "metadata": func.coalesce(PaperEntity.meta, stmt.excluded.metadata),
         },
     )
     await session.execute(stmt)
@@ -257,12 +259,12 @@ async def upsert_paper_entity(
 async def import_data():
     await init_db()
 
-    # Gazetteers each load a .pkl cache on first call — keep ONE instance
+    # Dictionaries each load a .pkl cache on first call — keep ONE instance
     # for the entire run.
-    logger.info("Loading gazetteer matchers (chemical + species)...")
+    logger.info("Loading dictionary matchers (chemical + species)...")
     chem_matcher = get_chemical_matcher()
     species_matcher = get_species_matcher()
-    logger.info("Gazetteer matchers ready.")
+    logger.info("Dictionary matchers ready.")
 
     logger.info(f"Reading Excel file: {EXCEL_PATH}")
     df = pd.read_excel(EXCEL_PATH)
@@ -329,10 +331,10 @@ async def import_data():
                 for em in mappings:
                     label = em["label"]
                     canonical = em["canonical_text"]
-                    gazetteer = _enrich_from_gazetteer(
+                    dictionary = _enrich_from_dictionary(
                         label, canonical, chem_matcher, species_matcher
                     )
-                    metadata = _build_metadata(gazetteer, em["excel_meta"])
+                    metadata = _build_metadata(dictionary, em["excel_meta"])
                     await upsert_paper_entity(
                         session, paper.id, label, canonical, metadata
                     )

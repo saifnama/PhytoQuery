@@ -62,4 +62,5 @@ function Button({
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn convention: buttonVariants ships with Button.
 export { Button, buttonVariants }

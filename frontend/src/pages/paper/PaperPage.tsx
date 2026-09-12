@@ -3,7 +3,7 @@ import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react';
 import PaperViewer from '@/features/reader/PaperViewer';
 import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api/papers';
-import { extractErrorDetail } from '../../lib/api/client';;
+import { extractErrorDetail, errorMessage } from '../../lib/api/client';
 import type { PaperData, Entity, TocItem } from '../../types';
 
 const route = getRouteApi('/paper/$doi');
@@ -27,7 +27,12 @@ const PaperPage: React.FC = () => {
   // "Done" confirmation — shown green for 20s after the download succeeds.
   const [downloadDone, setDownloadDone] = useState(false);
   const doiRef = useRef(doi);
-  doiRef.current = doi;
+  // Mirror the current DOI for async continuations (download started for
+  // paper A must not touch paper B's UI). Assigned in an effect so the
+  // ref is never written during render.
+  useEffect(() => {
+    doiRef.current = doi;
+  }, [doi]);
   const doneTimer = useRef<number | undefined>(undefined);
 
   const flashDownloadDone = () => {
@@ -44,13 +49,16 @@ const PaperPage: React.FC = () => {
   }, []);
 
   // Paper switch: drop stale download state so paper B never shows
-  // paper A's leftovers. An in-flight download still finishes for its own
-  // paper (it closed over its identifier) but no longer touches the UI.
-  useEffect(() => {
+  // paper A's leftovers. Render-time adjustment (same commit, no extra
+  // pass): an in-flight download still finishes for its own paper (it
+  // closed over its identifier) but no longer touches the UI.
+  const [prevDoi, setPrevDoi] = useState(doi);
+  if (prevDoi !== doi) {
+    setPrevDoi(doi);
     setPdfActionError(null);
     setIsDownloadingPdf(false);
     setDownloadDone(false);
-  }, [doi]);
+  }
 
   const isExplicitDoi = (value: string) => {
     const trimmed = value.trim();
@@ -235,9 +243,9 @@ const PaperPage: React.FC = () => {
         setPaperData(data);
         setIsExtracted(true);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('NER extraction failed:', err);
-      setExtractionError(err.message || 'Extraction timed out or failed. Please try again.');
+      setExtractionError(errorMessage(err, 'Extraction timed out or failed. Please try again.'));
     } finally {
       setIsExtracting(false);
     }
@@ -286,7 +294,7 @@ const PaperPage: React.FC = () => {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
       if (doiRef.current === startedDoi) flashDownloadDone();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('PDF download failed:', err);
       if (doiRef.current === startedDoi) {
         setPdfActionError(await extractErrorDetail(err, 'PDF download is not available for this paper.'));
@@ -340,7 +348,7 @@ const PaperPage: React.FC = () => {
   let tocList: TocItem[] = (paperData.toc && paperData.toc.length > 0)
     ? paperData.toc.map((t, i) => ({
         id: t.id || `section-${i}`,
-        text: t.text || (t as any).title || `Section ${i + 1}`,
+        text: t.text || (t as { title?: string }).title || `Section ${i + 1}`,
         level: t.level || 1,
       }))
     : (paperData.sections?.map((s, i) => ({ id: `section-${i}`, text: s.title, level: 1 })) ?? []);

@@ -104,8 +104,22 @@ export const paperApi = {
 
 
 // Database API
+export interface DbPaperRow {
+  title?: string;
+  journal?: string;
+  year?: number | string;
+  doi?: string;
+  entity_count?: number;
+}
+
+export interface DbPaperList {
+  total?: number;
+  papers?: DbPaperRow[];
+  items?: DbPaperRow[];
+}
+
 export const dbApi = {
-  async getPapers(limit: number = 50, offset: number = 0, country?: string, query?: string, year?: number | string) {
+  async getPapers(limit: number = 50, offset: number = 0, country?: string, query?: string, year?: number | string): Promise<DbPaperList | DbPaperRow[]> {
     const response = await api.get('/paper/db/list', { params: { limit, offset, country, query, year } });
     return response.data;
   },
@@ -139,8 +153,9 @@ export const doiApi = {
       });
       console.log('[DOI API] Response:', response.status, response.data);
       return response.data;
-    } catch (e: any) {
-      console.error('[DOI API] Error:', e?.response?.status, e?.response?.data || e?.message);
+    } catch (e: unknown) {
+      const response = (e as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+      console.error('[DOI API] Error:', response?.status, response?.data ?? (e as { message?: unknown })?.message);
       return null;
     }
   },

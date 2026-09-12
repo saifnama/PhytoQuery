@@ -458,11 +458,11 @@ def test_chat_template_kwargs_env(monkeypatch):
     assert resolve_llm_settings().chat_template_kwargs is True
 
 
-def test_lifespan_preloads_gazetteers(monkeypatch):
+def test_lifespan_preloads_dictionaries(monkeypatch):
     import backend.src.ner.dictionary as ner_dict_module
 
     calls = []
-    monkeypatch.setattr(ner_dict_module, "preload_gazetteers",
+    monkeypatch.setattr(ner_dict_module, "preload_dictionaries",
                         lambda: calls.append(1) or 8)
     from fastapi.testclient import TestClient
     from backend.src.main import app
@@ -478,7 +478,7 @@ def test_lifespan_survives_preload_failure(monkeypatch):
     def _boom():
         raise RuntimeError("disk gone")
 
-    monkeypatch.setattr(ner_dict_module, "preload_gazetteers", _boom)
+    monkeypatch.setattr(ner_dict_module, "preload_dictionaries", _boom)
     from fastapi.testclient import TestClient
     from backend.src.main import app
 

@@ -28,7 +28,7 @@ import type {
   ThreadMessageLike,
 } from '@assistant-ui/react';
 import { useLocalRuntime } from '@assistant-ui/react';
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 const HISTORY_STORAGE_KEY = 'bi_chat_history';
 
@@ -317,7 +317,10 @@ export function useBloomIndexRuntime(opts: BloomIndexRuntimeOptions) {
   // Stash the latest getter in a ref so the adapter always reads the
   // current React state without being recreated on every render.
   const getSelectedFilesRef = useRef(opts.getSelectedFiles);
-  getSelectedFilesRef.current = opts.getSelectedFiles;
+  // Same latest-getter mirror as ChatPage: effect assignment only.
+  useEffect(() => {
+    getSelectedFilesRef.current = opts.getSelectedFiles;
+  }, [opts.getSelectedFiles]);
 
   const adapter = useMemo<ChatModelAdapter>(
     () => ({

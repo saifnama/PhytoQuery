@@ -1,6 +1,9 @@
 # BloomIndex backend — Python dependencies
-# Install:   pip install -r backend/requirements.txt
-# Tested on: Python 3.10 → 3.13 (Linux, macOS, Windows)
+# Install:   uv pip install --python .venv/Scripts/python.exe -r backend/requirements.txt
+#            (or: pip install -r backend/requirements.txt)
+# Tested on: Python 3.14 (trial) — 3.13 fallback if native crashes appear.
+#   Venv:    uv venv --python 3.14 .venv  (repo root; .venv/ is git-ignored)
+#   spaCy model out-of-band: ``python -m spacy download en_core_web_sm``
 #
 # Pin policy:
 #   * Hard pins (==) for anything in the ML stack (numpy, transformers,
@@ -18,16 +21,16 @@
 # several silent-breakage modes that unit tests don't catch.
 
 # === FastAPI core ===========================================================
-fastapi==0.136.1
-uvicorn[standard]==0.46.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 # uvloop: libuv-backed asyncio event loop. uvicorn auto-detects + switches
 # the policy when present — ~25-40% throughput gain on the streaming SSE +
 # chunked upload paths. No Windows wheels exist, so the env marker keeps
 # the install Linux/macOS-only; Windows falls back to the stdlib
 # SelectorEventLoop with no code change.
-uvloop==0.21.0; sys_platform != "win32"
-pydantic==2.13.3
-python-multipart==0.0.27
+uvloop==0.22.1; sys_platform != "win32"
+pydantic==2.13.5
+python-multipart==0.0.32
 
 # === HTTP ===================================================================
 httpx==0.28.1
@@ -40,87 +43,85 @@ openai==3.13.0
 
 # === NLP — dictionary matchers (spaCy PhraseMatcher) =======================
 # spaCy model is downloaded out-of-band: ``python -m spacy download en_core_web_sm``
-spacy==3.8.14
+spacy==3.8.16
 
 # === RAG: LangChain + Qdrant + embeddings + reranker =======================
-langchain==1.2.17
-langchain-community==0.4.1
-langchain-core==1.3.3
+langchain==1.4.0
+langchain-community==0.4.2
+langchain-core==1.6.3
 langchain-huggingface==1.2.2
 langchain-qdrant==1.1.0
-langchain-experimental==0.4.1
+langchain-experimental==0.4.2
 langchain-text-splitters==1.1.2
 # qdrant-client version MUST match the Qdrant Server image tag in
-# scripts/qdrant.{sh,ps1} (currently v1.18.0) — mismatched protocol
+# scripts/qdrant.{sh,ps1} — mismatched protocol
 # versions trigger gRPC schema errors on collection introspection.
-qdrant-client==1.18.0
+qdrant-client==1.19.0
 # Sparse BM25 encoder for hybrid retrieval. Loaded lazily via
 # ``FastEmbedSparse(model_name="Qdrant/bm25")`` at first query.
 # langchain-qdrant 1.x ships fastembed only as an *extras* dependency
 # (``langchain-qdrant[fastembed]``), so a plain install does NOT
 # pull it. Declaring it explicitly here keeps hybrid retrieval working
-# on a clean ``pip install -r requirements.txt`` from any machine.
+# on a clean install from any machine.
 fastembed==0.8.0
-sentence-transformers==5.4.1
+sentence-transformers==6.0.1
 # transformers is kept in lockstep with the sentence-transformers
 # integration. Bumping one without the other typically breaks the
 # cross-encoder reranker's tokenizer config.
-transformers==4.57.1
+transformers==5.17.0
 # Permissive JSON parser used by the structured-output citation pass.
 # Production LLMs (especially smaller models in JSON mode) emit common
 # malformations: trailing commas, code-fenced output, single quotes,
 # unclosed braces, smart quotes. ``json_repair`` recovers the intended
-# object from these without an extra LLM round-trip. See
-# ``_select_used_chunks`` in backend/src/chat/service.py.
-json-repair==0.59.6
+# object from these without an extra LLM round-trip.
+json-repair==0.63.4
 
 # === PDF + document parsing =================================================
 # Plain PyMuPDF only — no pymupdf4llm (its 1.28.x layout rewrite brings
 # automatic RapidOCR + an ONNX layout model we don't want in the fast path).
 pymupdf==1.28.2
-# docling 2.93.0 is tagged on GitHub but not on PyPI yet — stay on 2.92.0
-# until the wheel lands. Docling pulls in docling-core + huggingface
-# tokenizer chunker transitively.
-docling==2.92.0
-beautifulsoup4==4.14.3
-lxml==6.1.0
-# nh3 0.3.x renamed several arguments and dropped the legacy
-# ``link_rel`` behaviour. Pinned at 0.2.x until backend/src/common/sanitize.py
-# is audited against the new API.
-nh3==0.2.20
+docling==2.126.0
+beautifulsoup4==4.15.0
+lxml==6.1.3
+# nh3 0.3.x renamed several arguments — ``sanitize.py`` was audited
+# against the new API during the 2026-09 upgrade (verify again on bump).
+nh3==0.3.7
 
 # === Numerical + utilities ==================================================
-# numpy 2.x changes the C ABI used by sentence-transformers and the
-# cross-encoder reranker's tokenizers. Stay on 1.26.x until
-# every ML dep above publishes wheels built against numpy 2.
-numpy==1.26.4
+numpy==2.5.3
 jinja2==3.1.6
 # python-dotenv loads .env / .env.<BLOOMINDEX_PROFILE> at startup.
 # See backend/src/settings.py for precedence rules.
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 
 # === Database (SQLite + async SQLAlchemy) ===================================
-sqlalchemy==2.0.49
+sqlalchemy==2.0.52
 # greenlet is the async runtime SQLAlchemy uses under the hood for
-# its async ORM. Pinned to a version that ships wheels for 3.12/3.13.
-greenlet==3.0.3
+# its async ORM. Pinned to a version that ships wheels for 3.12/3.13/3.14.
+greenlet==3.5.5
 # aiosqlite is the async driver SQLAlchemy targets via the
 # ``sqlite+aiosqlite://`` URL scheme (see backend/src/db/session.py).
 aiosqlite==0.22.1
-# pandas 3.x has breaking API changes around pyarrow defaults; stay
-# on 2.2.x until ``backend/src/db/importer.py`` is audited.
-pandas==2.2.2
+# pandas 3.x: verified working with the Excel importer on upgrade day;
+# re-audit ``backend/src/db/importer.py`` if pandas moves again.
+pandas==3.0.5
 # openpyxl is the engine pandas uses for the .xlsx import path in
 # backend/src/db/importer.py (``pd.read_excel``).
 openpyxl==3.1.5
 # alembic migrations (backend/alembic.ini, backend/src/db/migrations/).
 # Fresh DBs: `alembic upgrade head`. Existing prod DB: `alembic stamp head`.
-alembic==1.16.5
+alembic==1.20.0
+mako==1.4.1
 
 # === Tests ==================================================================
-pytest==9.0.3
-pytest-asyncio==1.3.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+# Playwright (Python) drives tests/e2e/browser_smoke.py. Browsers download
+# separately: ``python -m playwright install chromium --only-shell``.
+playwright==1.62.0
 
 # === Eval ===================================================================
-ragas
-nervaluate
+# Eval-only deps live in backend/requirements-eval.txt (installed separately).
+# They are NOT part of the runtime: ragas pulls `instructor`, whose
+# openai/typer ranges conflict with openai==3.13 + docling. Keep them out.
+

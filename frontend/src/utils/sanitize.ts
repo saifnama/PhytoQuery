@@ -20,7 +20,7 @@ export function sanitizeHtml(html: string): string {
     'br','div','code','blockquote','ul','ol','li','section'
   ];
   // Allow server-side attributes; allow data-rid and data-entity across all tags
-  const PURIFY_CONFIG: any = {
+  const PURIFY_CONFIG: import('dompurify').Config = {
     ALLOWED_TAGS,
     ADD_ATTR: [
       'id',
@@ -40,8 +40,7 @@ export function sanitizeHtml(html: string): string {
   };
   try {
     // dompurify expects to be called as DOMPurify.sanitize(html, config)
-    // Cast to any to avoid strict TS issues with the library types in this project.
-    return (DOMPurify as any).sanitize(decoded, PURIFY_CONFIG);
+    return DOMPurify.sanitize(decoded, PURIFY_CONFIG);
   } catch {
     // In case of any sanitization failure, return empty string to avoid injecting unsafe content
     return '';
