@@ -73,10 +73,16 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   // back to top → expand. The idle timer is NOT reset by mouse moves
   // (only by scroll + expand) so the pill always settles to the dot
   // ~10s after it opens.
+  // NOTE: the scroll container is #main-content-display (overflow-y-auto),
+  // not window — window.scrollY never changes so the old listener was dead.
   useEffect(() => {
-    let lastY = window.scrollY;
+    const scroller =
+      document.getElementById('main-content-display') ?? window;
+    const readY = () =>
+      scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
+    let lastY = readY();
     const onScroll = () => {
-      const y = window.scrollY;
+      const y = readY();
       const goingDown = y > lastY;
       lastY = y;
       resetIdleTimer();
@@ -88,10 +94,10 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
       if (userOverrideRef.current) return;
       if (y > SCROLL_COLLAPSE_PX && goingDown) setCollapsed(true);
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
+    scroller.addEventListener('scroll', onScroll, { passive: true });
     resetIdleTimer();
     return () => {
-      window.removeEventListener('scroll', onScroll);
+      scroller.removeEventListener('scroll', onScroll);
       if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current);
     };
   }, [resetIdleTimer]);

@@ -8,7 +8,7 @@
 
 import { createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
-import { DefaultPending, DefaultError, DefaultNotFound } from './ui/routeDefaults';
+import { DefaultPending, DefaultError, DefaultNotFound } from './components/ui/routeDefaults';
 
 export const router = createRouter({
   routeTree,

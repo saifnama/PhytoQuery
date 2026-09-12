@@ -8,7 +8,7 @@ import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
 import { useEffect } from 'react';
 import Header from '../layout/Header';
-import { ErrorBoundary } from '../ui/ErrorBoundary';
+import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import { UploadStatusListener } from '../components/UploadStatusListener';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
@@ -22,9 +22,14 @@ export const Route = createRootRouteWithContext<Record<string, never>>()({
 
 function RootLayout() {
   useEffect(() => {
+    // Fire-and-forget async fetch() never completes in beforeunload —
+    // use sendBeacon (guaranteed delivery attempt) with a fetch fallback.
     const handleBeforeUnload = () => {
       try {
-        ragApi.cleanupUserData();
+        const blob = new Blob([JSON.stringify({})], { type: 'application/json' });
+        if (!navigator.sendBeacon('/api/chat/cleanup', blob)) {
+          void ragApi.cleanupUserData();
+        }
       } catch {
         // Best-effort only.
       }

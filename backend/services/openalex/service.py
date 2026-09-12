@@ -1,14 +1,2 @@
-"""OpenAlex Service - Facade for OpenAlex operations."""
-
-from typing import Dict, Any
-
-from backend.services.openalex.client import OpenAlexClient
-
-
-class OpenAlexService:
-    """Facade for OpenAlex operations."""
-
-    @classmethod
-    async def fetch_paper(cls, doi: str) -> Dict[str, Any]:
-        """Fetch paper metadata from OpenAlex by DOI."""
-        return await OpenAlexClient.fetch_paper(doi)
+# Phase 1 compat shim (delete in Phase 3). Canonical: backend.src.papers.openalex.service.
+from backend.src.papers.openalex.service import *  # noqa: F401,F403

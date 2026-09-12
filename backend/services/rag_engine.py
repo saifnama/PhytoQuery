@@ -21,7 +21,7 @@ from backend.core.llm_client import (
     SharedLLMClient,
     get_llm_client,
 )
-from backend.core.rag_storage import (
+from backend.src.common.uploads import (
     delete_user_upload_file,
     delete_user_uploads,
     extract_paper_markdown,

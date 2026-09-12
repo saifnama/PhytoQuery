@@ -322,12 +322,17 @@ export const KnowledgeGraph = forwardRef<KnowledgeGraphHandle, KnowledgeGraphPro
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entities, paperIdentifier, paperIdentifiers, entityConfig, entityPaperMap]);
 
-  // Initialize / reset activeTypes whenever the type set changes (new paper)
+  // Initialize / reset activeTypes whenever the type set changes (new paper).
+  // NOTE: setState-during-render replaced with an effect (React docs: cache
+  // the derived value, sync in useEffect) — render-phase setState re-renders
+  // the whole graph subtree on every new paper.
   const [prevTypeColors, setPrevTypeColors] = useState<Map<string, unknown> | null>(null);
-  if (prevTypeColors !== typeColors) {
-    setPrevTypeColors(typeColors);
-    setActiveTypes(new Set(typeColors.keys()));
-  }
+  useEffect(() => {
+    if (prevTypeColors !== typeColors) {
+      setPrevTypeColors(typeColors);
+      setActiveTypes(new Set(typeColors.keys()));
+    }
+  }, [prevTypeColors, typeColors]);
 
   // ── Lazy-load vis-network bundle on mount ─────────────────────────────
   useEffect(() => {

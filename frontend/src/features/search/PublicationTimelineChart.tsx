@@ -72,6 +72,9 @@ export function PublicationTimelineChart({ data, onYearClick }: Props) {
     if (!el || data.length < 2) return
 
     const handler = (e: WheelEvent) => {
+      // Zoom only on ctrl/meta+wheel (maps convention). Plain wheel scrolls
+      // the page — hijacking it traps users inside the 300px chart box.
+      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault()
       const rect = el.getBoundingClientRect()
       const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))

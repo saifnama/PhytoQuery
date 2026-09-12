@@ -1,9 +1,2 @@
-"""Europe PMC service package.
-
-Re-exports EuropePMCService for backward compatibility.
-"""
-
-from backend.services.europe_pmc.service import EuropePMCService
-from backend.core.sanitizer import sanitize
-
-__all__ = ["EuropePMCService", "sanitize"]
+# Phase 1 compat shim (delete in Phase 3). Canonical: backend.src.papers.europe_pmc.
+from backend.src.papers.europe_pmc import *  # noqa: F401,F403

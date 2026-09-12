@@ -58,20 +58,22 @@ function truncate(label: string, max = 26): string {
 }
 
 export function JournalBarsChart({ data, onBarClick }: Props) {
-  // Truly random palette shuffled on each load/search; memoized so it consumes 0 CPU during hover/interaction
+  // Stable colour per journal: FNV-1a hash of the name → palette slot.
+  // The old code shuffled randomly per data change, so colours jumped on
+  // every search/filter. Memoized on data for zero hover cost.
   const dataWithFill = useMemo(() => {
-    const pool = [...DIVERSE_PALETTE]
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      const temp = pool[i]
-      pool[i] = pool[j]
-      pool[j] = temp
-    }
-    return data.map((d, i) => ({
-      ...d,
-      fill: pool[i % pool.length],
-    }))
-  }, [data])
+    return data.map((d) => {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < d.name.length; i++) {
+        h ^= d.name.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+      }
+      return {
+        ...d,
+        fill: DIVERSE_PALETTE[(h >>> 0) % DIVERSE_PALETTE.length],
+      };
+    });
+  }, [data]);
 
   // Single config entry — Recharts only needs the dataKey for tooltip
   // labelling. Per-bar colours are set on ``<Cell>`` below.

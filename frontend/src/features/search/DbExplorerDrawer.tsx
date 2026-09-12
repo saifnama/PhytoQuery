@@ -89,8 +89,15 @@ const DbExplorerDrawer: React.FC<Props> = ({
   const [papersError, setPapersError] = useState(false);
   const [totalPapers, setTotalPapers] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // Debounce keystrokes — the papers fetch below fires per query change.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
   // Portal target — dedicated #portal-root sibling to #root in index.html
   const portalRoot = useRef<Element>(
@@ -144,7 +151,7 @@ const DbExplorerDrawer: React.FC<Props> = ({
 
     const country  = activeFilter?.kind === 'country' ? activeFilter.value : undefined;
     const year     = activeFilter?.kind === 'year'    ? activeFilter.value : undefined;
-    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (searchQuery || undefined);
+    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (debouncedQuery || undefined);
 
     setPapers(null);
     setPapersError(false);
@@ -160,23 +167,24 @@ const DbExplorerDrawer: React.FC<Props> = ({
         setPapersError(true);
         setPapers([]);
       });
-  }, [open, activeTab, activeFilter, searchQuery]);
+  }, [open, activeTab, activeFilter, debouncedQuery]);
 
-  // ── Load more ───────────────────────────────────────────────────────────────
+  // ── Load more (real offset paging — append, don't refetch from zero) ─────
   const loadMore = () => {
     if (!papers) return;
     const country  = activeFilter?.kind === 'country' ? activeFilter.value : undefined;
     const year     = activeFilter?.kind === 'year'    ? activeFilter.value : undefined;
-    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (searchQuery || undefined);
+    const apiQuery = activeFilter?.kind === 'papers'  ? activeFilter.value : (debouncedQuery || undefined);
 
     dbApi.getPapers(
-      papers.length + 50, 0,
+      50, papers.length,
       country,
       apiQuery,
       year,
     ).then((data: any) => {
       const list: PaperRow[] = Array.isArray(data) ? data : data?.papers ?? data?.items ?? [];
-      setPapers(list);
+      setPapers(prev => [...(prev ?? []), ...list]);
+      if (typeof data?.total === 'number') setTotalPapers(data.total);
     });
   };
 

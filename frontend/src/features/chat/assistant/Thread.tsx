@@ -377,10 +377,12 @@ const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeRaw];
 
 // Module-level so its identity never changes across renders — a
-// Strip leaked [cN]/[N] markers; long `[display](#cite-cid)` References links
-// pass through (their label isn't bare digits).
+// Strip leaked backend [cN] markers only (the `c` prefix is required).
+// Bare [N] is left alone: it can be a legit footnote/list/item number in
+// model prose. Long `[display](#cite-cid)` References links pass through
+// (their label isn't bare digits).
 function stripInlineMarkers(text: string): string {
-  return text.replace(/\[\s*[Cc]?\s*(\d+)\s*\]/g, '');
+  return text.replace(/\[\s*[Cc]\s*(\d+)\s*\]/g, '');
 }
 
 const MarkdownText: FC = () => {
