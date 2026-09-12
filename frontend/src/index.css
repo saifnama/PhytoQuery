@@ -1610,3 +1610,22 @@ mark.ner-default {
 .animate-typing-dot {
   animation: typingDot 1.2s ease-in-out infinite;
 }
+
+/* ── PlantOriginMap country paths (react-simple-maps v3 has no
+   style={{default,hover,pressed}} prop — states live in CSS) ── */
+.pq-map-country {
+  fill: #FFFFFF;
+  stroke: #D8E8EE;
+  stroke-width: 0.6px;
+  outline: none;
+  transition: fill 120ms ease, stroke 120ms ease;
+}
+.pq-map-country:hover {
+  fill: #EBF8FB;
+  stroke: #9DE4EF;
+  stroke-width: 0.8px;
+}
+.pq-map-country:active {
+  fill: #EBF8FB;
+  outline: none;
+}

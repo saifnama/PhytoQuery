@@ -30,8 +30,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  useMessage,
-  useThread,
+  useAuiState,
 } from '@assistant-ui/react';
 import {
   MarkdownTextPrimitive,
@@ -116,12 +115,11 @@ export const Thread: FC<ThreadProps> = ({ onCitationClick, emptyContent }) => {
  * hardcoded indices.
  */
 const ExportAnswerPdfButton: FC = () => {
-  const thread = useThread();
-  const message = useMessage();
+  const messages = useAuiState((s) => s.thread.messages);
+  const messageId = useAuiState((s) => s.message.id);
 
   const handleExport = () => {
-    const messages = thread.messages;
-    const idx = messages.findIndex((m) => m.id === message.id);
+    const idx = messages.findIndex((m) => m.id === messageId);
     if (idx < 0) return;
     // Take every user / assistant turn from the start of the thread
     // through (and including) the assistant message this button sits on.
@@ -130,7 +128,7 @@ const ExportAnswerPdfButton: FC = () => {
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({
         role: m.role === 'user' ? 'user' : 'assistant',
-        text: readMessageText(m),
+        text: readMessageContent(m.content),
       }));
     exportThreadAsPdf({ turns });
   };
@@ -399,8 +397,8 @@ const MarkdownText: FC = () => {
 };
 
 const UserMessage: FC = () => {
-  const message = useMessage();
-  const text = readMessageText(message);
+  const content = useAuiState((s) => s.message.content);
+  const text = readMessageContent(content);
 
   return (
     <MessagePrimitive.Root className="mx-auto w-full max-w-[var(--thread-max-width)] flex flex-col items-end group pt-[var(--turn-gap-answer-to-prompt)] first:pt-0 pb-[var(--turn-gap-prompt-to-answer)]">
@@ -481,9 +479,9 @@ const UserActionBar: FC = () => (
   </ActionBarPrimitive.Root>
 );
 
-function readMessageText(message: { content: readonly { type: string; text?: string }[] | undefined }): string {
-  if (!message?.content) return '';
-  return message.content
+function readMessageContent(content: readonly { type: string; text?: string }[] | undefined): string {
+  if (!content) return '';
+  return content
     .map((part) => (part.type === 'text' ? part.text ?? '' : ''))
     .join('')
     .trim();
@@ -491,16 +489,17 @@ function readMessageText(message: { content: readonly { type: string; text?: str
 
 const AssistantMessage: FC = () => {
   const onCitationClick = useContext(ThreadCitationClickContext);
-  const message = useMessage();
-  const customData = (message.metadata?.custom ?? {}) as RagMessageCustomData;
+  const customData = (useAuiState((s) => s.message.metadata?.custom) ?? {}) as RagMessageCustomData;
   const sources = customData.sources ?? [];
   const citations = customData.citations ?? [];
-  const text = readMessageText(message);
+  const content = useAuiState((s) => s.message.content);
+  const status = useAuiState((s) => s.message.status);
+  const text = readMessageContent(content);
   // Show the typing dot only when the message is actively streaming AND
   // has no text yet. A completed message is never treated as pending even
   // if text is briefly empty during an answer_corrected frame swap —
   // that race previously caused the content to vanish and show the dot.
-  const isStreaming = message.status?.type === 'running';
+  const isStreaming = status?.type === 'running';
   const isPending = isStreaming && !text;
 
   const handleCitationClick = useCallback(

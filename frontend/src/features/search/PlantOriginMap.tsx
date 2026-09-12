@@ -46,13 +46,6 @@ interface HoverData {
   value?: number
 }
 
-// react-simple-maps' generic geographies don't carry a property
-// schema; we just need rsmKey + an optional properties.name.
-interface GeoFeature {
-  rsmKey: string
-  properties: { name?: string }
-}
-
 export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const tooltipRef = useRef<HTMLDivElement | null>(null)
@@ -179,30 +172,13 @@ export function PlantOriginMap({ data, onCountryClick, height = 520 }: Props) {
         <ZoomableGroup zoom={1} minZoom={1} maxZoom={5}>
           {world && (
             <Geographies geography={world}>
-              {({ geographies }: { geographies: GeoFeature[] }) =>
+              {({ geographies }) =>
                 geographies.map((g) => (
                   <Geography
                     key={g.rsmKey}
                     geography={g}
-                    style={{
-                      default: {
-                        fill: "#FFFFFF",
-                        stroke: "#D8E8EE",
-                        strokeWidth: 0.6,
-                        outline: "none",
-                      },
-                      hover: {
-                        fill: "#EBF8FB",
-                        stroke: "#9DE4EF",
-                        strokeWidth: 0.8,
-                        outline: "none",
-                        cursor: onCountryClick ? "pointer" : "default",
-                      },
-                      pressed: {
-                        fill: "#EBF8FB",
-                        outline: "none",
-                      },
-                    }}
+                    className="pq-map-country"
+                    style={{ cursor: onCountryClick ? "pointer" : "default" }}
                     onMouseEnter={(e) => {
                       const name = g.properties?.name
                       if (!name) return

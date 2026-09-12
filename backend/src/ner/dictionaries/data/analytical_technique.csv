@@ -30,8 +30,8 @@ high resolution mass spectrometry,hrms
 matrix assisted laser desorption ionization,maldi
 matrix assisted laser desorption ionization mass spectrometry,maldi-ms
 matrix assisted laser desorption ionization time-of-flight mass spectrometry,maldi-tof|maldi-tof ms
-direct analysis in real time,dart
-electrospray ionization,esi
+direct analysis in real time,
+electrospray ionization,
 electrospray ionization mass spectrometry,esi-ms
 polyacrylamide gel electrophoresis,
 sodium dodecyl sulfate polyacrylamide gel electrophoresis,sds-page
@@ -44,8 +44,8 @@ southern blotting,southern blot
 northern blotting,northern blot
 infrared spectroscopy,
 fourier transform infrared spectroscopy,ftir|ft-ir
-near infrared spectroscopy,nir
-attenuated total reflectance,atr
+near infrared spectroscopy,
+attenuated total reflectance,
 attenuated total reflectance fourier transform infrared spectroscopy,atr-ftir
 ultraviolet visible spectroscopy,uv-vis|uv-visible spectroscopy
 x-ray diffraction,xrd
