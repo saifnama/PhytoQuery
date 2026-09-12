@@ -91,145 +91,147 @@ def _get_llm_client_and_model():
     return create_ragas_client()
 
 
-df = pd.read_csv(INPUT_CSV)
-print(f"Loaded {len(df)} generated RAG samples")
+if __name__ == "__main__":
+    df = pd.read_csv(INPUT_CSV)
+    print(f"Loaded {len(df)} generated RAG samples")
 
-start_idx = load_checkpoint()
-print(f"Resuming from index {start_idx + 1}")
+    start_idx = load_checkpoint()
+    print(f"Resuming from index {start_idx + 1}")
 
-local_client, eval_model = _get_llm_client_and_model()
+    local_client, eval_model = _get_llm_client_and_model()
 
-eval_llm = llm_factory(
-    model=eval_model,
-    provider="openai",
-    client=local_client,
-    max_tokens=4096,
-    temperature=0,
-)
+    eval_llm = llm_factory(
+        model=eval_model,
+        provider="openai",
+        client=local_client,
+        max_tokens=4096,
+        temperature=0,
+    )
 
-print(f"Using {eval_llm} for Eval")
+    print(f"Using {eval_llm} for Eval")
 
-embeddings = embedding_factory(
-    "huggingface",
-    model=os.getenv("RAGAS_EMBEDDING_MODEL", os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")),
-)
+    embeddings = embedding_factory(
+        "huggingface",
+        model=os.getenv("RAGAS_EMBEDDING_MODEL", os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")),
+    )
 
-faithfulness = Faithfulness(llm=eval_llm)
-relevancy = AnswerRelevancy(llm=eval_llm, embeddings=embeddings)
-correctness = AnswerCorrectness(llm=eval_llm, embeddings=embeddings)
-ctx_precision = ContextPrecision(llm=eval_llm)
-ctx_recall = ContextRecall(llm=eval_llm)
+    faithfulness = Faithfulness(llm=eval_llm)
+    relevancy = AnswerRelevancy(llm=eval_llm, embeddings=embeddings)
+    correctness = AnswerCorrectness(llm=eval_llm, embeddings=embeddings)
+    ctx_precision = ContextPrecision(llm=eval_llm)
+    ctx_recall = ContextRecall(llm=eval_llm)
 
-for idx, row in df.iterrows():
-    if idx <= start_idx:
-        continue
+    for idx, row in df.iterrows():
+        if idx <= start_idx:
+            continue
 
-    print(f"Evaluating {idx + 1}/{len(df)}")
+        print(f"Evaluating {idx + 1}/{len(df)}")
 
-    error_msg = None
-    contexts = None
-    answer = row.get("answer")
-
-    try:
-        if pd.notna(row.get("contexts")) and str(row["contexts"]).strip():
-            contexts = ast.literal_eval(row["contexts"])
-            if not isinstance(contexts, list) or len(contexts) == 0:
-                contexts = None
-        else:
-            contexts = None
-    except Exception:
+        error_msg = None
         contexts = None
+        answer = row.get("answer")
 
-    if contexts is None:
-        error_msg = "retrieved_contexts is missing"
-
-    if pd.isna(answer) or not str(answer).strip():
-        error_msg = (
-            f"{error_msg}; generated_answer is missing"
-            if error_msg
-            else "generated_answer is missing"
-        )
-
-    if error_msg:
-        append_row({
-            "id": row.get("id"),
-            "question": row.get("question"),
-            "faithfulness": np.nan,
-            "answer_relevancy": np.nan,
-            "answer_correctness": np.nan,
-            "context_precision": np.nan,
-            "context_recall": np.nan,
-            "error": error_msg,
-        })
-        save_checkpoint(idx)
-        print(f"  Row {idx}: {error_msg}")
-        continue
-
-    reference = row.get("reference")
-    metrics_result = {}
-
-    metric_defs = [
-        ("faithfulness", lambda: faithfulness.score(
-            user_input=row["question"], response=answer, retrieved_contexts=contexts,
-        ).value),
-        ("answer_relevancy", lambda: relevancy.score(
-            user_input=row["question"], response=answer,
-        ).value),
-        ("answer_correctness", lambda: correctness.score(
-            user_input=row["question"], response=answer, reference=reference,
-        ).value),
-        ("context_precision", lambda: ctx_precision.score(
-            user_input=row["question"], reference=reference, retrieved_contexts=contexts,
-        ).value),
-        ("context_recall", lambda: ctx_recall.score(
-            user_input=row["question"], reference=reference, retrieved_contexts=contexts,
-        ).value),
-    ]
-
-    for metric_name, score_fn in metric_defs:
         try:
-            metrics_result[metric_name] = score_with_retry(score_fn, metric_name)
-        except Exception as e:
-            metrics_result[metric_name] = np.nan
-            print(f"  {metric_name} failed after retries: {e}")
+            if pd.notna(row.get("contexts")) and str(row["contexts"]).strip():
+                contexts = ast.literal_eval(row["contexts"])
+                if not isinstance(contexts, list) or len(contexts) == 0:
+                    contexts = None
+            else:
+                contexts = None
+        except Exception:
+            contexts = None
 
-    has_errors = any(np.isnan(v) for v in metrics_result.values())
-    result = {
-        "id": row.get("id"),
-        "question": row["question"],
-        "answer": answer,
-        "reference": reference,
-        "contexts": row.get("contexts"),
-        **metrics_result,
-        "error": "partial" if has_errors else None,
-    }
+        if contexts is None:
+            error_msg = "retrieved_contexts is missing"
 
-    append_row(result)
-    save_checkpoint(idx)
+        if pd.isna(answer) or not str(answer).strip():
+            error_msg = (
+                f"{error_msg}; generated_answer is missing"
+                if error_msg
+                else "generated_answer is missing"
+            )
 
-if OUTPUT_CSV.exists():
-    out_df = pd.read_csv(OUTPUT_CSV, engine="python", on_bad_lines="skip")
+        if error_msg:
+            append_row({
+                "id": row.get("id"),
+                "question": row.get("question"),
+                "faithfulness": np.nan,
+                "answer_relevancy": np.nan,
+                "answer_correctness": np.nan,
+                "context_precision": np.nan,
+                "context_recall": np.nan,
+                "error": error_msg,
+            })
+            save_checkpoint(idx)
+            print(f"  Row {idx}: {error_msg}")
+            continue
 
-    total = len(out_df)
-    failed = out_df["error"].notna().sum()
-    success = total - failed
+        reference = row.get("reference")
+        metrics_result = {}
 
-    print("\nOpen-ended RAGAS evaluation complete\n")
-    print("Evaluation Summary")
-    print("---------------------")
-    print(f"Total samples        : {total}")
-    print(f"Successfully scored  : {success}")
-    print(f"Failed samples       : {failed}")
-    print(f"Success rate         : {(success / total) * 100:.2f}%")
+        metric_defs = [
+            ("faithfulness", lambda: faithfulness.score(
+                user_input=row["question"], response=answer, retrieved_contexts=contexts,
+            ).value),
+            ("answer_relevancy", lambda: relevancy.score(
+                user_input=row["question"], response=answer,
+            ).value),
+            ("answer_correctness", lambda: correctness.score(
+                user_input=row["question"], response=answer, reference=reference,
+            ).value),
+            ("context_precision", lambda: ctx_precision.score(
+                user_input=row["question"], reference=reference, retrieved_contexts=contexts,
+            ).value),
+            ("context_recall", lambda: ctx_recall.score(
+                user_input=row["question"], reference=reference, retrieved_contexts=contexts,
+            ).value),
+        ]
 
-    valid_df = out_df[out_df["error"].isna()]
-    if not valid_df.empty:
-        print("\nAverage Scores (valid samples only):")
-        print(valid_df[["faithfulness", "answer_relevancy", "answer_correctness", "context_precision", "context_recall"]].mean())
+        for metric_name, score_fn in metric_defs:
+            try:
+                metrics_result[metric_name] = score_with_retry(score_fn, metric_name)
+            except Exception as e:
+                metrics_result[metric_name] = np.nan
+                print(f"  {metric_name} failed after retries: {e}")
+
+        has_errors = any(np.isnan(v) for v in metrics_result.values())
+        result = {
+            "id": row.get("id"),
+            "question": row["question"],
+            "answer": answer,
+            "reference": reference,
+            "contexts": row.get("contexts"),
+            **metrics_result,
+            "error": "partial" if has_errors else None,
+        }
+
+        append_row(result)
+        save_checkpoint(idx)
+
+    if OUTPUT_CSV.exists():
+        out_df = pd.read_csv(OUTPUT_CSV, engine="python", on_bad_lines="skip")
+
+        total = len(out_df)
+        failed = out_df["error"].notna().sum()
+        success = total - failed
+
+        print("\nOpen-ended RAGAS evaluation complete\n")
+        print("Evaluation Summary")
+        print("---------------------")
+        print(f"Total samples        : {total}")
+        print(f"Successfully scored  : {success}")
+        print(f"Failed samples       : {failed}")
+        print(f"Success rate         : {(success / total) * 100:.2f}%")
+
+        valid_df = out_df[out_df["error"].isna()]
+        if not valid_df.empty:
+            print("\nAverage Scores (valid samples only):")
+            print(valid_df[["faithfulness", "answer_relevancy", "answer_correctness", "context_precision", "context_recall"]].mean())
+        else:
+            print("\nNo valid samples available for averaging")
+
+        print("\nFailure breakdown:")
+        print(out_df["error"].value_counts(dropna=True))
     else:
-        print("\nNo valid samples available for averaging")
+        print("No evaluation output found (CSV not created)")
 
-    print("\nFailure breakdown:")
-    print(out_df["error"].value_counts(dropna=True))
-else:
-    print("No evaluation output found (CSV not created)")

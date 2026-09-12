@@ -18,30 +18,29 @@ from backend.src.db.session import get_db
 router = APIRouter(prefix="/paper", tags=["paper"])
 logger = logging.getLogger(__name__)
 
-# pdf-proxy fetch policy: scholarly hosts only, no private-network targets,
+# pdf-proxy fetch policy: open scholarly infrastructure only.
+# Intentionally narrow — only hosts where open-access PDFs are expected.
+# Private-network targets are always blocked by the IP check below.
 # 20 MB streaming cap (never buffer unbounded).
 _PDF_PROXY_HOST_SUFFIXES = (
+    # Europe PMC / EBI (open-access full text)
     "europepmc.org",
     "ebi.ac.uk",
+    # NIH / PubMed Central
     "ncbi.nlm.nih.gov",
     "nih.gov",
+    # OpenAlex (open metadata + OA PDFs)
     "openalex.org",
-    "semanticscholar.org",
+    # Unpaywall (legal OA PDF resolver)
+    "unpaywall.org",
+    # DOI canonical resolvers (redirect to publisher; blocked at IP level
+    # if the resolved publisher is private — second layer of defence)
     "doi.org",
     "dx.doi.org",
+    # Open preprint servers
     "arxiv.org",
     "biorxiv.org",
     "medrxiv.org",
-    "plos.org",
-    "frontiersin.org",
-    "mdpi.com",
-    "springer.com",
-    "nature.com",
-    "sciencedirect.com",
-    "wiley.com",
-    "tandfonline.com",
-    "oup.com",
-    "jstage.jst.go.jp",
 )
 _PDF_PROXY_MAX_BYTES = 20 * 1024 * 1024
 
@@ -102,7 +101,7 @@ async def analyse_paper_json(
     try:
         id_type, clean_id, paper_data = await paper_service.fetch_paper_data(doi, source)
         if paper_data.get("error"):
-            return paper_data
+            raise HTTPException(status_code=404, detail=paper_data["error"])
 
         entities, summary, is_extracted = await paper_service.annotate_paper(
             paper_data, raw_doi=doi, clean_id=clean_id,
@@ -131,9 +130,11 @@ async def analyse_paper_json(
             "openAccessPdf": paper_data.get("openAccessPdf"),
             "isOpenAccess": paper_data.get("isOpenAccess"),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Paper JSON Error: {e}")
-        return {"error": str(e), "sections": []}
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/section/json")

@@ -112,7 +112,7 @@ async def process_doi_json(
     entities = [Entity(**e) for e in entities_data]
 
     response = NERResponse(doi=clean_id, mode=mode, text=text[:1000], entities=entities)
-    ner_cache.set(cache_key, response.dict())
+    ner_cache.set(cache_key, response.model_dump())
     return response
 
 
@@ -345,14 +345,37 @@ async def upload_pdf_for_ner(
     """
     Upload PDF for NER extraction.
 
-    1. Extracts metadata (title, DOI)
-    2. Extracts full text
-    3. Runs the full NER pipeline (dictionary + LLM, same as the paper viewer)
-    4. Returns metadata + entities + stored PDF URL
+    Validation gates (in order):
+      1. Extension must be .pdf
+      2. Content-Length pre-flight: reject > 50 MB before reading
+      3. Actual read capped at 50 MB
+      4. Magic-byte check: first 5 bytes must be b'%PDF-'
+      5. PyMuPDF page-count cap: ≤ 500 pages
+
+    Processing:
+      1. Extracts metadata (title, DOI)
+      2. Extracts full text
+      3. Runs the full NER pipeline (dictionary + LLM, same as the paper viewer)
+      4. Returns metadata + entities + stored PDF URL
     """
+    _MAX_PDF_BYTES = 50 * 1024 * 1024   # 50 MB
+    _MAX_PDF_PAGES = 500
+
     original_filename = file.filename or "paper.pdf"
     if not original_filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files accepted")
+
+    # Pre-flight: reject before reading if Content-Length is declared too large
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_PDF_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"PDF exceeds {_MAX_PDF_BYTES // (1024 * 1024)} MB limit.",
+                )
+        except ValueError:
+            pass  # malformed header — let the read-cap below catch it
 
     os.makedirs(NER_UPLOAD_DIR, exist_ok=True)
 
@@ -361,10 +384,23 @@ async def upload_pdf_for_ner(
     file_path = os.path.join(NER_UPLOAD_DIR, stored_filename)
 
     try:
-        content = await file.read()
+        content = await file.read(_MAX_PDF_BYTES + 1)
+        if len(content) > _MAX_PDF_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"PDF exceeds {_MAX_PDF_BYTES // (1024 * 1024)} MB limit.",
+            )
+        # Magic-byte validation — reject non-PDF disguised as PDF
+        if not content[:5] == b"%PDF-":
+            raise HTTPException(
+                status_code=415,
+                detail="File does not appear to be a valid PDF (bad magic bytes).",
+            )
         with open(file_path, "wb") as output_file:
             output_file.write(content)
         _write_upload_metadata(stored_filename, user_id)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to save PDF: %s", exc)
         _cleanup_upload_artifacts(file_path, stored_filename)
@@ -373,6 +409,11 @@ async def upload_pdf_for_ner(
     doc: Optional[pymupdf.Document] = None
     try:
         doc = pymupdf.open(file_path)
+        if doc.page_count > _MAX_PDF_PAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"PDF has {doc.page_count} pages; maximum allowed is {_MAX_PDF_PAGES}.",
+            )
         metadata = await extract_metadata_from_pdf(doc)
         text = await extract_text_from_pdf(doc)
         entities_by_type, entity_counts, canonical_data = await extract_entities_full(text)
@@ -403,6 +444,8 @@ async def upload_pdf_for_ner(
             "entities": entities_by_type,
             "entity_counts": entities_with_counts,
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("PDF NER failed: %s", exc)
         _cleanup_upload_artifacts(file_path, stored_filename)
@@ -410,6 +453,7 @@ async def upload_pdf_for_ner(
     finally:
         if doc is not None:
             doc.close()
+
 
 
 @router.get("/uploaded/{stored_filename}")

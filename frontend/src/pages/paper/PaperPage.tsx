@@ -3,7 +3,7 @@ import { useNavigate, getRouteApi } from '@tanstack/react-router';
 import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react';
 import PaperViewer from '@/features/reader/PaperViewer';
 import { doiApi, nerApi, paperApi, dbApi } from '../../lib/api/papers';
-import { extractErrorDetail, errorMessage } from '../../lib/api/client';
+import { extractErrorDetail } from '../../lib/api/client';
 import type { PaperData, Entity, TocItem } from '../../types';
 
 const route = getRouteApi('/paper/$doi');
@@ -188,7 +188,8 @@ const PaperPage: React.FC = () => {
       } catch (err) {
         console.error('[PaperPage] Failed to fetch paper:', err);
         if (!isExplicitDoi(doi)) {
-          setError('Failed to load paper from the primary source.');
+          const detailMsg = await extractErrorDetail(err, 'Failed to load paper from the primary source.');
+          setError(detailMsg);
           return;
         }
 
@@ -245,7 +246,7 @@ const PaperPage: React.FC = () => {
       }
     } catch (err: unknown) {
       console.error('NER extraction failed:', err);
-      setExtractionError(errorMessage(err, 'Extraction timed out or failed. Please try again.'));
+      setExtractionError(await extractErrorDetail(err, 'Extraction timed out or failed. Please try again.'));
     } finally {
       setIsExtracting(false);
     }

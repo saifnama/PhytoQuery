@@ -29,7 +29,7 @@ const IDLE_COLLAPSE_MS = 10_000;
 const SCROLL_COLLAPSE_PX = 80;
 
 /**
- * Header — TulipLogo + BloomIndex brand on the left, segmented pill nav on
+ * Header — BloomIndex brand on the left, segmented pill nav on
  * the right. The pill collapses to a single solid black circle dot after
  * the user scrolls down past 80px OR after 10s of no scrolling/expand
  * activity. Hovering the dot — or clicking it — pops the pill back open.

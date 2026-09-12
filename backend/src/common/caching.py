@@ -109,9 +109,14 @@ class SimpleCache:
         key = self._get_key(identifier)
         cache_file = self._get_path(key)
 
+        # Ensure data is a mapping so we can merge metadata safely.
+        # Non-dict payloads (e.g. a list of entities) are wrapped in an
+        # envelope so the **-merge below never raises TypeError.
+        base: dict = data if isinstance(data, dict) else {"data": data}
+
         # Add metadata
         cache_data = {
-            **data,
+            **base,
             "_version": CACHE_VERSION,
             "_cached_at": time.time(),
         }
