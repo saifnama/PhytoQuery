@@ -442,6 +442,8 @@ class SearchService:
             params["sort"] = "cited_by_count:desc"
         elif sort == "date":
             params["sort"] = "publication_date:desc"
+        elif sort == "date_asc":
+            params["sort"] = "publication_date:asc"
 
         client = await HttpClientManager.get_client()
         response = await client.get(f"{cls.OPENALEX_BASE_URL}/works", params=params, timeout=30.0)
@@ -536,8 +538,10 @@ class SearchService:
             # (ignore source filter — we want the paper wherever it exists)
             return await cls.search_by_identifier(id_type, id_value, page_size, page)
         
-        # Check cache first
-        cache_key = f"{source}:{query}:{page}:{page_size}"
+        # Check cache first — key must include sort + filters, otherwise a
+        # re-sort / filter toggle within the TTL returns stale ordering.
+        filter_sig = ",".join(f"{k}={filters.get(k) or ''}" for k in sorted(filters))
+        cache_key = f"{source}:{query}:{page}:{page_size}:{sort}:{filter_sig}"
         if cache_key in _SEARCH_CACHE:
             cached = _SEARCH_CACHE[cache_key]
             if cached.get("timestamp", 0) + _CACHE_TTL > time.time():

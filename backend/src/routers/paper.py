@@ -11,6 +11,7 @@ from backend.src.ner.service import NERService
 from backend.src.dependencies import get_ner_service
 from backend.src.common.highlighter import Highlighter
 from backend.src.common.caching import ner_cache
+from backend.src.common.http_client import HttpClientManager
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.src.db.session import get_db

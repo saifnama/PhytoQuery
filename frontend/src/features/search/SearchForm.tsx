@@ -436,9 +436,15 @@ const SearchForm: React.FC<SearchFormProps> = ({
     setQuery(defaultQuery);
   }
 
-  if (defaultFilters) {
-    // Functional updater bails out (returns prev) when nothing changed,
-    // so this is a no-op on most renders — same commit, no extra pass.
+  // Sync from defaultFilters when the parent gives us new filter props.
+  // This used to be a render-phase setState, which React 19 turns into an
+  // infinite re-render loop ("Too many re-renders" / minified error #301)
+  // because the functional-updater bail-out is not honoured during render.
+  // An effect keyed on the (memoized) defaultFilters identity is the safe
+  // equivalent: when the values already match, returning `prev` skips the
+  // re-render entirely.
+  useEffect(() => {
+    if (!defaultFilters) return;
     setFilters((prev) => {
       const same =
         prev.open_access   === (defaultFilters.open_access   ?? false) &&
@@ -455,7 +461,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
         source:        defaultFilters.source        ?? 'europepmc',
       };
     });
-  }
+  }, [defaultFilters]);
 
   // Fetch types when source changes (Europe PMC = static; OpenAlex = instant cached + background sync)
   const fetchTypeOptions = useCallback((source: string) => {

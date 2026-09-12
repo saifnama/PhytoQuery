@@ -503,10 +503,15 @@ class EuropePMCClient:
             search_parts.append(f'PUB_TYPE:"{filters["article_type"]}"')
 
         # Advanced Sorting logic in Europe PMC is often handled by appending keywords to query
+        # SORT_DATE:y / SORT_CITED:y are descending-only; ascending date uses
+        # the REST `sort` parameter instead (verified against the live API).
+        sort_param = ""
         if sort == "cited":
             search_parts.append("sort_cited:y")
         elif sort == "date":
             search_parts.append("sort_date:y")
+        elif sort == "date_asc":
+            sort_param = "P_PDATE_D asc"
 
         final_query = " AND ".join(search_parts)
         if not final_query:
@@ -528,6 +533,8 @@ class EuropePMCClient:
             "pageSize": max_results,
             "cursorMark": cursor_mark,
         }
+        if sort_param:
+            params["sort"] = sort_param
 
         max_retries = 3
         base_delay = 1.5
