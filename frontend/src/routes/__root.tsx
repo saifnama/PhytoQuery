@@ -12,7 +12,7 @@ import { ErrorBoundary } from '../components/ui/ErrorBoundary';
 import { UploadStatusListener } from '../components/UploadStatusListener';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
-import { ragApi } from '../lib/api';
+import { ragApi } from '../lib/api/chat';;
 
 // Empty context now; leaves room to inject queryClient or auth state later
 // without forcing a refactor of every route.

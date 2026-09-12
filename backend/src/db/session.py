@@ -4,12 +4,12 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
 
-from backend.src.common.paths import data_dir
-
-# Override: PHYTOQUERY_DB_DIR. Default moved from pq_db/ → data/db/ (Phase 1).
-DB_DIR = os.environ.get("PHYTOQUERY_DB_DIR", os.fspath(data_dir() / "db"))
+# Override: BLOOMINDEX_DB_DIR. Default lives next to the db code
+# (backend/src/db/bloomindex.sqlite) so the database travels with its schema.
+_DB_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.environ.get("BLOOMINDEX_DB_DIR", _DB_THIS_DIR)
 os.makedirs(DB_DIR, exist_ok=True)
-DB_PATH = os.path.join(DB_DIR, "phytoquery.sqlite")
+DB_PATH = os.path.join(DB_DIR, "bloomindex.sqlite")
 
 # SQLite URL for aiosqlite
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"

@@ -12,9 +12,9 @@ import os
 from typing import Dict, Any, List, Optional, Tuple
 
 from backend.src.papers.europe_pmc.client import EuropePMCClient
-from backend.src.papers.europe_pmc.parser import XMLParser, JATSConverter
-from backend.core.caching import pmc_cache
-from backend.core.sanitizer import sanitize
+from backend.src.papers.europe_pmc.jats import XMLParser, JATSConverter
+from backend.src.common.caching import pmc_cache
+from backend.src.common.sanitizer import sanitize
 
 logger = logging.getLogger(__name__)
 

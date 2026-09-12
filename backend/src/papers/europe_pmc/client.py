@@ -16,8 +16,8 @@ from xml.etree import ElementTree
 
 import httpx
 
-from backend.core.http_client import HttpClientManager
-from backend.core.caching import pmc_cache
+from backend.src.common.http_client import HttpClientManager
+from backend.src.common.caching import pmc_cache
 
 logger = logging.getLogger(__name__)
 

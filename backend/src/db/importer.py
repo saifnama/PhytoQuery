@@ -33,8 +33,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from backend.src.db.session import Base, engine, AsyncSessionLocal
 from backend.src.db.models import Paper, PaperEntity
-from backend.src.ner.dictionaries.chemical_matcher import get_matcher as get_chemical_matcher
-from backend.src.ner.dictionaries.species_matcher import get_matcher as get_species_matcher
+from backend.src.ner.dictionaries.chemical import get_matcher as get_chemical_matcher
+from backend.src.ner.dictionaries.species import get_matcher as get_species_matcher
 
 
 logging.basicConfig(level=logging.INFO)

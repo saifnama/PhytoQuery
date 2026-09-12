@@ -93,7 +93,7 @@ class _FakeSDK:
 
 
 def test_unified_settings_precedence(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     monkeypatch.setenv("LLM_API_BASE_URL", "https://api.openai.com/v1/")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -105,7 +105,7 @@ def test_unified_settings_precedence(monkeypatch):
 
 
 def test_base_url_rejects_native_ollama(monkeypatch):
-    from backend.config import LLMConfigError, resolve_llm_settings
+    from backend.src.settings import LLMConfigError, resolve_llm_settings
 
     monkeypatch.setenv("LLM_API_BASE_URL", "http://localhost:11434/api/chat")
     monkeypatch.setenv("LLM_API_KEY", "x")
@@ -115,7 +115,7 @@ def test_base_url_rejects_native_ollama(monkeypatch):
 
 
 def test_base_url_requires_v1_root(monkeypatch):
-    from backend.config import LLMConfigError, resolve_llm_settings
+    from backend.src.settings import LLMConfigError, resolve_llm_settings
 
     monkeypatch.setenv("LLM_API_BASE_URL", "https://example.com")
     monkeypatch.setenv("LLM_API_KEY", "x")
@@ -125,7 +125,7 @@ def test_base_url_requires_v1_root(monkeypatch):
 
 
 def test_operation_path_is_forgiven(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     monkeypatch.setenv("LLM_API_BASE_URL", "https://example.com/v1/chat/completions")
     monkeypatch.setenv("LLM_API_KEY", "x")
@@ -134,7 +134,7 @@ def test_operation_path_is_forgiven(monkeypatch):
 
 
 def test_model_required(monkeypatch):
-    from backend.config import LLMConfigError, resolve_llm_settings
+    from backend.src.settings import LLMConfigError, resolve_llm_settings
 
     monkeypatch.setenv("LLM_API_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -143,7 +143,7 @@ def test_model_required(monkeypatch):
 
 
 def test_legacy_openrouter_fallback(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     monkeypatch.setenv("RAG_OPENROUTER_API_KEY", "sk-or-test")
     monkeypatch.setenv("RAG_OPENROUTER_MODEL", "some/model:free")
@@ -155,7 +155,7 @@ def test_legacy_openrouter_fallback(monkeypatch):
 
 
 def test_unified_wins_over_legacy(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     monkeypatch.setenv("RAG_OPENROUTER_API_KEY", "sk-or-legacy")
     monkeypatch.setenv("RAG_OPENROUTER_MODEL", "legacy/model")
@@ -170,7 +170,7 @@ def test_unified_wins_over_legacy(monkeypatch):
 
 
 def _client_for(model="test-model", **fake_kwargs):
-    from backend.core.llm_client import SharedLLMClient
+    from backend.src.common.llm_client import SharedLLMClient
 
     fake = _FakeSDK(**fake_kwargs)
     return SharedLLMClient(sdk_client=fake, model=model), fake
@@ -243,7 +243,7 @@ async def test_error_mapping():
         AuthenticationError,
         RateLimitError,
     )
-    from backend.core.llm_client import (
+    from backend.src.common.llm_client import (
         LLMAuthError,
         LLMRateLimitError,
         LLMTimeoutError,
@@ -275,7 +275,7 @@ async def test_astream_yields_deltas():
 
 @pytest.mark.asyncio
 async def test_adapter_preserves_return_shape():
-    from backend.services.rag_engine import SDKLLMAdapter
+    from backend.src.chat.llm import SDKLLMAdapter
 
     client, _ = _client_for(text="answer text", stream_deltas=["answer text"])
     adapter = SDKLLMAdapter(_client=client)
@@ -287,19 +287,18 @@ async def test_adapter_preserves_return_shape():
     assert deltas == ["answer text"]
 
 
-def test_alias_names_survive():
-    from backend.services import rag_engine
+def test_error_alias_names_survive():
+    from backend.src.chat import llm as llm_module
 
-    assert rag_engine.OllamaLLM is rag_engine.SDKLLMAdapter
-    assert issubclass(rag_engine.RAGProviderAuthError, Exception)
-    assert issubclass(rag_engine.RAGLLMTimeoutError, Exception)
+    assert issubclass(llm_module.RAGProviderAuthError, Exception)
+    assert issubclass(llm_module.RAGLLMTimeoutError, Exception)
 
 
 # --- service-level shapes ------------------------------------------------------
 
 
 def test_ner_parse_shape_preserved():
-    from backend.services.ner_engine import NERService
+    from backend.src.ner.service import NERService
 
     service = NERService()
     parsed = service.parse_llm_response(
@@ -319,11 +318,11 @@ def test_ner_parse_shape_preserved():
 
 @pytest.mark.asyncio
 async def test_ner_call_llm_uses_shared_client(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
 
     client, fake = _client_for(text="[]")
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: client)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: client)
     service = NERService()
     assert await service.call_llm("some text") == "[]"
     messages = fake.completions.last_kwargs["messages"]
@@ -332,7 +331,7 @@ async def test_ner_call_llm_uses_shared_client(monkeypatch):
 
 
 def test_health_reports_configured(monkeypatch):
-    from backend import config as config_module
+    from backend.src import settings as config_module
 
     monkeypatch.setenv("LLM_API_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "sk-test")
@@ -342,7 +341,7 @@ def test_health_reports_configured(monkeypatch):
 
 
 def test_old_provider_chain_is_gone():
-    import backend.config as config_module
+    import backend.src.settings as config_module
 
     for name in (
         "get_rag_provider",
@@ -353,11 +352,12 @@ def test_old_provider_chain_is_gone():
         "NER_OLLAMA_URL",
     ):
         assert not hasattr(config_module, name), name
-    import backend.services.ner_engine as ner_module
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_service_module
 
-    assert not hasattr(ner_module, "get_active_provider")
+    assert not hasattr(ner_llm_module, "get_active_provider")
     assert not hasattr(
-        ner_module.NERService, "_call_openai_compatible"
+        ner_service_module.NERService, "_call_openai_compatible"
     )
 
 
@@ -368,7 +368,7 @@ def _unified_env(monkeypatch):
 
 
 def test_thinking_defaults_off(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     _unified_env(monkeypatch)
     settings = resolve_llm_settings()
@@ -377,7 +377,7 @@ def test_thinking_defaults_off(monkeypatch):
 
 
 def test_thinking_env_override(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     _unified_env(monkeypatch)
     monkeypatch.setenv("LLM_THINKING", "true")
@@ -389,7 +389,7 @@ def test_thinking_env_override(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_custom_directive_appended():
-    from backend.core.llm_client import SharedLLMClient
+    from backend.src.common.llm_client import SharedLLMClient
 
     fake = _FakeSDK(text="ok")
     client = SharedLLMClient(
@@ -402,7 +402,7 @@ async def test_custom_directive_appended():
 
 @pytest.mark.asyncio
 async def test_empty_directive_appends_nothing():
-    from backend.core.llm_client import SharedLLMClient
+    from backend.src.common.llm_client import SharedLLMClient
 
     fake = _FakeSDK(text="ok")
     client = SharedLLMClient(
@@ -415,7 +415,7 @@ async def test_empty_directive_appends_nothing():
 
 @pytest.mark.asyncio
 async def test_client_level_thinking_true_skips_directive():
-    from backend.core.llm_client import SharedLLMClient
+    from backend.src.common.llm_client import SharedLLMClient
 
     fake = _FakeSDK(text="ok")
     client = SharedLLMClient(sdk_client=fake, model="m", thinking=True)
@@ -433,7 +433,7 @@ async def test_chat_template_kwargs_off_by_default():
 
 @pytest.mark.asyncio
 async def test_chat_template_kwargs_sent_when_enabled():
-    from backend.core.llm_client import SharedLLMClient
+    from backend.src.common.llm_client import SharedLLMClient
 
     fake = _FakeSDK(text="ok")
     client = SharedLLMClient(
@@ -450,7 +450,7 @@ async def test_chat_template_kwargs_sent_when_enabled():
 
 
 def test_chat_template_kwargs_env(monkeypatch):
-    from backend.config import resolve_llm_settings
+    from backend.src.settings import resolve_llm_settings
 
     _unified_env(monkeypatch)
     assert resolve_llm_settings().chat_template_kwargs is False
@@ -459,13 +459,13 @@ def test_chat_template_kwargs_env(monkeypatch):
 
 
 def test_lifespan_preloads_gazetteers(monkeypatch):
-    import backend.services.ner_engine as ner_module
+    import backend.src.ner.dictionary as ner_dict_module
 
     calls = []
-    monkeypatch.setattr(ner_module, "preload_gazetteers",
+    monkeypatch.setattr(ner_dict_module, "preload_gazetteers",
                         lambda: calls.append(1) or 8)
     from fastapi.testclient import TestClient
-    from backend.app import app
+    from backend.src.main import app
 
     with TestClient(app):
         pass
@@ -473,14 +473,14 @@ def test_lifespan_preloads_gazetteers(monkeypatch):
 
 
 def test_lifespan_survives_preload_failure(monkeypatch):
-    import backend.services.ner_engine as ner_module
+    import backend.src.ner.dictionary as ner_dict_module
 
     def _boom():
         raise RuntimeError("disk gone")
 
-    monkeypatch.setattr(ner_module, "preload_gazetteers", _boom)
+    monkeypatch.setattr(ner_dict_module, "preload_gazetteers", _boom)
     from fastapi.testclient import TestClient
-    from backend.app import app
+    from backend.src.main import app
 
     with TestClient(app) as client:
         assert client.get("/health/ready").status_code in (200, 503)

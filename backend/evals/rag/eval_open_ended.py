@@ -86,7 +86,7 @@ def append_row(row: dict):
 
 
 def _get_llm_client_and_model():
-    from backend.core.llm_client import create_ragas_client
+    from backend.src.common.llm_client import create_ragas_client
 
     return create_ragas_client()
 

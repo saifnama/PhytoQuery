@@ -1,14 +1,14 @@
-# PhytoQuery — Qdrant Server (Docker or Podman), Windows PowerShell
+# BloomIndex — Qdrant Server (Docker or Podman), Windows PowerShell
 # Mirrors scripts/qdrant.sh subcommands: start | stop | status | restart | logs | remove
 # Settings via env: QDRANT_RUNTIME(auto|podman|docker) QDRANT_CONTAINER QDRANT_STORAGE_DIR QDRANT_VERSION QDRANT_PORT_REST QDRANT_PORT_GRPC
 param([Parameter(Position=0)][string]$Action = "status")
 
 $ErrorActionPreference = "Stop"
-$name = if ($env:QDRANT_CONTAINER) { $env:QDRANT_CONTAINER } else { "phytoquery-qdrant" }
+$name = if ($env:QDRANT_CONTAINER) { $env:QDRANT_CONTAINER } else { "bloomindex-qdrant" }
 $ver = if ($env:QDRANT_VERSION) { $env:QDRANT_VERSION } else { "v1.18.0" }
 $rest = if ($env:QDRANT_PORT_REST) { $env:QDRANT_PORT_REST } else { "6333" }
 $grpc = if ($env:QDRANT_PORT_GRPC) { $env:QDRANT_PORT_GRPC } else { "6334" }
-$storage = if ($env:QDRANT_STORAGE_DIR) { $env:QDRANT_STORAGE_DIR } else { "$env:LOCALAPPDATA\phytoquery\qdrant_storage" }
+$storage = if ($env:QDRANT_STORAGE_DIR) { $env:QDRANT_STORAGE_DIR } else { "$env:LOCALAPPDATA\bloomindex\qdrant_storage" }
 $image = "qdrant/qdrant:$ver"
 
 function Get-Runtime {

@@ -1,6 +1,6 @@
 # RAG Evaluation Guide
 
-End-to-end guide for evaluating PhytoQuery's RAG chatbot.
+End-to-end guide for evaluating BloomIndex's RAG chatbot.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ End-to-end guide for evaluating PhytoQuery's RAG chatbot.
 
 ## Step 1: Ingest PDFs
 
-Place PDF files in `backend/knowledge_base/papers/`, then run:
+Place PDF files in `knowledge_base/papers/`, then run:
 
 ```bash
 python scripts/ingest.py

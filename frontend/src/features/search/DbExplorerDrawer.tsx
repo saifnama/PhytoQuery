@@ -24,7 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { dbApi } from '../../lib/api';
+import { dbApi } from '../../lib/api/papers';;
 import { sanitizeHtml } from '../../utils/sanitize';
 import { Skeleton } from '@/components/ui/skeleton';
 

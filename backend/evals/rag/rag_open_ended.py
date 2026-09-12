@@ -43,7 +43,7 @@ def extract_sources_and_similarity(sources):
 
 
 async def run_single_query(question: str) -> Dict[str, Any]:
-    from backend.services.rag_engine import get_rag_service
+    from backend.src.chat.service import get_rag_service
 
     service = get_rag_service()
     result = await service.query(question=question, user_id="eval")

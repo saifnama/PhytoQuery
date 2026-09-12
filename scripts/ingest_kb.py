@@ -44,9 +44,9 @@ if _REPO_ROOT not in sys.path:
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-RAW_DIR = os.path.join(_REPO_ROOT, "backend/knowledge_base/papers")  # folder holding the PDFs
-MARKDOWN_DIR = os.path.join(_REPO_ROOT, "backend/knowledge_base/parsed")  # parsed markdown cache
-STATE_DB = os.path.join(_REPO_ROOT, "backend/knowledge_base/kb.sqlite")  # papers table + parents table
+RAW_DIR = os.path.join(_REPO_ROOT, "knowledge_base/papers")  # folder holding the PDFs
+MARKDOWN_DIR = os.path.join(_REPO_ROOT, "knowledge_base/parsed")  # parsed markdown cache
+STATE_DB = os.path.join(_REPO_ROOT, "knowledge_base/kb.sqlite")  # papers table + parents table
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = "kb_papers"  # change if you re-embed with a different model
@@ -344,7 +344,7 @@ def fetch_crossref_metadata(title: str, doi: Optional[str]) -> Optional[dict]:
     ``journal``, or None.
     """
     crossref_url = "https://api.crossref.org/works"
-    mailto = "ingest@phytoquery.local"
+    mailto = "ingest@bloomindex.local"
     timeout = 15.0
     max_retries = 3
     base_delay = 2.0  # seconds
@@ -836,9 +836,9 @@ def cmd_delete(qdrant, conn: sqlite3.Connection) -> None:
 
 def cmd_ingest(qdrant, conn: sqlite3.Connection, workers: int = PARSE_WORKERS) -> None:
     # Lazy import — don't load embeddings into worker processes at import time.
-    from backend.services.rag_engine import PhytoQueryEmbeddings
+    from backend.src.chat.embeddings import BloomIndexEmbeddings
 
-    embeddings = PhytoQueryEmbeddings(model=EMBEDDING_MODEL_NAME)
+    embeddings = BloomIndexEmbeddings(model=EMBEDDING_MODEL_NAME)
 
     ensure_collection(qdrant)
 

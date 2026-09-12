@@ -1,45 +1,12 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Python 3.14 resource_tracker segfault workaround (must be FIRST)
-# ─────────────────────────────────────────────────────────────────────────────
-# Python 3.14 rewrote ``multiprocessing.resource_tracker`` to aggressively
-# clean up "leaked" POSIX semaphores at interpreter shutdown.  The tracker
-# daemon calls ``sem_unlink()`` for every semaphore still in its registry,
-# but when the semaphore was already destroyed by the library that created
-# it (loky, PyTorch, etc.), the unlink segfaults inside the C extension.
+# BloomIndex backend entrypoint.
 #
-# Fix: monkeypatch ``resource_tracker.register`` / ``unregister`` to skip
-# semaphore registrations entirely.  Semaphores are still cleaned up by
-# their owning libraries' ``__del__`` methods and by our explicit shutdown
-# handler (``_close_fastembed_models``) — the tracker's redundant cleanup
-# is the one that crashes.  Non-semaphore resources (shared memory, etc.)
-# are unaffected.
-#
-# This block MUST execute before any library creates a multiprocessing
-# semaphore (torch, joblib, loky …), so keep it at the very top.
-import sys as _sys
-if _sys.version_info >= (3, 14):
-    try:
-        from multiprocessing import resource_tracker as _rt
-        _rt__register = _rt.register
-        _rt__unregister = _rt.unregister
+# NOTE (Python support ceiling): 3.10 → 3.13. Python 3.14 rewrote
+# ``multiprocessing.resource_tracker`` to aggressively unlink POSIX
+# semaphores at shutdown, which segfaults inside the C extension when
+# loky/PyTorch already destroyed them. We deliberately do NOT monkeypatch
+# around it — instead 3.14 is unsupported until upstream stabilizes.
+# If you must run 3.14, expect possible segfault noise on shutdown.
 
-        def _safe_register(name, rtype):
-            if rtype == "semaphore":
-                return
-            return _rt__register(name, rtype)
-
-        def _safe_unregister(name, rtype):
-            if rtype == "semaphore":
-                return
-            return _rt__unregister(name, rtype)
-
-        _rt.register = _safe_register
-        _rt.unregister = _safe_unregister
-        del _rt, _rt__register, _rt__unregister
-    except Exception:
-        pass
-del _sys
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,25 +14,22 @@ del _sys
 # ─────────────────────────────────────────────────────────────────────────────
 # Many ML libraries (fastembed, transformers, torch, numpy via MKL/OpenMP)
 # spawn worker processes or thread pools on import. On some Python versions
-# (notably 3.14) these pools occasionally crash native code (segfault +
-# leaked semaphores) when uvicorn forks workers, or just when many parallel
-# tokenization/embedding calls happen at once. The fix is to constrain the
-# pool sizes BEFORE the libraries are imported.
+# these pools occasionally crash native code when uvicorn forks workers,
+# or just when many parallel tokenization/embedding calls happen at once.
+# The fix is to constrain the pool sizes BEFORE the libraries are imported.
 #
 # Every line below uses ``setdefault`` — so a value you set in your shell
 # (``export OMP_NUM_THREADS=8``), ``.env``, or ``.env.<profile>`` ALWAYS
 # wins. These are floor-level safe defaults, not opinions.
 #
 # Defaults chosen for portability across:
-#   * any Python version (3.10 → 3.14+)
+#   * Python 3.10 → 3.13 (3.14+ unsupported — see note at top of file)
 #   * any machine (laptop, server, HPC)
 #   * any library version (fastembed 0.x, torch 2.x, transformers 4.x)
 #
 # Knobs:
 #   JOBLIB_MULTIPROCESSING   When "0", joblib never spawns child processes
 #                            via loky — all work runs in the calling thread.
-#                            This avoids the POSIX semaphore that triggers
-#                            the Python 3.14 resource_tracker segfault.
 #   LOKY_MAX_CPU_COUNT       joblib/loky workers (fastembed BM25 uses this).
 #                            Setting to 1 limits loky to one child process.
 #   TOKENIZERS_PARALLELISM   HuggingFace tokenizers Rust thread pool. "false"
@@ -77,10 +41,9 @@ del _sys
 #   MKL_NUM_THREADS          Intel MKL (numpy on Intel CPUs). Same cap.
 #
 # Additionally, ``multiprocessing.set_start_method('spawn')`` is forced
-# below to prevent a Python 3.14 segfault in the resource_tracker when
-# loky's child process is created via fork.  Forked children inherit
-# semaphore handles that become invalid during interpreter shutdown;
-# spawn avoids this by starting a fresh interpreter in each child.
+# below: forked children inherit resources that go invalid during
+# interpreter shutdown; spawn avoids this by starting a fresh
+# interpreter in each child.
 import os as _os
 _os.environ.setdefault("JOBLIB_MULTIPROCESSING", "0")
 _os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
@@ -113,7 +76,8 @@ from contextlib import asynccontextmanager
 from backend.src.common.http_client import HttpClientManager
 from backend.src.common.paths import frontend_dist as _frontend_dist_path, safe_join
 from backend.src.exceptions import NotFoundError, install_handlers
-from backend.src.routers import ner, ner_pdf, rag, health, doi, search, paper, dashboard
+from backend.src.middleware import RequestIDMiddleware
+from backend.src.routers import ner, rag, health, doi, search, paper, dashboard
 import logging
 import os
 
@@ -131,7 +95,7 @@ async def lifespan(app: FastAPI):
     try:
         import asyncio as _asyncio
         import time as _time
-        from backend.services.ner_engine import preload_gazetteers
+        from backend.src.ner.dictionary import preload_gazetteers
 
         _t0 = _time.perf_counter()
         _n = await _asyncio.to_thread(preload_gazetteers)
@@ -140,7 +104,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Gazetteer preload skipped ({exc}); "
                        f"matchers will load lazily on first request.")
-    logger.info("PhytoQuery backend startup complete.")
+    logger.info("BloomIndex backend startup complete.")
     yield
     # Shutdown — order matters here:
     #   1. Close the global HTTP client first (drains in-flight
@@ -160,7 +124,7 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"LLM client shutdown raised (ignored): {exc}")
     try:
-        from backend.services.rag_engine import peek_rag_service
+        from backend.src.chat.service import peek_rag_service
         svc = peek_rag_service()
         if svc is not None:
             svc.close()
@@ -169,7 +133,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="PhytoQuery Backend",
+    title="BloomIndex Backend",
     description="Production-ready FastAPI backend for NER and RAG on research papers.",
     version="2.0.0",
     lifespan=lifespan,
@@ -179,7 +143,7 @@ app = FastAPI(
 frontend_origins = [
     origin.strip()
     for origin in os.getenv(
-        "PHYTOQUERY_FRONTEND_ORIGINS",
+        "BLOOMINDEX_FRONTEND_ORIGINS",
         "http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173,http://127.0.0.1:5173",
     ).split(",")
     if origin.strip()
@@ -205,10 +169,10 @@ app.add_middleware(
 
 # Include API routers
 install_handlers(app)
+app.add_middleware(RequestIDMiddleware)
 app.include_router(search.router)
 app.include_router(paper.router)
 app.include_router(ner.router)
-app.include_router(ner_pdf.router)
 app.include_router(rag.router)
 app.include_router(health.router)
 app.include_router(doi.router)

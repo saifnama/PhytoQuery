@@ -8,7 +8,7 @@ import time
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from backend.core.http_client import HttpClientManager
+from backend.src.common.http_client import HttpClientManager
 from backend.src.papers.europe_pmc import EuropePMCService
 
 logger = logging.getLogger(__name__)

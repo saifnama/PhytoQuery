@@ -1,18 +1,22 @@
-"""Upload plumbing — canonical home (Phase 2 merge).
+"""Upload plumbing — per-user homes under tmp/ (Option B layout).
 
-Consolidates the former rag_storage.py (paths + markdown extractor),
-upload_jobs.py (JSON job store) and user_locks.py (per-user mutex).
+    tmp/chat/{user}/files/      uploaded PDFs (this session's corpus)
+    tmp/chat/{user}/previews/   extracted-markdown sidecars for citations
+    tmp/chat/{user}/jobs/       upload job records (O(1) per-user listing)
+    tmp/chat/{user}/parents.json  hierarchical chunk parents (via get_parent_store_path)
+    tmp/analyse/files/          analyse-page PDFs + .meta.json ownership
+    tmp/cache/api/{...}/        shared content-hash API caches
+    tmp/secrets/                signing secrets (0600-style, one place)
+    tmp/qdrant/                 embedded vector DB fallback
 
-Fixes vs originals:
-- per-user lock has an acquire timeout (60 s) — a stuck upload can no
-  longer wedge the user forever; contention surfaces as HTTP 503.
-- idle locks are evicted (1 h) — the lock dict no longer leaks.
-- stored filenames are sanitized in one place (`safe_filename`).
+One user = one directory: quota (`du`), wipe (`rm -rf`) and audit are O(1).
+The shared API cache stays shared on purpose (content-addressed, no PII).
 """
 import asyncio
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -22,12 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from backend.src.common.paths import data_dir
-
-
-BASE_DATA_DIR = data_dir()
-RAG_UPLOADS_DIR = BASE_DATA_DIR / "uploads"
-RAG_JOBS_DIR = BASE_DATA_DIR / "rag_jobs"
+from backend.src.common.paths import tmp_dir
 
 _LOCK_ACQUIRE_TIMEOUT = 60.0
 _LOCK_IDLE_EVICT_SECONDS = 3600.0
@@ -45,8 +44,17 @@ def safe_filename(filename: str) -> str:
     return safe or "upload.pdf"
 
 
+def _safe_user_id(user_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", user_id or "default")
+
+
+def chat_home(user_id: str) -> Path:
+    """This user's whole world. Wiping it wipes the user (GDPR-style)."""
+    return ensure_dir(tmp_dir() / "chat" / _safe_user_id(user_id))
+
+
 def get_user_upload_dir(user_id: str) -> Path:
-    return ensure_dir(RAG_UPLOADS_DIR / user_id)
+    return ensure_dir(chat_home(user_id) / "files")
 
 
 def get_user_upload_file_path(user_id: str, filename: str) -> Path:
@@ -54,28 +62,29 @@ def get_user_upload_file_path(user_id: str, filename: str) -> Path:
 
 
 def get_user_markdown_file_path(user_id: str, filename: str) -> Path:
-    """Extracted-markdown sidecar: ``<filename>.md`` next to the PDF.
+    """Extracted-markdown sidecar for citations (separate dir so `*.pdf`
+    globs over files/ stay clean).
 
     Used by citation rendering — clicking a [N] superscript opens the
     paper's extracted markdown with the cited chunk highlighted."""
-    return get_user_upload_dir(user_id) / f"{safe_filename(filename)}.md"
+    return ensure_dir(chat_home(user_id) / "previews") / f"{safe_filename(filename)}.md"
 
 
-def get_job_store_dir() -> Path:
-    return ensure_dir(RAG_JOBS_DIR)
+def get_parent_store_path(user_id: str) -> Path:
+    return chat_home(user_id) / "parents.json"
+
+
+def get_user_job_dir(user_id: str) -> Path:
+    return ensure_dir(chat_home(user_id) / "jobs")
+
+
+def user_jobs(user_id: str) -> "UploadJobStore":
+    return UploadJobStore(get_user_job_dir(user_id))
 
 
 def delete_user_uploads(user_id: str) -> None:
-    upload_dir = RAG_UPLOADS_DIR / user_id
-    if not upload_dir.exists():
-        return
-    for child in upload_dir.iterdir():
-        if child.is_file():
-            child.unlink()
-    try:
-        upload_dir.rmdir()
-    except OSError:
-        pass
+    """Full wipe of one user's home: files, previews, jobs, parents."""
+    shutil.rmtree(chat_home(user_id), ignore_errors=True)
 
 
 def delete_user_upload_file(user_id: str, filename: str) -> None:
@@ -120,9 +129,10 @@ def extract_paper_markdown(pdf_path) -> str:
 
 
 class UploadJobStore:
-    def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = Path(base_dir) if base_dir else get_job_store_dir()
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+    """Job records for ONE user (base = that user's jobs/ dir)."""
+
+    def __init__(self, base_dir: Path | str):
+        self.base_dir = ensure_dir(Path(base_dir))
 
     def _job_path(self, job_id: str) -> Path:
         return self.base_dir / f"{job_id}.json"
@@ -156,12 +166,16 @@ class UploadJobStore:
         self._write_json(self._job_path(job_id), existing)
         return existing
 
-    def list_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+    def list(self) -> List[Dict[str, Any]]:
+        """This user's jobs only — O(own jobs), never a global scan."""
         jobs = []
+        if not self.base_dir.exists():
+            return jobs
         for path in self.base_dir.glob("*.json"):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload.get("user_id") == user_id:
-                jobs.append(payload)
+            try:
+                jobs.append(json.loads(path.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, OSError):
+                continue
         return sorted(jobs, key=lambda item: item.get("created_at", ""))
 
     def delete(self, job_id: str) -> None:
@@ -169,9 +183,12 @@ class UploadJobStore:
         if path.exists():
             path.unlink()
 
-    def delete_user_jobs(self, user_id: str) -> None:
-        for job in self.list_for_user(user_id):
-            self.delete(job["job_id"])
+    def clear(self) -> None:
+        for path in self.base_dir.glob("*.json"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     def prune(self, max_age_seconds: float = 604800) -> int:
         """Remove job records older than max_age_seconds (default 7 days)."""

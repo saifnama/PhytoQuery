@@ -29,7 +29,7 @@ const IDLE_COLLAPSE_MS = 10_000;
 const SCROLL_COLLAPSE_PX = 80;
 
 /**
- * Header — TulipLogo + PhytoQuery brand on the left, segmented pill nav on
+ * Header — TulipLogo + BloomIndex brand on the left, segmented pill nav on
  * the right. The pill collapses to a single solid black circle dot after
  * the user scrolls down past 80px OR after 10s of no scrolling/expand
  * activity. Hovering the dot — or clicking it — pops the pill back open.
@@ -45,7 +45,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
   // Which item is the active tab? — derived from the route.
   const activeIndex =
     pathname.startsWith('/chat')    ? 2 :
-    pathname.startsWith('/analyse') ? 1 :
+    pathname.startsWith('/analy')   ? 1 :  // '/analyse' + legacy '/analyse'
     0;
 
   // ── collapse state ───────────────────────────────────────────────────
@@ -150,7 +150,7 @@ const Header: React.FC<HeaderProps> = ({ isLoading = false }) => {
     <header className="app-header">
       <div className="flex items-center gap-[2px]">
         {/* Clicking the brand resets the persisted search store AND
-            clears URL search params, so NerPage's `!lastQuery` branch
+            clears URL search params, so ExplorePage's `!lastQuery` branch
             kicks in and the Dashboard surfaces. Without the reset,
             sessionStorage-persisted results keep the search view live
             even after navigating to "/". */}

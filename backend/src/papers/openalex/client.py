@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Any, Optional, List
 
-from backend.core.http_client import HttpClientManager
+from backend.src.common.http_client import HttpClientManager
 
 logger = logging.getLogger(__name__)
 

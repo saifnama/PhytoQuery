@@ -2,7 +2,7 @@
  * TanStack Query hook that polls a single upload job until terminal.
  *
  * Replaces the per-component ``setInterval`` + ``pollIntervalRef``
- * pattern that lived in ``RagPage.tsx`` and ``Sidebar.tsx``. Both
+ * pattern that lived in ``ChatPage.tsx`` and ``Sidebar.tsx``. Both
  * components ran independent polls — they could fire simultaneously
  * for the same job id, didn't share state on completion, and had
  * manual cleanup that was easy to leak on hot-reload. With the
@@ -16,7 +16,7 @@
  * see the terminal status without re-fetching.
  */
 import { useQuery } from '@tanstack/react-query';
-import { ragApi } from '../lib/api';
+import { ragApi } from '../lib/api/chat';;
 import type { UploadJobStatus } from '../types';
 
 const POLL_INTERVAL_MS = 1000;

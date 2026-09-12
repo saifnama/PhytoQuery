@@ -16,7 +16,7 @@
  * cache so a second tab/page hop re-downloaded the same list.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ragApi } from '../lib/api';
+import { ragApi } from '../lib/api/chat';;
 import type { IndexedFileInfo } from '../types';
 
 /**

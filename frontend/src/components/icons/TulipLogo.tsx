@@ -21,7 +21,7 @@ export const TulipLogo: React.FC<{ size?: number; className?: string }> = ({
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     className={className}
-    aria-label="PhytoQuery"
+    aria-label="BloomIndex"
   >
     <defs>
       <linearGradient id="tulipPetal" x1="32" y1="6" x2="32" y2="46" gradientUnits="userSpaceOnUse">

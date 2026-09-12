@@ -1,5 +1,5 @@
-# PhytoQuery API image. Build from repo root:
-#   docker build -f backend/Dockerfile -t phytoquery-api .
+# BloomIndex API image. Build from repo root:
+#   docker build -f backend/Dockerfile -t bloomindex-api .
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir -r backend/requirements.txt \
     && python -m spacy download en_core_web_sm
 
 COPY backend/ ./backend/
-COPY data/db/ ./data/db/
 
 EXPOSE 8000
 

@@ -1,5 +1,5 @@
 """
-SQLAlchemy models for the PhytoQuery two-table schema.
+SQLAlchemy models for the BloomIndex two-table schema.
 
 The live database has exactly two user tables:
 

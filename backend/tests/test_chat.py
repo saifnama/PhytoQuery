@@ -5,7 +5,7 @@ path with a scripted fake client and asserts the contract.
 """
 import pytest
 
-from backend.core.llm_client import (
+from backend.src.common.llm_client import (
     LLMAuthError,
     LLMRateLimitError,
     LLMResponse,
@@ -43,7 +43,8 @@ class ScriptedClient:
 
 
 def _rag_service(scripted):
-    from backend.services.rag_engine import RAGService, SDKLLMAdapter
+    from backend.src.chat.service import RAGService
+    from backend.src.chat.llm import SDKLLMAdapter
 
     return RAGService(llm=SDKLLMAdapter(_client=scripted))
 
@@ -60,7 +61,7 @@ def _sources():
 
 @pytest.mark.asyncio
 async def test_invoke_llm_progressive_drop():
-    from backend.services import rag_engine
+    from backend.src.chat import service as rag_engine
 
     class LegacyFake:
         def __init__(self):
@@ -299,12 +300,12 @@ async def test_suggest_followups_empty_and_failure():
 
 @pytest.mark.asyncio
 async def test_summarize_document_paths():
-    from backend.services import rag_engine
+    from backend.src.chat.llm import RAGLLMTimeoutError
 
     ok = _rag_service(ScriptedClient(invoke_results=["  A short summary.  "]))
     assert await ok.summarize_document("text", "f.pdf") == "A short summary."
     slow = _rag_service(
-        ScriptedClient(invoke_results=[rag_engine.RAGLLMTimeoutError("t")]))
+        ScriptedClient(invoke_results=[RAGLLMTimeoutError("t")]))
     assert await slow.summarize_document("text", "f.pdf") == ""
 
 
@@ -315,7 +316,7 @@ async def test_summarize_document_paths():
 async def test_adapter_retries_rate_limit_then_succeeds(monkeypatch):
     import asyncio as _asyncio
 
-    from backend.services.rag_engine import SDKLLMAdapter
+    from backend.src.chat.llm import SDKLLMAdapter
 
     sleeps = []
     real_sleep = _asyncio.sleep
@@ -332,7 +333,7 @@ async def test_adapter_retries_rate_limit_then_succeeds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_adapter_exhausts_rate_limit_retries():
-    from backend.services.rag_engine import SDKLLMAdapter
+    from backend.src.chat.llm import SDKLLMAdapter
 
     scripted = ScriptedClient(invoke_results=[
         LLMRateLimitError("s1"), LLMRateLimitError("s2"),
@@ -347,12 +348,13 @@ async def test_adapter_exhausts_rate_limit_retries():
 
 @pytest.mark.asyncio
 async def test_ner_call_llm_request_shape(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     scripted = ScriptedClient(invoke_results=["[]"])
     svc = NERService()
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: scripted)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: scripted)
     assert await svc.call_llm("leaf tissue") == "[]"
     call = scripted.invoke_calls[0]
     assert [m["role"] for m in call["messages"]] == ["system", "user"]
@@ -364,25 +366,26 @@ async def test_ner_call_llm_request_shape(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_call_llm_error_hint_and_failures(monkeypatch):
-    from backend.config import LLMConfigError
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.settings import LLMConfigError
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
     scripted = ScriptedClient(invoke_results=["[]"])
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: scripted)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: scripted)
     await svc.call_llm("chunk", error_hint="bad json")
     user_content = scripted.invoke_calls[0]["messages"][1]["content"]
     assert "bad json" in user_content
 
     failing = ScriptedClient(invoke_results=[LLMTimeoutError("t")])
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: failing)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: failing)
     assert await svc.call_llm("chunk") == ""
 
     def _raise():
         raise LLMConfigError("unconfigured")
 
-    monkeypatch.setattr(ner_module, "get_llm_client", _raise)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", _raise)
     assert await svc.call_llm("chunk") == ""
 
 
@@ -391,14 +394,15 @@ async def test_ner_call_llm_error_hint_and_failures(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_retry_matrix(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
 
     async def run(script, **kwargs):
         scripted = ScriptedClient(invoke_results=script)
-        monkeypatch.setattr(ner_module, "get_llm_client",
+        monkeypatch.setattr(ner_llm_module, "get_llm_client",
                             lambda: scripted)
         out = await svc._extract_entities_with_retry("leaf tissue",
                                                      **kwargs)
@@ -436,9 +440,10 @@ async def test_ner_retry_matrix(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_json_mode_400_falls_back_to_plain(monkeypatch):
-    from backend.core.llm_client import LLMResponse, LLMUpstreamError
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.common.llm_client import LLMResponse, LLMUpstreamError
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     class FlakyClient(ScriptedClient):
         async def invoke(self, **kwargs):
@@ -448,23 +453,24 @@ async def test_ner_json_mode_400_falls_back_to_plain(monkeypatch):
             return LLMResponse("[]")
 
     svc = NERService()
-    monkeypatch.setattr(ner_module, "get_llm_client",
+    monkeypatch.setattr(ner_llm_module, "get_llm_client",
                         lambda: FlakyClient())
     assert await svc.call_llm("leaf tissue") == "[]"
 
 
 @pytest.mark.asyncio
 async def test_ner_rate_limit_fails_fast_without_retry(monkeypatch):
-    from backend.core.llm_client import LLMRateLimitError
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.common.llm_client import LLMRateLimitError
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
     scripted = ScriptedClient(invoke_results=[
         LLMRateLimitError("slow"), LLMRateLimitError("slow"),
         LLMRateLimitError("slow"),
     ])
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: scripted)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: scripted)
     assert await svc._extract_entities_with_retry(
         "leaf tissue", max_attempts=3) == []
     assert len(scripted.invoke_calls) == 1
@@ -475,14 +481,15 @@ async def test_ner_rate_limit_fails_fast_without_retry(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_double_decodes_quoted_array(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
 
     async def run(script, **kwargs):
         scripted = ScriptedClient(invoke_results=script)
-        monkeypatch.setattr(ner_module, "get_llm_client",
+        monkeypatch.setattr(ner_llm_module, "get_llm_client",
                             lambda: scripted)
         out = await svc._extract_entities_with_retry("leaf tissue",
                                                      **kwargs)
@@ -495,15 +502,16 @@ async def test_ner_double_decodes_quoted_array(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_single_bare_object_wrapped(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
     # Exact shape from the local Qwen log: one entity, bare object.
     bare = ('{"span": "Eugenol", "type": "CHEMICAL", "start": 0, '
             '"end": 7, "name_type": null, "linked_to": null}')
     scripted = ScriptedClient(invoke_results=[bare])
-    monkeypatch.setattr(ner_module, "get_llm_client", lambda: scripted)
+    monkeypatch.setattr(ner_llm_module, "get_llm_client", lambda: scripted)
     out = await svc._extract_entities_with_retry("leaf tissue")
     assert [(e["text"], e["label"]) for e in out] == [("Eugenol", "CHEMICAL")]
     assert len(scripted.invoke_calls) == 1
@@ -514,8 +522,9 @@ async def test_ner_single_bare_object_wrapped(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_hybrid_false_skips_all_llm(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
     calls = []
@@ -540,7 +549,7 @@ async def test_ner_hybrid_false_skips_all_llm(monkeypatch):
 
 
 def test_ner_hybrid_defaults_on(monkeypatch):
-    import backend.config as config_module
+    import backend.src.settings as config_module
 
     monkeypatch.delenv("NER_HYBRID", raising=False)
     import importlib
@@ -554,8 +563,9 @@ def test_ner_hybrid_defaults_on(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_process_sections_budget_skips_llm(monkeypatch):
-    from backend.services.ner_engine import NERService
-    import backend.services.ner_engine as ner_module
+    from backend.src.ner.service import NERService
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
 
     svc = NERService()
     calls = []
@@ -577,7 +587,7 @@ async def test_ner_process_sections_budget_skips_llm(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_process_sections_merges_llm_with_tags(monkeypatch):
-    from backend.services.ner_engine import NERService
+    from backend.src.ner.service import NERService
 
     svc = NERService()
 
@@ -598,9 +608,9 @@ async def test_ner_process_sections_merges_llm_with_tags(monkeypatch):
 def test_embeddings_single_model_no_silent_swap(monkeypatch):
     import sentence_transformers
 
-    from backend.services.rag_engine import PhytoQueryEmbeddings
+    from backend.src.chat.embeddings import BloomIndexEmbeddings
 
-    emb = PhytoQueryEmbeddings(model="some/model")
+    emb = BloomIndexEmbeddings(model="some/model")
     assert not hasattr(emb, "_fallback_model")
     assert not hasattr(emb, "_primary_model")
 
@@ -613,7 +623,7 @@ def test_embeddings_single_model_no_silent_swap(monkeypatch):
 
 
 def test_no_embedding_fallback_in_config():
-    import backend.config as config_module
+    import backend.src.settings as config_module
 
     assert not hasattr(config_module, "RAG_FALLBACK_EMBEDDING_MODEL")
 
@@ -624,10 +634,24 @@ def test_no_embedding_fallback_in_config():
 def test_no_raw_http_llm_calls_in_engines():
     import inspect
 
-    import backend.services.ner_engine as ner_module
-    import backend.services.rag_engine as rag_module
+    import backend.src.ner.llm as ner_llm_module
+    import backend.src.ner.service as ner_module
+    import backend.src.chat.citations as citations_module
+    import backend.src.chat.embeddings as embeddings_module
+    import backend.src.chat.ingest as ingest_module
+    import backend.src.chat.llm as llm_module
+    import backend.src.chat.retrieval as retrieval_module
+    import backend.src.chat.service as service_module
 
-    for module in (ner_module, rag_module):
+    for module in (
+        ner_module,
+        citations_module,
+        embeddings_module,
+        ingest_module,
+        llm_module,
+        retrieval_module,
+        service_module,
+    ):
         source = inspect.getsource(module)
         assert "HttpClientManager" not in source
         assert "import httpx" not in source

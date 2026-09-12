@@ -9,7 +9,7 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from pydantic import BaseModel
-from backend.schemas.schemas import (
+from backend.src.domain.schemas import (
     QueryRequest,
     QueryResponse,
     UploadResponse,
@@ -19,23 +19,18 @@ from backend.schemas.schemas import (
 )
 from backend.src.common.session import attach_session_cookie, get_or_set_session_id
 from backend.src.common.uploads import (
-    UploadJobStore,
     extract_paper_markdown,
     get_user_markdown_file_path,
     get_user_upload_file_path,
+    user_jobs,
     user_lock_manager,
 )
+from backend.src.dependencies import get_rag_service
 import logging
-
-def get_rag_service() -> Any:
-    from backend.services.rag_engine import get_rag_service as _get_rag_service
-    return _get_rag_service()
 
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 logger = logging.getLogger(__name__)
-
-job_store = UploadJobStore()
 
 # Matches a References section heading the backend appends
 # (``**References**``) or one the LLM writes itself imitating it
@@ -71,6 +66,7 @@ def _collapse_duplicate_references(text: str) -> str:
 async def _process_upload_job(job_id: str, saved_paths: List[str], parser_type: str, user_id: str):
     """Background task: process and index uploaded PDFs without blocking the HTTP response."""
     service = get_rag_service()
+    job_store = user_jobs(user_id)
     try:
         async with user_lock_manager.lock(user_id):
             # Run CPU-bound embedding generation in a thread pool so the event loop stays responsive
@@ -137,7 +133,7 @@ async def upload_pdfs_json(
 
     job_id = str(uuid.uuid4())
     filenames = [os.path.basename(p) for p in saved_paths]
-    job_store.create({
+    user_jobs(user_id).create({
         "job_id": job_id,
         "user_id": user_id,
         "status": "processing",
@@ -166,7 +162,7 @@ async def upload_pdfs_json(
 async def get_upload_status(request: Request, response: Response, job_id: str):
     """Get the status of an async upload job."""
     user_id = get_or_set_session_id(request, response)
-    job = job_store.get(job_id)
+    job = user_jobs(user_id).get(job_id)
     if not job or job.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Job not found")
     return UploadJobStatus(**job)
@@ -176,7 +172,7 @@ async def get_upload_status(request: Request, response: Response, job_id: str):
 async def list_upload_jobs(request: Request, response: Response):
     """List active upload jobs for the current user only."""
     user_id = get_or_set_session_id(request, response)
-    return job_store.list_for_user(user_id)
+    return user_jobs(user_id).list()
 
 
 @router.get("/files/json", response_model=List[IndexedFileInfo])
@@ -318,7 +314,7 @@ async def reset_rag_data(
     async with user_lock_manager.lock(user_id):
         success = service.reset_rag(user_id)
         if success:
-            job_store.delete_user_jobs(user_id)
+            user_jobs(user_id).clear()
     if not success:
         raise HTTPException(status_code=500, detail="Failed to reset RAG data.")
     return {
@@ -339,7 +335,7 @@ async def cleanup_user_data(
     async with user_lock_manager.lock(user_id):
         success = service.cleanup_user(user_id)
         if success:
-            job_store.delete_user_jobs(user_id)
+            user_jobs(user_id).clear()
     if not success:
         raise HTTPException(status_code=500, detail="Failed to cleanup user data.")
     return {"status": "success", "message": "All user data cleaned up."}
@@ -369,10 +365,10 @@ async def query_rag_json(
             result["answer"] = _collapse_duplicate_references(result["answer"])
         return QueryResponse(**result)
     except Exception as e:
-        from backend.services import rag_engine as rag_engine_module
-        if isinstance(e, rag_engine_module.RAGProviderAuthError):
+        from backend.src.chat.llm import RAGLLMTimeoutError, RAGProviderAuthError
+        if isinstance(e, RAGProviderAuthError):
             raise HTTPException(status_code=502, detail=str(e))
-        if isinstance(e, rag_engine_module.RAGLLMTimeoutError):
+        if isinstance(e, RAGLLMTimeoutError):
             raise HTTPException(status_code=504, detail=str(e))
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 

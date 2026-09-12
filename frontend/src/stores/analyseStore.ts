@@ -113,7 +113,7 @@ export const useAnalyseStore = create<AnalyseState>()(
       resetAnalyse: () => set(INITIAL),
     }),
     {
-      name: 'pq_analyse_state',
+      name: 'bi_analyse_state',
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         papers: state.papers,

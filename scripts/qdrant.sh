@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# PhytoQuery — Qdrant Server (Docker or Podman)
+# BloomIndex — Qdrant Server (Docker or Podman)
 # ─────────────────────────────────────────────────────────────────────────────
 # Manage a single Qdrant container next to the FastAPI backend. Idempotent:
 # re-running `start` when already running is a no-op, re-running on a stopped
@@ -26,8 +26,8 @@
 #
 # All settings overridable via env vars (sensible defaults baked in):
 #   QDRANT_RUNTIME      container runtime        default: auto
-#   QDRANT_CONTAINER    container name           default: phytoquery-qdrant
-#   QDRANT_STORAGE_DIR  host storage path        default: ~/.local/share/phytoquery/qdrant_storage
+#   QDRANT_CONTAINER    container name           default: bloomindex-qdrant
+#   QDRANT_STORAGE_DIR  host storage path        default: ~/.local/share/bloomindex/qdrant_storage
 #   QDRANT_VERSION      qdrant/qdrant image tag  default: v1.18.0
 #                                                (matches qdrant-client in
 #                                                 backend/requirements.txt)
@@ -46,8 +46,8 @@
 
 set -euo pipefail
 
-NAME="${QDRANT_CONTAINER:-phytoquery-qdrant}"
-STORAGE_DIR="${QDRANT_STORAGE_DIR:-${HOME}/.local/share/phytoquery/qdrant_storage}"
+NAME="${QDRANT_CONTAINER:-bloomindex-qdrant}"
+STORAGE_DIR="${QDRANT_STORAGE_DIR:-${HOME}/.local/share/bloomindex/qdrant_storage}"
 VERSION="${QDRANT_VERSION:-v1.18.0}"
 PORT_REST="${QDRANT_PORT_REST:-6333}"
 PORT_GRPC="${QDRANT_PORT_GRPC:-6334}"
@@ -135,7 +135,7 @@ print_urls() {
     echo "Web UI:  ${REST_URL}/dashboard"
     echo "gRPC:    localhost:${PORT_GRPC}"
     echo
-    echo "Point PhytoQuery at it by setting (in .env / .env.<profile> or shell):"
+    echo "Point BloomIndex at it by setting (in .env / .env.<profile> or shell):"
     echo "  QDRANT_URL=${REST_URL}"
 }
 
@@ -261,8 +261,8 @@ Usage: $0 {start|stop|status|restart|logs|remove}
 
 Settings via env vars:
   QDRANT_RUNTIME       auto | docker | podman   (default: auto)
-  QDRANT_CONTAINER     (default: phytoquery-qdrant)
-  QDRANT_STORAGE_DIR   (default: \$HOME/.local/share/phytoquery/qdrant_storage)
+  QDRANT_CONTAINER     (default: bloomindex-qdrant)
+  QDRANT_STORAGE_DIR   (default: \$HOME/.local/share/bloomindex/qdrant_storage)
   QDRANT_VERSION       (default: v1.18.0)
   QDRANT_PORT_REST     (default: 6333)
   QDRANT_PORT_GRPC     (default: 6334)

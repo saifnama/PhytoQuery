@@ -14,7 +14,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { dashboardApi } from '../../lib/api';
+import { dashboardApi } from '../../lib/api/explore';;
 import JournalDistributionWidget from './JournalDistributionWidget';
 import DbExplorerDrawer, { type DrawerTab, type DrawerFilter } from './DbExplorerDrawer';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -161,7 +161,7 @@ const Dashboard: React.FC = () => {
     setDrawerOpen(true);
   };
 
-  // Cross-page signal: when the user submits the search bar in NerPage
+  // Cross-page signal: when the user submits the search bar in ExplorePage
   // with source=Database, that flow calls drawerStore.requestOpenWithQuery(q).
   // We watch that field here and open the drawer with the query pushed
   // in as a paper-tab filter, then clear the signal so it can fire again.
@@ -179,7 +179,7 @@ const Dashboard: React.FC = () => {
     });
     clearPendingOpenQuery();
     // openDrawer is stable in this component; the effect should re-run
-    // only when a NEW pendingOpenQuery is published by NerPage.
+    // only when a NEW pendingOpenQuery is published by ExplorePage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingOpenQuery]);
 

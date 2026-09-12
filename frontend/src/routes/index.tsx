@@ -1,12 +1,12 @@
 /**
  * `/` — Search page with typed search params.
- * Pairs with `features/search/NerPage.tsx`, which reads/writes these via
+ * Pairs with `pages/explore/ExplorePage.tsx`, which reads/writes these via
  * the typed `getRouteApi('/').useSearch()` helper.
  */
 
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
-import NerPage from '../features/search/NerPage';
+import ExplorePage from '../pages/explore/ExplorePage';
 
 export const nerSearchSchema = z.object({
   q: z.string().optional(),
@@ -22,5 +22,5 @@ export type NerSearch = z.infer<typeof nerSearchSchema>;
 
 export const Route = createFileRoute('/')({
   validateSearch: nerSearchSchema,
-  component: NerPage,
+  component: ExplorePage,
 });

@@ -3,7 +3,7 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * Card — restyled to match PhytoQuery.html.
+ * Card — restyled to match BloomIndex.html.
  *
  * Hairline `outline-variant` border, MD3 `radius-lg` (16px), no ring.
  * Pass `interactive` to add a subtle hover state (border darkens, soft

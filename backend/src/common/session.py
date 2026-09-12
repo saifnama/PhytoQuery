@@ -8,28 +8,17 @@ from typing import Optional
 
 from fastapi import Request, Response
 
-from backend.src.common.paths import data_dir
+from backend.src.common.paths import tmp_dir
+from backend.src.common.secrets import get_or_create_secret
 
-SESSION_COOKIE_NAME = "pq_session"
+SESSION_COOKIE_NAME = "bi_session"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 180
-SESSION_SECRET_FILE = os.path.join(str(data_dir()), ".session-signing-secret")
+SESSION_SECRET_FILE = os.path.join(str(tmp_dir()), "secrets", "session.key")
 
 
 @lru_cache(maxsize=1)
 def _get_session_secret() -> bytes:
-    env_secret = os.getenv("PHYTOQUERY_SESSION_SECRET")
-    if env_secret:
-        return env_secret.encode("utf-8")
-
-    os.makedirs(os.path.dirname(SESSION_SECRET_FILE), exist_ok=True)
-    if os.path.isfile(SESSION_SECRET_FILE):
-        with open(SESSION_SECRET_FILE, "rb") as secret_file:
-            return secret_file.read().strip()
-
-    secret = secrets.token_hex(32).encode("utf-8")
-    with open(SESSION_SECRET_FILE, "wb") as secret_file:
-        secret_file.write(secret)
-    return secret
+    return get_or_create_secret(SESSION_SECRET_FILE, env_var="BLOOMINDEX_SESSION_SECRET")
 
 
 def _sign_session_id(session_id: str) -> str:

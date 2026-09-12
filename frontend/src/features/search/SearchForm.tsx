@@ -9,7 +9,7 @@ import {
   ArrowDown,
 } from '@phosphor-icons/react';
 import type { SearchFilters } from '../../types';
-import { searchTypesApi } from '../../lib/api';
+import { searchTypesApi } from '../../lib/api/explore';;
 
 import { FilterSidebarContext } from './FilterSidebarContext';
 
@@ -28,7 +28,7 @@ import { FilterSidebarContext } from './FilterSidebarContext';
  *     before submission completes.
  *
  * Source semantics:
- *   - europepmc / openalex → submit to ``/search/json``; current PhytoQuery
+ *   - europepmc / openalex → submit to ``/search/json``; current BloomIndex
  *     search flow (no backend change).
  *   - database → call ``onOpenDatabasePanel(query)`` instead of submitting;
  *     parent opens the existing DbExplorerDrawer with the query pre-filled.
@@ -368,7 +368,7 @@ const SearchForm: React.FC<SearchFormProps> = ({
 
   // SortControl uses a richer { type, dir } shape — derive it from
   // filters.sort and write back through a single setter so the underlying
-  // string-based contract with NerPage stays the same.
+  // string-based contract with ExplorePage stays the same.
   const sortValue: { type: SortType; dir: SortDir } =
     filters.sort === 'cited'    ? { type: 'Citations', dir: 'desc' } :
     filters.sort === 'date'     ? { type: 'Date',      dir: 'desc' } :

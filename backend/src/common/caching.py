@@ -161,22 +161,22 @@ class SimpleCache:
                     pass
 
 
-# Initialize caches
-from backend.src.common.paths import data_dir as _data_dir_fn
+# Initialize caches (shared, content-addressed — no per-user data inside)
+from backend.src.common.paths import tmp_dir as _tmp_dir_fn
 
-_data_dir = os.fspath(_data_dir_fn())
+_api_cache = os.path.join(os.fspath(_tmp_dir_fn()), "cache", "api")
 pmc_cache = SimpleCache(
-    os.path.join(_data_dir, "cache", "europepmc"),
+    os.path.join(_api_cache, "europepmc"),
     ttl=86400,  # 24 hours — paper content doesn't change often
     max_files=500,
 )
 ner_cache = SimpleCache(
-    os.path.join(_data_dir, "cache", "ner"),
+    os.path.join(_api_cache, "ner"),
     ttl=86400,  # 24 hours
     max_files=500,
 )
 doi_cache = SimpleCache(
-    os.path.join(_data_dir, "cache", "doi"),
+    os.path.join(_api_cache, "doi"),
     ttl=86400,  # 24 hours
     max_files=500,
 )

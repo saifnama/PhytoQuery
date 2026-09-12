@@ -4,7 +4,7 @@
 
 import { createFileRoute } from '@tanstack/react-router';
 import { z } from 'zod';
-import PaperPage from '../features/reader/PaperPage';
+import PaperPage from '../pages/paper/PaperPage';
 
 export const paperSearchSchema = z.object({
   src: z.string().optional(),

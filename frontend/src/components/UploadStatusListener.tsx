@@ -2,13 +2,13 @@
  * Top-level upload-job watcher.
  *
  * This component renders nothing visible — it exists to centralize
- * the side-effects that used to be duplicated inside ``RagPage`` and
+ * the side-effects that used to be duplicated inside ``ChatPage`` and
  * ``Sidebar``'s ``startUploadPolling`` helpers:
  *   - Read ``currentJobId`` from the shared upload store
  *   - Poll the backend for that job's status (via TanStack Query)
  *   - On terminal status, update the store's ``status`` text and
  *     ``isUploading`` flag, invalidate the indexed-files cache so
- *     RagPage's merge effect refreshes, and clear ``currentJobId``
+ *     ChatPage's merge effect refreshes, and clear ``currentJobId``
  *     so polling stops
  *
  * Mounted once at the App layout level so it observes uploads

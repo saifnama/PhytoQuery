@@ -7,8 +7,8 @@ Fallback endpoint to fetch abstracts for DOIs not found in Europe PMC.
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Optional
-from backend.services.doi_resolver import fetch_doi_abstract
-from backend.services.europe_pmc import EuropePMCService
+from backend.src.papers.resolver import fetch_doi_abstract
+from backend.src.papers.europe_pmc import EuropePMCService
 from backend.src.common.caching import doi_cache
 
 router = APIRouter(prefix="/doi", tags=["doi"])

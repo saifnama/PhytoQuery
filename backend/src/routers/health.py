@@ -43,7 +43,7 @@ async def readiness_check():
 
     # 2. Check Qdrant — only if the RAG service has been booted.
     try:
-        from backend.services.rag_engine import peek_rag_service
+        from backend.src.chat.service import peek_rag_service
         service = peek_rag_service()
         if service is not None:
             qclient = service._get_qdrant_client()

@@ -60,7 +60,7 @@ def extract_sources_and_similarity(sources):
 
 
 async def run_single_mcq(row: pd.Series) -> Dict[str, Any]:
-    from backend.services.rag_engine import get_rag_service
+    from backend.src.chat.service import get_rag_service
 
     service = get_rag_service()
     query = build_mcq_query(row)

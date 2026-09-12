@@ -1,7 +1,7 @@
 """Search Router — merged scholarly literature search."""
 
 from fastapi import APIRouter, Form, HTTPException
-from backend.services.search_service import SearchService
+from backend.src.search.service import SearchService
 import logging
 
 router = APIRouter(prefix="/search", tags=["search"])

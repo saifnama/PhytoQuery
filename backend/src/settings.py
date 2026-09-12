@@ -1,5 +1,5 @@
 """
-PhytoQuery — Unified Configuration
+BloomIndex — Unified Configuration
 ====================================
 Usage:
     from backend.src.settings import env, env_int, env_float, resolve_llm_settings
@@ -11,16 +11,17 @@ from pathlib import Path
 # Auto-load env files. Precedence (highest → lowest):
 #   1. Real OS env vars (always win — Slurm's CUDA_VISIBLE_DEVICES,
 #      ``docker run -e``, systemd ``Environment=``).
-#   2. ``.env.<PHYTOQUERY_PROFILE>`` — profile-specific overrides.
+#   2. ``.env.<BLOOMINDEX_PROFILE>`` — profile-specific overrides.
 #      Profile = a single env var that switches the whole webapp's
 #      config in one flip. Examples:
-#        PHYTOQUERY_PROFILE=macbook  → loads .env.macbook
-#        PHYTOQUERY_PROFILE=server   → loads .env.server
-#        PHYTOQUERY_PROFILE=demo     → loads .env.demo
+#        BLOOMINDEX_PROFILE=macbook  → loads .env.macbook
+#        BLOOMINDEX_PROFILE=server   → loads .env.server
+#        BLOOMINDEX_PROFILE=demo     → loads .env.demo
 #      Unset/empty = no profile, just the base ``.env``. Replaces
 #      the old "cp .env.macbook .env" shuffle — set the profile
 #      once per environment (shell, systemd, Slurm batch) and the
 #      right values load automatically.
+#      Legacy names are not honored — BloomIndex names only.
 #   3. ``.env`` — base / shared defaults.
 #   4. Defaults declared in this module.
 #
@@ -30,7 +31,7 @@ try:
     from dotenv import load_dotenv
     _project_root = Path(__file__).resolve().parent.parent.parent
 
-    _profile = os.environ.get("PHYTOQUERY_PROFILE", "").strip().lower()
+    _profile = os.environ.get("BLOOMINDEX_PROFILE", "").strip().lower()
     if _profile:
         _profile_file = _project_root / f".env.{_profile}"
         if _profile_file.exists():
@@ -96,9 +97,9 @@ def env_optional(key: str):
 #   .\scripts\qdrant.ps1 start       # Windows
 #
 # Or directly via Docker:
-#   docker run -d --name phytoquery-qdrant \
+#   docker run -d --name bloomindex-qdrant \
 #     -p 6333:6333 -p 6334:6334 \
-#     -v "$HOME/.local/share/phytoquery/qdrant_storage:/qdrant/storage" \
+#     -v "$HOME/.local/share/bloomindex/qdrant_storage:/qdrant/storage" \
 #     --restart unless-stopped \
 #     qdrant/qdrant:v1.18.0
 QDRANT_URL = env("QDRANT_URL")
@@ -110,7 +111,7 @@ QDRANT_API_KEY = env("QDRANT_API_KEY")
 
 # QDRANT_DIR: storage path for the *embedded* local client. Only used
 # when QDRANT_URL is empty. Leave empty for the default
-# (``<repo>/data/qdrant/``). Set to a writable LOCAL-DISK path on systems
+# (``<repo>/tmp/qdrant/``). Set to a writable LOCAL-DISK path on systems
 # where the default lives on a filesystem with broken ``flock()`` support.
 # ``~`` is expanded; relative paths are resolved to absolute at startup.
 QDRANT_DIR = env("QDRANT_DIR")

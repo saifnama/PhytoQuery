@@ -1,5 +1,5 @@
 /**
- * Shared upload state — read by both the chat page (RagPage.tsx) and
+ * Shared upload state — read by both the chat page (ChatPage.tsx) and
  * the sidebar's "Add Sources" button (Sidebar.tsx) so each surface
  * sees the same in-flight upload status, progress text, and current
  * job id.

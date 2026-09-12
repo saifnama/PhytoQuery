@@ -27,7 +27,7 @@ _project_root = Path(__file__).resolve().parents[3]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from backend.services.ner_engine import ner_service
+from backend.src.ner.service import ner_service
 
 # -- Paths (relative to this script's location) --------------------------------
 _SCRIPT_DIR = Path(__file__).resolve().parent

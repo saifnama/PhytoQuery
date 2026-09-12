@@ -93,7 +93,7 @@ export const useSearchStore = create<SearchState>()(
       resetSearch: () => set(INITIAL),
     }),
     {
-      name: 'pq_search_state',
+      name: 'bi_search_state',
       storage: createJSONStorage(() => sessionStorage),
       // ``partialize`` is the safe boundary between "what's in the store
       // at runtime" and "what gets written to sessionStorage". If a

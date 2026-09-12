@@ -10,7 +10,7 @@ Fetches metadata when Europe PMC does not return content.
 import re
 import logging
 from typing import Optional, Dict, Any
-from backend.core.http_client import HttpClientManager
+from backend.src.common.http_client import HttpClientManager
 
 logger = logging.getLogger(__name__)
 

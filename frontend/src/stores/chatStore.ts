@@ -13,7 +13,7 @@
  * What does NOT live here:
  *   - The chat thread itself — owned by assistant-ui's
  *     ``createSessionHistoryAdapter`` in ``./assistant/runtime.ts``
- *     (also sessionStorage, separate key ``pq_chat_history``).
+ *     (also sessionStorage, separate key ``bi_chat_history``).
  *   - In-flight upload progress — that's ``uploadStore.ts``.
  *   - The "currently-viewed PDF" pane (``activePdfFile``,
  *     ``activePdfUrl``) — ``activePdfUrl`` is a transient blob/HTTP URL,
@@ -22,7 +22,7 @@
  *
  * ``setUploadedFiles`` accepts either a value OR a ``(prev) => next``
  * function — same shape as React's ``useState`` setter — so the
- * existing call sites in RagPage migrate without changing their
+ * existing call sites in ChatPage migrate without changing their
  * functional-update patterns.
  */
 
@@ -51,7 +51,7 @@ interface ChatState {
   setParserType: (next: 'pymupdf' | 'docling') => void;
   setUploadedFiles: (next: Updater<UploadedFile[]>) => void;
   setSidebarCollapsed: (next: Updater<boolean>) => void;
-  /** Wipe the uploadedFiles slice — used by RagPage's "Reset all"
+  /** Wipe the uploadedFiles slice — used by ChatPage's "Reset all"
    * handler. Other slices keep their values (parser preference, sidebar
    * collapsed) since those are pure UI preferences, not session data. */
   resetUploadedFiles: () => void;
@@ -83,7 +83,7 @@ export const useChatStore = create<ChatState>()(
       resetUploadedFiles: () => set({ uploadedFiles: [] }),
     }),
     {
-      name: 'pq_chat_state',
+      name: 'bi_chat_state',
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         parserType: state.parserType,
